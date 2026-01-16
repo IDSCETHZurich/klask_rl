@@ -23,8 +23,7 @@
         "source=isaac-lab-local_documents,target=/root/Documents,type=volume"
     ],
     "workspaceFolder": "/workspace/klask_rl",
-    "workspaceMount": "source=${localWorkspaceFolder}/src,target=/workspace/klask_rl/src,type=bind",
-    "initializeCommand": "xhost +",
+    "workspaceMount": "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",
     "customizations": {
         "vscode": {
             "extensions": []
