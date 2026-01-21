@@ -6,6 +6,18 @@
 import gymnasium as gym
 
 from . import agents
+from .klask_rl_env_cfg import KlaskRlEnvCfg, KlaskRlGoalEnvCfg
+from .klask_rl_env_wrapper import (
+    ActionHistoryWrapper,
+    CurriculumWrapper,
+    KlaskRlAgentOpponentWrapper,
+    KlaskRlCollisionAvoidanceWrapper,
+    KlaskRlRandomOpponentWrapper,
+    ObservationNoiseWrapper,
+    OpponentObservationWrapper,
+    RlGamesGpuEnvSelfPlay,
+    find_wrapper,
+)
 
 ##
 # Register Gym environments.

@@ -40,24 +40,24 @@ params:
         name: None
 
   load_checkpoint: False # flag which sets whether to load the checkpoint
-  load_path: '' # path to the checkpoint to load
+  load_path: "" # path to the checkpoint to load
 
   config:
     name: cartpole_direct
     env_name: rlgpu
-    device: 'cuda:0'
-    device_name: 'cuda:0'
+    device: "cuda:0"
+    device_name: "cuda:0"
     multi_gpu: False
     ppo: True
     mixed_precision: False
     normalize_input: True
     normalize_value: True
-    num_actors: -1  # configured from the script (based on num_envs)
+    num_actors: -1 # configured from the script (based on num_envs)
     reward_shaper:
       scale_value: 0.1
     normalize_advantage: True
     gamma: 0.99
-    tau : 0.95
+    tau: 0.95
     learning_rate: 5e-4
     lr_schedule: adaptive
     kl_threshold: 0.008
