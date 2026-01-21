@@ -9,7 +9,9 @@
     "containerEnv": {
         "ACCEPT_EULA": "Y",
         "PRIVACY_CONSENT": "Y",
-        "DISPLAY": "${localEnv:DISPLAY}"
+        "DISPLAY": "${localEnv:DISPLAY}",
+        "LIVESTREAM": "1",
+        "PUBLIC_IP": "100.121.89.49"
     },
     "mounts": [
         "source=${localEnv:HOME}/.Xauthority,target=/root/.Xauthority,type=bind",
@@ -20,7 +22,8 @@
         "source=isaac-lab-local_cache_computecache,target=/root/.nv/ComputeCache,type=volume",
         "source=isaac-lab-local_logs,target=/root/.nvidia-omniverse/logs,type=volume",
         "source=isaac-lab-local_data,target=/root/.local/share/ov/data,type=volume",
-        "source=isaac-lab-local_documents,target=/root/Documents,type=volume"
+        "source=isaac-lab-local_documents,target=/root/Documents,type=volume",
+        "source=${localWorkspaceFolder}/docker_env/setup.sh,target=/workspace/klask_rl/setup.sh,type=bind"
     ],
     "workspaceFolder": "/workspace/klask_rl",
     "workspaceMount": "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",

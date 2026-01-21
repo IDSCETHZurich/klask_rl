@@ -3,7 +3,7 @@ CONTAINER_NAME="isaac-lab-local"
 # Get the directory of this script
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
-xhost +
+# xhost +
 docker run -it --rm \
    --name="${CONTAINER_NAME}" \
    --entrypoint bash \
@@ -12,6 +12,8 @@ docker run -it --rm \
    --env="ACCEPT_EULA=Y" \
    --env="PRIVACY_CONSENT=Y" \
    --env="DISPLAY" \
+   --env="LIVESTREAM=1" \
+   --env="PUBLIC_IP=100.121.89.49" \
    --volume="$HOME/.Xauthority:/root/.Xauthority" \
    --volume="${CONTAINER_NAME}_cache_kit:/isaac-sim/kit/cache:rw" \
    --volume="${CONTAINER_NAME}_cache_ov:/root/.cache/ov:rw" \
@@ -21,5 +23,5 @@ docker run -it --rm \
    --volume="${CONTAINER_NAME}_logs:/root/.nvidia-omniverse/logs:rw" \
    --volume="${CONTAINER_NAME}_data:/root/.local/share/ov/data:rw" \
    --volume="${CONTAINER_NAME}_documents:/root/Documents:rw" \
-   --volume="$SCRIPT_DIR/../src:/workspace/klask_rl/src:rw" \
+   --volume="$SCRIPT_DIR/../src/klask_rl:/workspace/klask_rl:rw" \
    nvcr.io/nvidia/isaac-lab:2.3.1
