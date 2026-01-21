@@ -133,6 +133,17 @@ class OpponentObservationWrapper(Wrapper):
     def __init__(self, env, mode="train"):
         super().__init__(env)
         self.mode = mode
+        # Override action space to reflect only player actions (2 instead of 4)
+        # Same as KlaskRlRandomOpponentWrapper - the opponent actions come from a separate agent
+        if hasattr(self.env.unwrapped, "single_action_space"):
+            original_space = self.env.unwrapped.single_action_space
+            if hasattr(original_space, "shape") and original_space.shape[0] == 4:
+                # Store the original action space for restoration if needed
+                self.env.unwrapped._klask_original_single_action_space = original_space
+                # Replace with a 2-action version (only player actions, opponent from separate agent)
+                self.env.unwrapped.single_action_space = gym.spaces.Box(
+                    low=original_space.low[:2], high=original_space.high[:2], dtype=original_space.dtype
+                )
 
     def get_opponent_obs(self, obs):
         opponent_obs = obs.detach().clone()

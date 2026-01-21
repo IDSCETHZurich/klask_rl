@@ -223,3 +223,6 @@ outputs/
 
 # VS Code user settings
 .vscode/
+
+# Weights & Biases
+wandb/
