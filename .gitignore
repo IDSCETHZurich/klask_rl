@@ -220,3 +220,6 @@ __marimo__/
 # training logs and outputs
 logs/
 outputs/
+
+# VS Code user settings
+.vscode/

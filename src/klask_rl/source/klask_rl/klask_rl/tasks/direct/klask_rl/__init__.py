@@ -13,7 +13,7 @@ from . import agents
 
 
 gym.register(
-    id="Template-Klask-Rl-Direct-v0",
+    id="Klask-Rl-Direct-v0",
     entry_point=f"{__name__}.klask_rl_env:KlaskRlEnv",
     disable_env_checker=True,
     kwargs={

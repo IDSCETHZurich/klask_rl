@@ -13,7 +13,7 @@ from . import agents
 
 
 gym.register(
-    id="Template-Klask-Rl-v0",
+    id="Klask-Rl-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={

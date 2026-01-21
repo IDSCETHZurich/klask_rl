@@ -2,6 +2,7 @@
     "name": "isaac-lab-local",
     "image": "nvcr.io/nvidia/isaac-lab:2.3.1",
     "runArgs": [
+        "--rm",
         "--gpus=all",
         "--network=host",
         "--name=isaac-lab-local"
