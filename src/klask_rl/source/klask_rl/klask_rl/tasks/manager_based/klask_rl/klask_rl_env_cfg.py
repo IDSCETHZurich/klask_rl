@@ -30,6 +30,7 @@ from .utils_manager_based import (
     ball_stationary,
     body_xy_pos_w,
     collision_player_ball,
+    collision_player_ball_bool,
     distance_ball_goal,
     distance_ball_to_player,
     distance_player_ball_own_half,
@@ -105,6 +106,30 @@ class ActionsCfg:
         asset_name="klask",
         joint_names=["board_to_peg_2"]
     ) """
+
+@configclass
+class ActionsCfgPlayerOnly:
+    """Action specifications for player-only control (opponent is stationary).
+
+    Used for SAC training where opponent doesn't move.
+    Actions are scaled to reasonable velocities to prevent violent movements.
+    SAC outputs actions in [-1, 1] after tanh, so the scale determines max velocity.
+
+    Current scale: 0.01 m/s = very slow (good for learning to hit stationary ball)
+    To increase speed, change both scale parameters below to 0.05, 0.1, or 0.2
+    """
+
+    player_x = mdp.JointVelocityActionCfg(
+        asset_name="klask",
+        joint_names=["slider_to_peg_1"],
+        scale=0.01,  # [m/s] Max velocity = ±0.01 m/s when action = ±1
+    )
+
+    player_y = mdp.JointVelocityActionCfg(
+        asset_name="klask",
+        joint_names=["ground_to_slider_1"],
+        scale=0.01,  # [m/s] Max velocity = ±0.01 m/s when action = ±1
+    )
 
 
 @configclass
@@ -670,6 +695,36 @@ class EventCfg:
 
 
 @configclass
+class EventCfgSac(EventCfg):
+    """Event configuration for SAC training.
+
+    Modifications from base EventCfg:
+    - Ball spawns only in player's half (y < 0)
+    - Opponent spawns at random position but stays stationary (no velocity actions)
+    """
+
+    # Override ball reset to spawn only in player's half (y < 0)
+    reset_ball_position = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("ball"),
+            "pose_range": {
+                "x": KLASK_PARAMS["ball_reset_position_x"],  # Full x range
+                "y": (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
+                "z": (0.032, 0.032),
+            },
+            "velocity_range": {"x": (0.0, 0.0), "y": (0.0, 0.0)},  # Ball starts stationary
+        },
+    )
+
+    # Opponent stays at random position (velocity is 0, and no actions control it)
+    # The position is randomized by reset_x_position_peg_2 and reset_y_position_peg_2
+    # inherited from EventCfg, but since ActionsCfgPlayerOnly doesn't include
+    # opponent actions, it will stay at its initial position
+
+
+@configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
 
@@ -778,6 +833,65 @@ class RewardsCfg:
 
 
 @configclass
+class RewardsCfgSparseBallHit(RewardsCfg):
+    """Sparse rewards for SAC training - only reward for hitting the ball.
+
+    This is Step 1 of the SAC+HER curriculum:
+    - Ball starts in player's half (stationary)
+    - Opponent is stationary
+    - Reward for collision with ball
+    - Small time penalty to encourage faster hitting
+    - Episode terminates on hit (see TerminationsCfgSac)
+    """
+
+    # Small time penalty to encourage faster hitting
+    # This gives a slight negative reward each timestep, encouraging the agent to hit quickly
+    time_punishment = RewTerm(func=mdp.is_alive, weight=-0.01)
+
+    # Main reward: hitting the ball
+    collision_player_ball = RewTerm(
+        func=collision_player_ball,
+        params={
+            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+            "ball_cfg": SceneEntityCfg("ball"),
+        },
+        weight=1.0,  # Sparse reward for hitting the ball
+    )
+
+
+@configclass
+class RewardsCfgSparseGoal(RewardsCfg):
+    """Sparse rewards for SAC+HER training - only reward for scoring goals.
+
+    This is Step 3 of the SAC+HER curriculum:
+    - Goal-conditioned learning with HER
+    - Sparse reward only for scoring
+    """
+
+    # Enable goal scoring reward
+    goal_scored = RewTerm(
+        func=ball_in_goal,
+        params={
+            "asset_cfg": SceneEntityCfg("ball"),
+            "goal": KLASK_PARAMS["opponent_goal"],
+            "max_ball_vel": KLASK_PARAMS["max_ball_vel"],
+        },
+        weight=10.0,  # Large positive reward for scoring
+    )
+
+    # Penalty for conceding a goal
+    goal_conceded = RewTerm(
+        func=ball_in_goal,
+        params={
+            "asset_cfg": SceneEntityCfg("ball"),
+            "goal": KLASK_PARAMS["player_goal"],
+            "max_ball_vel": KLASK_PARAMS["max_ball_vel"],
+        },
+        weight=-10.0,  # Large negative reward for conceding
+    )
+
+
+@configclass
 class TerminationsCfg:
     """Termination terms for the MDP."""
 
@@ -809,6 +923,28 @@ class TerminationsCfg:
     opponent_in_goal = DoneTerm(
         func=in_goal,
         params={"asset_cfg": SceneEntityCfg("klask", body_names=["Peg_2"]), "goal": KLASK_PARAMS["opponent_goal"]},
+    )
+
+
+@configclass
+class TerminationsCfgSac:
+    """Termination terms for SAC training (hit the ball task).
+
+    Episode ends when:
+    - Player hits the ball (success!)
+    - Timeout (failure)
+    """
+
+    time_out = DoneTerm(func=mdp.time_out, time_out=True)
+
+    # Terminate on ball collision - this is the success condition!
+    # Uses physics contact forces for accurate collision detection at 50Hz
+    ball_hit = DoneTerm(
+        func=collision_player_ball_bool,
+        params={
+            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+            "ball_cfg": SceneEntityCfg("ball"),
+        },
     )
 
 
@@ -862,3 +998,52 @@ class KlaskRlGoalEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = KLASK_PARAMS["decimation"]  # env step every 4 sim steps: 200Hz / 4 = 50Hz
         # simulation settings
         self.sim.dt = KLASK_PARAMS["physics_dt"]  # sim step every 5ms: 200Hz
+
+
+@configclass
+class KlaskRlSacEnvCfg(KlaskRlEnvCfg):
+    """Configuration for SAC training with sparse ball-hit rewards.
+
+    Step 1 of SAC+HER curriculum:
+    - Uses sparse rewards (ball collision + small time penalty)
+    - Ball starts in player's half (y < 0), stationary
+    - Opponent is stationary (player-only actions)
+    - Episode terminates when ball is hit (success) or timeout (failure)
+    """
+
+    actions = ActionsCfgPlayerOnly()
+    events = EventCfgSac()
+    rewards = RewardsCfgSparseBallHit()
+    terminations = TerminationsCfgSac()
+    episode_length_s = 5.0  # 5 second timeout - plenty of time to hit stationary ball
+
+    def __post_init__(self):
+        """Post initialization."""
+        super().__post_init__()
+        # Keep 50Hz control rate to match real system
+        # Collision detection now uses physics contact reports, not distance checks
+        # Explicitly set decimation and verify episode length
+        self.decimation = KLASK_PARAMS["decimation"]  # 20 steps = 50Hz control rate
+        self.sim.dt = KLASK_PARAMS["physics_dt"]  # 0.001s = 1000Hz physics
+
+        # IMPORTANT: Recompute max_episode_length after changing decimation!
+        # With decimation=20 and dt=0.001, control rate = 1/(20*0.001) = 50Hz
+        # episode_length_s=5.0 should give: 5.0 * 50 = 250 steps max
+        self.max_episode_length = int(self.episode_length_s / (self.decimation * self.sim.dt))
+
+
+@configclass
+class KlaskRlHerEnvCfg(KlaskRlGoalEnvCfg):
+    """Configuration for SAC+HER training with goal-based observations and sparse goal rewards.
+
+    Step 3 of SAC+HER curriculum:
+    - Uses GoalObservationsCfg for HER compatibility
+    - Sparse rewards for goal scoring only
+    """
+
+    rewards = RewardsCfgSparseGoal()
+
+    def __post_init__(self):
+        """Post initialization."""
+        super().__post_init__()
+        # Can add HER-specific settings here if needed

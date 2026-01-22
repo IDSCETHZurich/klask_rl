@@ -6,7 +6,17 @@
 import gymnasium as gym
 
 from . import agents
-from .klask_rl_env_cfg import KlaskRlEnvCfg, KlaskRlGoalEnvCfg
+from .klask_rl_env_cfg import (
+    ActionsCfgPlayerOnly,
+    EventCfgSac,
+    KlaskRlEnvCfg,
+    KlaskRlGoalEnvCfg,
+    KlaskRlHerEnvCfg,
+    KlaskRlSacEnvCfg,
+    RewardsCfgSparseBallHit,
+    RewardsCfgSparseGoal,
+    TerminationsCfgSac,
+)
 from .klask_rl_env_wrapper import (
     ActionHistoryWrapper,
     CurriculumWrapper,
@@ -37,5 +47,27 @@ gym.register(
         "skrl_mappo_cfg_entry_point": f"{agents.__name__}:skrl_mappo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
         "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+    },
+)
+
+
+gym.register(
+    id="Klask-Rl-SAC-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlSacEnvCfg",
+        "sb3_sac_cfg_entry_point": f"{agents.__name__}:sb3_sac_cfg.yaml",
+    },
+)
+
+
+gym.register(
+    id="Klask-Rl-HER-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlHerEnvCfg",
+        "sb3_sac_cfg_entry_point": f"{agents.__name__}:sb3_sac_cfg.yaml",
     },
 )

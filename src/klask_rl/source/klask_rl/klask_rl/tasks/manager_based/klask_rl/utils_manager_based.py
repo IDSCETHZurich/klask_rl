@@ -254,6 +254,30 @@ def collision_player_ball(
     )
 
 
+def collision_player_ball_bool(
+    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg, eps=0.017
+) -> torch.Tensor:
+    """Returns True (bool) if player is colliding with ball.
+
+    Uses physics contact forces if available (more accurate),
+    falls back to distance check otherwise.
+    """
+    ball: RigidObject = env.scene[ball_cfg.name]
+
+    # Check if ball has contact sensor data available
+    if hasattr(ball, "data") and hasattr(ball.data, "net_contact_forces"):
+        # Use physics contact forces - any non-zero force means collision
+        contact_forces = ball.data.net_contact_forces
+        # Check if magnitude of contact force > threshold (1e-3 N)
+        force_magnitude = torch.norm(contact_forces[:, :, :3], dim=-1)  # [num_envs, num_bodies]
+        # Any contact force on any body part means collision
+        has_contact = torch.any(force_magnitude > 1e-3, dim=-1)  # [num_envs]
+        return has_contact
+    else:
+        # Fallback to distance-based detection
+        return distance_player_ball(env, player_cfg, ball_cfg) < eps
+
+
 def ball_in_own_half(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg):
     ball_pos = root_xy_pos_w(env, ball_cfg)
     return 1.0 * (ball_pos[:, 1] < 0.0)

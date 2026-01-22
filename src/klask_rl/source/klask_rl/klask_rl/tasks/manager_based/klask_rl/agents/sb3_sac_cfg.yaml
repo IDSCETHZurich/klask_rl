@@ -1,0 +1,36 @@
+# Reference: https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/sac/sac.py
+# SAC configuration for Klask with sparse rewards (ball hitting)
+# Optimized for sparse rewards + high GPU throughput
+seed: 42
+
+n_timesteps: !!float 1e7
+policy: "MlpPolicy"
+
+# SAC specific parameters
+learning_rate: !!float 3e-4
+buffer_size: 1000000 # Large buffer to accumulate sparse reward transitions
+learning_starts: 50000 # IMPORTANT: Collect lots of data first to ensure buffer has reward signals
+batch_size: 2048 # Large batches for GPU efficiency
+tau: 0.005
+gamma: 0.99
+
+# Sparse reward strategy:
+# - Wait longer before training (learning_starts) so buffer has reward transitions
+# - Train less frequently but do more updates when we do
+# - This is more efficient than updating every step with mostly zero-reward batches
+train_freq: 8 # Update every 8 env steps (collect more data between updates)
+gradient_steps: 8 # When we do update, do 8 gradient steps
+
+# Entropy coefficient (auto-tuned by default)
+ent_coef: "auto"
+target_entropy: "auto"
+
+# Network architecture
+policy_kwargs:
+  activation_fn: nn.ReLU
+  net_arch: [256, 256]
+
+# Target network update
+target_update_interval: 1
+
+device: "cuda:0"
