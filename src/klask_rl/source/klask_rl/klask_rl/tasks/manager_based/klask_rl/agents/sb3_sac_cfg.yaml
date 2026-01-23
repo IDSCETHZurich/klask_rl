@@ -28,7 +28,7 @@ target_entropy: "auto"
 # Network architecture
 policy_kwargs:
   activation_fn: nn.ReLU
-  net_arch: [256, 256]
+  net_arch: [256, 128, 64]
 
 # Target network update
 target_update_interval: 1

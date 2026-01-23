@@ -846,7 +846,7 @@ class RewardsCfgSparseBallHit(RewardsCfg):
 
     # Small time penalty to encourage faster hitting
     # This gives a slight negative reward each timestep, encouraging the agent to hit quickly
-    time_punishment = RewTerm(func=mdp.is_alive, weight=-0.01)
+    # time_punishment = RewTerm(func=mdp.is_alive, weight=-0.01)
 
     # Main reward: hitting the ball
     collision_player_ball = RewTerm(
