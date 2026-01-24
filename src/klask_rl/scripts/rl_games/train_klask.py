@@ -80,7 +80,7 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 
-from klask_rl.tasks.manager_based.klask_rl import (
+from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     KlaskRlRandomOpponentWrapper,
     CurriculumWrapper,
     RlGamesGpuEnvSelfPlay,

@@ -66,7 +66,7 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg
 from isaaclab_rl.rl_games import RlGamesVecEnvWrapper
 
-from klask_rl.tasks.manager_based.klask_rl import (
+from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     OpponentObservationWrapper,
     CurriculumWrapper,
     RlGamesGpuEnvSelfPlay,
