@@ -224,5 +224,8 @@ outputs/
 # VS Code user settings
 .vscode/
 
+# Devcontainer environment variables
+.devcontainer/devcontainer.env
+
 # Weights & Biases
 wandb/

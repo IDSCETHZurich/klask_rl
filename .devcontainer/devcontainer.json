@@ -5,7 +5,8 @@
         "--rm",
         "--gpus=all",
         "--network=host",
-        "--name=isaac-lab-local"
+        "--name=isaac-lab-local",
+        "--env-file=.devcontainer/devcontainer.env"
     ],
     "containerEnv": {
         "ACCEPT_EULA": "Y",
