@@ -12,7 +12,6 @@ from ..utils_manager_based import (
     angle_ball_goal,
     angle_ball_opp,
     body_xy_pos_w,
-    direction_to_ball,
     distance_ball_to_player,
     distance_to_goal,
     opponent_goal_obs,
@@ -469,46 +468,3 @@ class GoalObservationsCfg:
         def __post_init__(self) -> None:
             self.enable_corruption = False
             self.concatenate_terms = True
-
-
-@configclass
-class SacObservationsCfg:
-    """Minimal observations for SAC training - just what's needed to move to ball.
-
-    Observation space (6 dimensions):
-    - direction_to_ball (2): The key signal - just learn action = k * direction
-    - player_pos (2): Current position
-    - ball_pos (2): Ball position
-
-    This is intentionally minimal to make learning easier.
-    """
-
-    @configclass
-    class PolicyCfg(ObsGroup):
-        """Minimal observations for policy."""
-
-        # The key observation: direction from player to ball
-        # The agent just needs to learn: action ≈ direction_to_ball
-        direction_to_ball = ObsTerm(
-            func=direction_to_ball,
-            params={
-                "player_cfg": SceneEntityCfg(name="klask", body_names=["Peg_1"]),
-                "ball_cfg": SceneEntityCfg(name="ball"),
-            },
-        )
-
-        # # Player position (for context)
-        # player_pos = ObsTerm(
-        #     func=body_xy_pos_w,
-        #     params={"asset_cfg": SceneEntityCfg(name="klask", body_names=["Peg_1"])},
-        # )
-
-        # # Ball position (for context)
-        # ball_pos = ObsTerm(func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
-
-        def __post_init__(self) -> None:
-            self.enable_corruption = False
-            self.concatenate_terms = True
-
-    # observation groups
-    policy: PolicyCfg = PolicyCfg()

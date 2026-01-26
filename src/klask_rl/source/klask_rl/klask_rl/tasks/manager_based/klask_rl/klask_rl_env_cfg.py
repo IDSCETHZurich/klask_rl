@@ -7,9 +7,9 @@ from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 from .env_cfg import KlaskRlSceneCfg
 from .env_cfg import ActionsCfg, ActionsCfgPlayerOnly
-from .env_cfg import ObservationsCfg, GoalObservationsCfg, SacObservationsCfg
+from .env_cfg import ObservationsCfg, GoalObservationsCfg
 from .env_cfg import EventCfg, EventCfgSac
-from .env_cfg import RewardsCfg, RewardsCfgSparseBallHit, RewardsCfgDenseBallHit, RewardsCfgSparseGoal
+from .env_cfg import RewardsCfg, RewardsCfgDenseBallHit, RewardsCfgSparseGoal
 from .env_cfg import TerminationsCfg, TerminationsCfgSac
 
 
@@ -69,7 +69,7 @@ class KlaskRlGoalEnvCfg(ManagerBasedRLEnvCfg):
 class KlaskRlSacEnvCfg(KlaskRlEnvCfg):
     """Configuration for SAC training with minimal observations and dense rewards."""
 
-    observations = SacObservationsCfg()  # Minimal obs: direction_to_ball, player_pos, ball_pos
+    observations = ObservationsCfg()  # Minimal obs: direction_to_ball, player_pos, ball_pos
     actions = ActionsCfgPlayerOnly()
     events = EventCfgSac()
     rewards = RewardsCfgDenseBallHit()

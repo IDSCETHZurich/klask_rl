@@ -13,7 +13,6 @@ from .klask_rl_env_cfg import (
     KlaskRlGoalEnvCfg,
     KlaskRlHerEnvCfg,
     KlaskRlSacEnvCfg,
-    RewardsCfgSparseBallHit,
     RewardsCfgSparseGoal,
     TerminationsCfgSac,
 )
