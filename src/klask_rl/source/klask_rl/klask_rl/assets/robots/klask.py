@@ -51,7 +51,7 @@ else:
         "ball_reset_position_y": (-0.21, 0.21),
         "max_ball_vel": 100.0,  # maximum speed the ball may have for a goal to be counted
         "edge": (-0.16, 0.16, -0.22, -0.02),
-        "additional_observations": True,
+        "additional_observations": False,
         "domain_randomization": {
             "use_domain_randomization": False,
             "static_friction_range": (0.2, 0.5),
@@ -65,12 +65,14 @@ else:
 
 KLASK_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path=os.path.join(os.getcwd(), "source/klask_rl/klask_rl/assets/robots/klask.usd"),
+        usd_path=os.path.join(
+            os.getcwd(), "source/klask_rl/klask_rl/assets/robots/klask.usd"
+        ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
         joint_pos={
             "ground_to_slider_1": -0.115,  # Middle of [-0.210, -0.020] range
-            "ground_to_slider_2": 0.115,   # Middle of [0.020, 0.210] range
+            "ground_to_slider_2": 0.115,  # Middle of [0.020, 0.210] range
             "slider_to_peg_1": 0.0,
             "slider_to_peg_2": 0.0,
         }
@@ -82,8 +84,12 @@ KLASK_CFG = ArticulationCfg(
             damping=10.0,
             velocity_limit=3.0,
             effort_limit=30.0,
-            min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
-            max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
+            min_delay=int(
+                KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]
+            ),
+            max_delay=int(
+                KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]
+            ),
         ),
         "peg_1y_actuator": DelayedPDActuatorCfg(
             joint_names_expr=["ground_to_slider_1"],
@@ -91,8 +97,12 @@ KLASK_CFG = ArticulationCfg(
             damping=100.0,
             velocity_limit=3.0,
             effort_limit=300.0,
-            min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
-            max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
+            min_delay=int(
+                KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]
+            ),
+            max_delay=int(
+                KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]
+            ),
         ),
         "peg_2x_actuator": DelayedPDActuatorCfg(
             joint_names_expr=["slider_to_peg_2"],
@@ -100,8 +110,12 @@ KLASK_CFG = ArticulationCfg(
             damping=10.0,
             velocity_limit=3.0,
             effort_limit=30.0,
-            min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
-            max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
+            min_delay=int(
+                KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]
+            ),
+            max_delay=int(
+                KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]
+            ),
         ),
         "peg_2y_actuator": DelayedPDActuatorCfg(
             joint_names_expr=["ground_to_slider_2"],
@@ -109,8 +123,12 @@ KLASK_CFG = ArticulationCfg(
             damping=100.0,
             velocity_limit=3.0,
             effort_limit=300.0,
-            min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
-            max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
+            min_delay=int(
+                KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]
+            ),
+            max_delay=int(
+                KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]
+            ),
         ),
     },
 )

@@ -197,8 +197,32 @@ def opponent_goal_obs(env: ManagerBasedRLEnv, goal: tuple[float, float]) -> torc
     return torch.Tensor([*goal, 0.0, 0.0]).repeat(env.num_envs, 1)
 
 
+def direction_to_ball(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Returns the direction vector from player to ball (2D).
+
+    This is the key observation for learning to move towards the ball.
+    The agent just needs to learn: action ≈ k * direction_to_ball
+    
+    The raw displacement is returned (in meters). With observation normalization enabled,
+    this will be normalized by the running mean/std during training.
+    """
+    ball_pos = root_xy_pos_w(env, ball_cfg)
+    player_pos = body_xy_pos_w(env, player_cfg)
+    return ball_pos - player_pos
+
+
 def distance_player_ball(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg) -> torch.Tensor:
     return torch.sqrt(torch.sum((root_xy_pos_w(env, ball_cfg) - body_xy_pos_w(env, player_cfg)) ** 2, dim=1))
+
+
+def proximity_player_ball(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Proximity reward that incentivizes moving towards the ball.
+
+    Uses exponential decay so the gradient is stronger at all distances.
+    Returns higher values when closer to the ball.
+    """
+    dist = distance_player_ball(env, player_cfg, ball_cfg)
+    return torch.exp(-10.0 * dist)
 
 
 def speed(vel: torch.Tensor) -> torch.Tensor:
@@ -255,27 +279,15 @@ def collision_player_ball(
 
 
 def collision_player_ball_bool(
-    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg, eps=0.017
+    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg, eps=0.02
 ) -> torch.Tensor:
     """Returns True (bool) if player is colliding with ball.
 
     Uses physics contact forces if available (more accurate),
     falls back to distance check otherwise.
     """
-    ball: RigidObject = env.scene[ball_cfg.name]
-
-    # Check if ball has contact sensor data available
-    if hasattr(ball, "data") and hasattr(ball.data, "net_contact_forces"):
-        # Use physics contact forces - any non-zero force means collision
-        contact_forces = ball.data.net_contact_forces
-        # Check if magnitude of contact force > threshold (1e-3 N)
-        force_magnitude = torch.norm(contact_forces[:, :, :3], dim=-1)  # [num_envs, num_bodies]
-        # Any contact force on any body part means collision
-        has_contact = torch.any(force_magnitude > 1e-3, dim=-1)  # [num_envs]
-        return has_contact
-    else:
-        # Fallback to distance-based detection
-        return distance_player_ball(env, player_cfg, ball_cfg) < eps
+    dist = distance_player_ball(env, player_cfg, ball_cfg)
+    return dist < eps
 
 
 def ball_in_own_half(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg):

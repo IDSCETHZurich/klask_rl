@@ -2,64 +2,31 @@
 
 """Launch Isaac Sim Simulator first."""
 
-import argparse
 import sys
 from pathlib import Path
 
 from isaaclab.app import AppLauncher
+from train_config import TrainConfig
+from play_config import PlayConfig
 
-# add argparse arguments
-parser = argparse.ArgumentParser(description="Play a checkpoint of an RL agent from Stable-Baselines3 SAC.")
-parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
-parser.add_argument(
-    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
-)
-parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default="Klask-Rl-SAC-v0", help="Name of the task.")
-parser.add_argument(
-    "--agent", type=str, default="sb3_sac_cfg_entry_point", help="Name of the RL agent configuration entry point."
-)
-parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
-parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
-parser.add_argument(
-    "--use_last_checkpoint",
-    action="store_true",
-    help="When no checkpoint provided, use the last saved model. Otherwise use the best saved model.",
-)
-parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
-parser.add_argument(
-    "--keep_all_info",
-    action="store_true",
-    default=False,
-    help="Use a slower SB3 wrapper but keep all the extra training info.",
-)
-parser.add_argument(
-    "--deterministic",
-    action="store_true",
-    default=True,
-    help="Use deterministic actions (no sampling from policy distribution).",
-)
-# append AppLauncher cli args
-AppLauncher.add_app_launcher_args(parser)
-# parse the arguments
-args_cli, hydra_args = parser.parse_known_args()
 
-# always enable cameras to record video
-if args_cli.video:
-    args_cli.enable_cameras = True
+TRAIN_CFG_PATH = Path(__file__).parent / "config" / "klask_rl_sac.yaml"
+TRAIN_CFG = TrainConfig.from_file(TRAIN_CFG_PATH)
+PLAY_CFG_PATH = Path(__file__).parent / "config" / "klask_rl_sac_play.yaml"
+PLAY_CFG = PlayConfig.from_file(PLAY_CFG_PATH)
 
-# clear out sys.argv for Hydra
-sys.argv = [sys.argv[0]] + hydra_args
+# Ignore any CLI overrides; playback is config-driven.
+sys.argv = [sys.argv[0]]
+
 # launch omniverse app
-app_launcher = AppLauncher(args_cli)
+app_launcher = AppLauncher(TRAIN_CFG.app_launcher_args())
 simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
 import gymnasium as gym
+import numpy as np
 import os
-import random
 import time
 import torch
 
@@ -84,38 +51,34 @@ from isaaclab_tasks.utils.parse_cfg import get_checkpoint_path
 import klask_rl.tasks  # noqa: F401
 
 
-@hydra_task_config(args_cli.task, args_cli.agent)
+@hydra_task_config(TRAIN_CFG.task, TRAIN_CFG.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
     """Play with stable-baselines SAC agent."""
+    train_cfg = TRAIN_CFG
+    train_cfg.apply(env_cfg, agent_cfg)
+    play_cfg = PLAY_CFG
+    play_cfg.apply(env_cfg)
+    print(f"[INFO] Loaded training config: {TRAIN_CFG_PATH}")
+    print_dict(train_cfg.to_dict(), nesting=4)
+    print(f"[INFO] Loaded play config: {PLAY_CFG_PATH}")
+    print_dict(play_cfg.to_dict(), nesting=4)
+
     # grab task name for checkpoint path
-    task_name = args_cli.task.split(":")[-1]
+    task_name = train_cfg.task.split(":")[-1]
     train_task_name = task_name.replace("-Play", "")
-
-    # randomly sample a seed if seed = -1
-    if args_cli.seed == -1:
-        args_cli.seed = random.randint(0, 10000)
-
-    # override configurations with non-hydra CLI arguments
-    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
-    agent_cfg["seed"] = args_cli.seed if args_cli.seed is not None else agent_cfg["seed"]
-
-    # set the environment seed
-    env_cfg.seed = agent_cfg["seed"]
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
 
     # directory for logging into
     log_root_path = os.path.join("logs", "sb3_sac", train_task_name)
     log_root_path = os.path.abspath(log_root_path)
 
     # checkpoint and log_dir stuff
-    if args_cli.checkpoint is None:
-        if args_cli.use_last_checkpoint:
-            checkpoint = "sac_model_.*.zip"
-        else:
-            checkpoint = "sac_model_final.zip"
-        checkpoint_path = get_checkpoint_path(log_root_path, ".*", checkpoint, sort_alpha=False)
+    checkpoint_path = play_cfg.play_checkpoint
+    if isinstance(checkpoint_path, str):
+        checkpoint_path = checkpoint_path.strip() or None
+    if checkpoint_path is None:
+        checkpoint_path = get_checkpoint_path(log_root_path, ".*", "sac_model_.*.zip", sort_alpha=False)
     else:
-        checkpoint_path = args_cli.checkpoint
+        checkpoint_path = os.path.expanduser(checkpoint_path)
 
     log_dir = os.path.dirname(checkpoint_path)
 
@@ -123,7 +86,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.log_dir = log_dir
 
     # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    env = gym.make(train_cfg.task, cfg=env_cfg, render_mode="rgb_array" if play_cfg.video else None)
 
     # post-process agent configuration
     agent_cfg = process_sb3_cfg(agent_cfg, env.unwrapped.num_envs)
@@ -132,12 +95,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
+    # Set bounded action space for SAC (must match training configuration).
+    # SAC outputs will be in [-max_velocity, max_velocity] m/s directly.
+    # Must set on unwrapped env because Sb3VecEnvWrapper reads from there.
+    action_dim = env.unwrapped.single_action_space.shape[-1]
+    max_vel = train_cfg.max_velocity
+    print(f"[INFO] Setting action space bounds to [-{max_vel}, {max_vel}] m/s")
+    env.unwrapped.single_action_space = gym.spaces.Box(
+        low=-max_vel, high=max_vel, shape=(action_dim,), dtype=np.float32
+    )
+    env.unwrapped.action_space = gym.vector.utils.batch_space(env.unwrapped.single_action_space, env.unwrapped.num_envs)
+
     # wrap for video recording
-    if args_cli.video:
+    if play_cfg.video:
         video_kwargs = {
             "video_folder": os.path.join(log_dir, "videos", "play"),
-            "step_trigger": lambda step: step == 0,
-            "video_length": args_cli.video_length,
+            "step_trigger": lambda step: step % play_cfg.video_interval == 0,
+            "video_length": play_cfg.video_length,
             "disable_logger": True,
         }
         print("[INFO] Recording videos during play.")
@@ -145,10 +119,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
     # wrap around environment for stable baselines
-    env = Sb3VecEnvWrapper(env, fast_variant=not args_cli.keep_all_info)
+    env = Sb3VecEnvWrapper(env, fast_variant=not train_cfg.keep_all_info)
 
     # check for normalization file
-    vec_norm_path = checkpoint_path.replace("/sac_model", "/sac_model_vecnormalize").replace(".zip", ".pkl")
+    vec_norm_path = checkpoint_path.replace("/sac_model_final", "/sac_model_vecnormalize").replace(".zip", ".pkl")
     vec_norm_path = Path(vec_norm_path)
 
     # normalize environment (if needed)
@@ -177,7 +151,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     obs = env.reset()
     timestep = 0
 
-    print(f"[INFO] Starting playback (deterministic={args_cli.deterministic})...")
+    deterministic = True
+    real_time = False
+    print(f"[INFO] Starting playback (deterministic={deterministic})...")
 
     # simulate environment
     while simulation_app.is_running():
@@ -185,19 +161,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # run everything in inference mode
         with torch.inference_mode():
             # agent stepping
-            actions, _ = agent.predict(obs, deterministic=args_cli.deterministic)
+            actions, _ = agent.predict(obs, deterministic=deterministic)
             # env stepping
             obs, _, _, _ = env.step(actions)
 
-        if args_cli.video:
+        if play_cfg.video:
             timestep += 1
             # Exit the play loop after recording one video
-            if timestep == args_cli.video_length:
+            if timestep == play_cfg.video_length:
                 break
 
         # time delay for real-time evaluation
         sleep_time = dt - (time.time() - start_time)
-        if args_cli.real_time and sleep_time > 0:
+        if real_time and sleep_time > 0:
             time.sleep(sleep_time)
 
     # close the simulator

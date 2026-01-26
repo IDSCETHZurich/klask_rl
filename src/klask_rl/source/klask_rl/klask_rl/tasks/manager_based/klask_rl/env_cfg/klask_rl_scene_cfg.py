@@ -31,15 +31,8 @@ class KlaskRlSceneCfg(InteractiveSceneCfg):
                 static_friction=KLASK_PARAMS["ball_static_friction"],
                 dynamic_friction=KLASK_PARAMS["ball_dynamic_friction"],
             ),
-            activate_contact_sensors=True,
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, 0.032)),
     )
-
-    # contact_sensor = ContactSensorCfg(
-    #    prim_path="{ENV_REGEX_NS}/Ball",
-    #    filter_prim_paths_expr=["{ENV_REGEX_NS}/Klask/Peg_1"],
-    #    history_length=KLASK_PARAMS["decimation"]
-    # )
 
     klask = KLASK_CFG.replace(prim_path="{ENV_REGEX_NS}/Klask")

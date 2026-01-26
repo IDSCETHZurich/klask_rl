@@ -17,17 +17,6 @@ from .klask_rl_env_cfg import (
     RewardsCfgSparseGoal,
     TerminationsCfgSac,
 )
-from .klask_rl_env_wrapper import (
-    ActionHistoryWrapper,
-    CurriculumWrapper,
-    KlaskRlAgentOpponentWrapper,
-    KlaskRlCollisionAvoidanceWrapper,
-    KlaskRlRandomOpponentWrapper,
-    ObservationNoiseWrapper,
-    OpponentObservationWrapper,
-    RlGamesGpuEnvSelfPlay,
-    find_wrapper,
-)
 
 ##
 # Register Gym environments.

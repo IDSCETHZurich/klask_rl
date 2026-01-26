@@ -2,71 +2,24 @@
 
 """Launch Isaac Sim Simulator first."""
 
-import argparse
 import contextlib
 import signal
 import sys
 from pathlib import Path
 
 from isaaclab.app import AppLauncher
+from train_config import TrainConfig
+from utils import cleanup_pbar
 
-# add argparse arguments
-parser = argparse.ArgumentParser(description="Train an RL agent with Stable-Baselines3 SAC.")
-parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
-parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default="Klask-Rl-SAC-v0", help="Name of the task.")
-parser.add_argument(
-    "--agent", type=str, default="sb3_sac_cfg_entry_point", help="Name of the RL agent configuration entry point."
-)
-parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
-parser.add_argument("--log_interval", type=int, default=1000, help="Log data every n episodes.")
-parser.add_argument("--checkpoint", type=str, default=None, help="Continue the training from checkpoint.")
-parser.add_argument("--max_timesteps", type=int, default=None, help="Maximum number of timesteps to train.")
-parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
-parser.add_argument(
-    "--wandb_project", type=str, default=None, help="Wandb project name. If provided, enables wandb logging."
-)
-parser.add_argument("--wandb_entity", type=str, default=None, help="Wandb entity (team/username).")
-parser.add_argument(
-    "--wandb_name", type=str, default=None, help="Wandb run name. Defaults to timestamp if not provided."
-)
-parser.add_argument(
-    "--keep_all_info",
-    action="store_true",
-    default=False,
-    help="Use a slower SB3 wrapper but keep all the extra training info.",
-)
-# append AppLauncher cli args
-AppLauncher.add_app_launcher_args(parser)
-# parse the arguments
-args_cli, hydra_args = parser.parse_known_args()
-# always enable cameras to record video
-if args_cli.video:
-    args_cli.enable_cameras = True
+TRAIN_CFG_PATH = Path(__file__).parent / "config" / "klask_rl_sac.yaml"
+TRAIN_CFG = TrainConfig.from_file(TRAIN_CFG_PATH)
 
-# clear out sys.argv for Hydra
-sys.argv = [sys.argv[0]] + hydra_args
+# Ignore any CLI overrides; training is fully config-driven.
+sys.argv = [sys.argv[0]]
 
 # launch omniverse app
-app_launcher = AppLauncher(args_cli)
+app_launcher = AppLauncher(TRAIN_CFG.app_launcher_args())
 simulation_app = app_launcher.app
-
-
-def cleanup_pbar(*args):
-    """
-    A small helper to stop training and
-    cleanup progress bar properly on ctrl+c
-    """
-    import gc
-
-    tqdm_objects = [obj for obj in gc.get_objects() if "tqdm" in type(obj).__name__]
-    for tqdm_object in tqdm_objects:
-        if "tqdm_rich" in type(tqdm_object).__name__:
-            tqdm_object.close()
-    raise KeyboardInterrupt
-
 
 # disable KeyboardInterrupt override
 signal.signal(signal.SIGINT, cleanup_pbar)
@@ -76,7 +29,6 @@ signal.signal(signal.SIGINT, cleanup_pbar)
 import gymnasium as gym
 import numpy as np
 import os
-import random
 from datetime import datetime
 
 import omni
@@ -111,39 +63,29 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 import klask_rl.tasks  # noqa: F401
 
 
-@hydra_task_config(args_cli.task, args_cli.agent)
+@hydra_task_config(TRAIN_CFG.task, TRAIN_CFG.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
     """Train with stable-baselines SAC agent."""
-    # randomly sample a seed if seed = -1
-    if args_cli.seed == -1:
-        args_cli.seed = random.randint(0, 10000)
-
-    # override configurations with non-hydra CLI arguments
-    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
-    agent_cfg["seed"] = args_cli.seed if args_cli.seed is not None else agent_cfg["seed"]
-
-    # max timesteps for training
-    if args_cli.max_timesteps is not None:
-        agent_cfg["n_timesteps"] = args_cli.max_timesteps
-
-    # set the environment seed
-    # note: certain randomizations occur in the environment initialization so we set the seed here
-    env_cfg.seed = agent_cfg["seed"]
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    train_cfg = TRAIN_CFG
+    train_cfg.apply(env_cfg, agent_cfg)
+    print(f"[INFO] Loaded training config: {TRAIN_CFG_PATH}")
+    print_dict(train_cfg.to_dict(), nesting=4)
 
     # directory for logging into
     run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_root_path = os.path.abspath(os.path.join("logs", "sb3_sac", args_cli.task))
+    log_root_path = os.path.abspath(os.path.join("logs", "sb3_sac", train_cfg.task))
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    print(f"Exact experiment name requested from command line: {run_info}")
+    print(f"[INFO] Experiment name: {run_info}")
     log_dir = os.path.join(log_root_path, run_info)
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+    dump_yaml(os.path.join(log_dir, "params", "train.yaml"), train_cfg.to_dict())
 
     # save command used to run the script
     command = " ".join(sys.orig_argv)
+    command += f"\nconfig: {TRAIN_CFG_PATH}"
     (Path(log_dir) / "command.txt").write_text(command)
 
     # post-process agent configuration
@@ -155,7 +97,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # set the IO descriptors output directory if requested
     if isinstance(env_cfg, ManagerBasedRLEnvCfg):
-        env_cfg.export_io_descriptors = args_cli.export_io_descriptors
+        env_cfg.export_io_descriptors = train_cfg.export_io_descriptors
         env_cfg.io_descriptors_output_dir = log_dir
     else:
         omni.log.warn(
@@ -166,18 +108,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.log_dir = log_dir
 
     # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    env = gym.make(train_cfg.task, cfg=env_cfg, render_mode="rgb_array" if train_cfg.video else None)
 
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
+    # Set bounded action space for SAC.
+    action_dim = env.unwrapped.single_action_space.shape[-1]
+    max_vel = train_cfg.max_velocity
+    print(f"[INFO] Setting action space bounds to [-{max_vel}, {max_vel}] m/s")
+    env.unwrapped.single_action_space = gym.spaces.Box(
+        low=-max_vel, high=max_vel, shape=(action_dim,), dtype=np.float32
+    )
+    env.unwrapped.action_space = gym.vector.utils.batch_space(env.unwrapped.single_action_space, env.unwrapped.num_envs)
+
     # wrap for video recording
-    if args_cli.video:
+    if train_cfg.video:
         video_kwargs = {
             "video_folder": os.path.join(log_dir, "videos", "train"),
-            "step_trigger": lambda step: step % args_cli.video_interval == 0,
-            "video_length": args_cli.video_length,
+            "step_trigger": lambda step: step % train_cfg.video_interval == 0,
+            "video_length": train_cfg.video_length,
             "disable_logger": True,
         }
         print("[INFO] Recording videos during training.")
@@ -185,7 +136,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
     # wrap around environment for stable baselines
-    env = Sb3VecEnvWrapper(env, fast_variant=not args_cli.keep_all_info)
+    env = Sb3VecEnvWrapper(env, fast_variant=not train_cfg.keep_all_info)
 
     # handle normalization settings if present
     norm_keys = {"normalize_input", "normalize_value", "clip_obs"}
@@ -213,24 +164,30 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent = SAC(policy_arch, env, verbose=1, tensorboard_log=log_dir, **agent_cfg)
 
     # load checkpoint if provided
-    if args_cli.checkpoint is not None:
-        print(f"[INFO] Loading checkpoint from: {args_cli.checkpoint}")
-        agent = agent.load(args_cli.checkpoint, env, print_system_info=True)
+    if train_cfg.checkpoint is not None:
+        print(f"[INFO] Loading checkpoint from: {train_cfg.checkpoint}")
+        agent = agent.load(train_cfg.checkpoint, env, print_system_info=True)
 
     # Initialize wandb if requested
     wandb_run = None
-    if args_cli.wandb_project is not None:
+    if train_cfg.wandb_project is not None:
         if not WANDB_AVAILABLE:
             print("[WARNING] wandb not installed. Skipping wandb logging. Install with: pip install wandb")
         else:
-            print(f"[INFO] Initializing wandb project: {args_cli.wandb_project}")
+            print(f"[INFO] Initializing wandb project: {train_cfg.wandb_project}")
+            wandb_api_key = os.getenv("WANDB_API_KEY")
+            if wandb_api_key:
+                # Use API key from environment to avoid interactive login.
+                wandb.login(key=wandb_api_key, relogin=False)
+            else:
+                print("[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init.")
             wandb_run = wandb.init(
-                project=args_cli.wandb_project,
-                entity=args_cli.wandb_entity,
-                name=args_cli.wandb_name or run_info,
+                project=train_cfg.wandb_project,
+                entity=train_cfg.wandb_entity,
+                name=train_cfg.wandb_name or run_info,
                 config={
                     "algorithm": "SAC",
-                    "task": args_cli.task,
+                    "task": train_cfg.task,
                     "num_envs": env_cfg.scene.num_envs,
                     "policy": policy_arch,
                     "n_timesteps": n_timesteps,
@@ -263,7 +220,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             total_timesteps=n_timesteps,
             callback=callbacks,
             progress_bar=True,
-            log_interval=args_cli.log_interval,
+            log_interval=train_cfg.log_interval,
         )
 
     # save the final model
@@ -281,9 +238,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if wandb_run is not None:
         # Log final model as artifact
         artifact = wandb.Artifact(
-            name=f"sac-{args_cli.task}-model",
+            name=f"sac-{train_cfg.task}-model",
             type="model",
-            description=f"SAC model trained on {args_cli.task}",
+            description=f"SAC model trained on {train_cfg.task}",
         )
         artifact.add_file(f"{final_model_path}.zip")
         wandb_run.log_artifact(artifact)

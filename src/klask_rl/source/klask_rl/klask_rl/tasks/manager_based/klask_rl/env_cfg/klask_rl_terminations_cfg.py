@@ -55,18 +55,19 @@ class TerminationsCfgSac:
     """Termination terms for SAC training (hit the ball task).
 
     Episode ends when:
-    - Player hits the ball (success!)
-    - Timeout (failure)
+    - Timeout (allowing agent to track the ball continuously)
+    
+    Note: We don't terminate on ball hit anymore, so the agent learns to 
+    continuously track and hit the ball, not just reach it once.
     """
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    # Terminate on ball collision - this is the success condition!
-    # Uses physics contact forces for accurate collision detection at 50Hz
-    ball_hit = DoneTerm(
-        func=collision_player_ball_bool,
-        params={
-            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
-            "ball_cfg": SceneEntityCfg("ball"),
-        },
-    )
+    # DISABLED: Don't terminate on ball collision - let agent learn continuous tracking
+    # ball_hit = DoneTerm(
+    #     func=collision_player_ball_bool,
+    #     params={
+    #         "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+    #         "ball_cfg": SceneEntityCfg("ball"),
+    #     },
+    # )

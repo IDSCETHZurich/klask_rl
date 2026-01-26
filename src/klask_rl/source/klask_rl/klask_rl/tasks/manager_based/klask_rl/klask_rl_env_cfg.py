@@ -7,9 +7,9 @@ from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 from .env_cfg import KlaskRlSceneCfg
 from .env_cfg import ActionsCfg, ActionsCfgPlayerOnly
-from .env_cfg import ObservationsCfg, GoalObservationsCfg
+from .env_cfg import ObservationsCfg, GoalObservationsCfg, SacObservationsCfg
 from .env_cfg import EventCfg, EventCfgSac
-from .env_cfg import RewardsCfg, RewardsCfgSparseBallHit, RewardsCfgSparseGoal
+from .env_cfg import RewardsCfg, RewardsCfgSparseBallHit, RewardsCfgDenseBallHit, RewardsCfgSparseGoal
 from .env_cfg import TerminationsCfg, TerminationsCfgSac
 
 
@@ -67,20 +67,14 @@ class KlaskRlGoalEnvCfg(ManagerBasedRLEnvCfg):
 
 @configclass
 class KlaskRlSacEnvCfg(KlaskRlEnvCfg):
-    """Configuration for SAC training with sparse ball-hit rewards.
+    """Configuration for SAC training with minimal observations and dense rewards."""
 
-    Step 1 of SAC+HER curriculum:
-    - Uses sparse rewards (ball collision + small time penalty)
-    - Ball starts in player's half (y < 0), stationary
-    - Opponent is stationary (player-only actions)
-    - Episode terminates when ball is hit (success) or timeout (failure)
-    """
-
+    observations = SacObservationsCfg()  # Minimal obs: direction_to_ball, player_pos, ball_pos
     actions = ActionsCfgPlayerOnly()
     events = EventCfgSac()
-    rewards = RewardsCfgSparseBallHit()
+    rewards = RewardsCfgDenseBallHit()
     terminations = TerminationsCfgSac()
-    episode_length_s = 5.0
+    episode_length_s = 4.0
 
     def __post_init__(self):
         """Post initialization."""

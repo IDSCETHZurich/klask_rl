@@ -13,8 +13,10 @@ from ..utils_manager_based import (
     ball_speed,
     ball_stationary,
     collision_player_ball,
+    collision_player_ball_bool,
     distance_ball_goal,
     distance_player_ball_own_half,
+    proximity_player_ball,
     distance_to_wall,
     in_goal,
     peg_in_defense_line_with_rebounds,
@@ -131,29 +133,54 @@ class RewardsCfg:
 
 
 @configclass
-class RewardsCfgSparseBallHit(RewardsCfg):
-    """Sparse rewards for SAC training - only reward for hitting the ball.
-
-    This is Step 1 of the SAC+HER curriculum:
-    - Ball starts in player's half (stationary)
-    - Opponent is stationary
-    - Reward for collision with ball
-    - Small time penalty to encourage faster hitting
-    - Episode terminates on hit (see TerminationsCfgSac)
-    """
+class RewardsCfgSparseBallHit:
+    """Sparse rewards for SAC training - only reward for hitting the ball."""
 
     # Small time penalty to encourage faster hitting
-    # This gives a slight negative reward each timestep, encouraging the agent to hit quickly
     # time_punishment = RewTerm(func=mdp.is_alive, weight=-0.01)
 
     # Main reward: hitting the ball
-    collision_player_ball = RewTerm(
-        func=collision_player_ball,
+    collision_player_ball_reward = RewTerm(
+        func=collision_player_ball_bool,
         params={
             "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
             "ball_cfg": SceneEntityCfg("ball"),
         },
         weight=1.0,  # Sparse reward for hitting the ball
+    )
+
+
+@configclass
+class RewardsCfgDenseBallHit:
+    """Dense rewards for SAC training - dense reward for approaching and hitting the ball.
+
+    Reward structure:
+    - Proximity reward: Exponential decay with distance, provides dense gradient everywhere
+    - Collision reward: Bonus for making contact with the ball
+
+    No time penalty needed - proximity reward naturally incentivizes fast approach
+    (getting close sooner = more cumulative reward over episode).
+    """
+
+    # Dense reward for being close to the ball (exponential, so gradient exists everywhere)
+    # Weight=5.0 so at dist=0 reward=5.0, at dist=0.2 reward=1.8, at dist=0.5 reward=0.4
+    proximity_player_ball_reward = RewTerm(
+        func=proximity_player_ball,
+        params={
+            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+            "ball_cfg": SceneEntityCfg("ball"),
+        },
+        weight=5.0,  # Strong proximity reward signal
+    )
+
+    # Bonus for actually hitting the ball (important to incentivize contact!)
+    collision_player_ball_reward = RewTerm(
+        func=collision_player_ball_bool,
+        params={
+            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+            "ball_cfg": SceneEntityCfg("ball"),
+        },
+        weight=10.0,  # Strong bonus reward for hitting the ball
     )
 
 
