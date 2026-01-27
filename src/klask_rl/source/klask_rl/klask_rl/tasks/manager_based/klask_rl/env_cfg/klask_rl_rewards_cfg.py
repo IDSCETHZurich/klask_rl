@@ -14,7 +14,6 @@ from ..utils_manager_based import (
     ball_stationary,
     collision_player_ball,
     collision_player_ball_bool,
-    collision_player_ball_time_decay,
     distance_ball_goal,
     distance_player_ball_own_half,
     proximity_player_ball,
@@ -22,6 +21,7 @@ from ..utils_manager_based import (
     in_goal,
     peg_in_defense_line_with_rebounds,
     shot_over_middle,
+    termination_reward_time_decay,
 )
 
 
@@ -163,6 +163,11 @@ class RewardsCfgDenseBallHit:
     - At episode start: full collision bonus
     - At episode end: zero collision bonus
     This naturally incentivizes quick approach and contact.
+
+    IMPORTANT: The collision reward uses `termination_reward_time_decay` which reads
+    directly from the termination manager. This guarantees DETERMINISTIC behavior:
+    the reward is given if and only if the "ball_hit" termination was triggered.
+    The termination term name "ball_hit" must match exactly with TerminationsCfgSac.
     """
 
     # Dense reward for being close to the ball (exponential, so gradient exists everywhere)
@@ -177,12 +182,13 @@ class RewardsCfgDenseBallHit:
     )
 
     # Time-decaying bonus for hitting the ball - rewards faster contact!
-    # Weight=10.0 means hitting at t=0 gives +10.0, at t=50% gives +5.0, at t=100% gives 0.0
+    # Uses termination_reward_time_decay for DETERMINISTIC coupling with termination.
+    # Weight=500.0 means hitting at t=0 gives +500.0, at t=50% gives +250.0, at t=100% gives 0.0
     collision_player_ball_reward = RewTerm(
-        func=collision_player_ball_time_decay,
+        func=termination_reward_time_decay,
         params={
-            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
-            "ball_cfg": SceneEntityCfg("ball"),
+            "termination_term": "ball_hit",  # Must match the termination term name in TerminationsCfgSac
+            "decay_type": "linear",
         },
         weight=500.0,
     )
