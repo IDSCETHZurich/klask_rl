@@ -399,10 +399,7 @@ def termination_reward_time_decay(
 
     if termination_term not in term_manager.active_terms:
         available_terms = term_manager.active_terms
-        raise ValueError(
-            f"Termination term '{termination_term}' not found. "
-            f"Available terms: {available_terms}"
-        )
+        raise ValueError(f"Termination term '{termination_term}' not found. " f"Available terms: {available_terms}")
 
     # Get the boolean termination signal for this specific term using the proper API
     terminated = term_manager.get_term(termination_term)

@@ -1,0 +1,49 @@
+task: Klask-Rl-HER-SAC-v0
+agent: sb3_sac_cfg_entry_point
+
+num_envs: 4096
+seed: 42
+log_interval: 1000
+checkpoint: null
+max_timesteps: 2e7
+export_io_descriptors: false
+keep_all_info: false
+max_velocity: 0.2 # [m/s] Maximum velocity for player movement
+
+video: false
+video_length: 200
+video_interval: 2000
+
+# HER (Hindsight Experience Replay) settings
+use_her: true
+her_goal_selection_strategy: "future"  # 'future' works best for most tasks
+her_n_sampled_goal: 4  # Create 4 virtual transitions per real transition
+# Observation indices for goal extraction (based on PolicyCfg order):
+# - peg_1_pos: indices 0-2 (player XY position, 2 values) -> achieved_goal
+# - peg_1_x_vel: index 2
+# - peg_1_y_vel: index 3
+# - peg_2_pos: indices 4-6 (opponent XY, 2 values)
+# - peg_2_x_vel: index 6
+# - peg_2_y_vel: index 7
+# - ball_pos_rel: indices 8-10 (ball XY position, 2 values) -> desired_goal
+# - ball_vel_rel: indices 10-12
+her_achieved_goal_indices: [0, 2]
+her_desired_goal_indices: [8, 10]
+her_distance_threshold: 0.02  # Same as collision detection eps
+
+wandb_project: "KLASK"
+wandb_entity: null
+wandb_name: "sparse-sac-her-64x64"
+
+app_launcher:
+  headless: true
+  livestream: 1
+  enable_cameras: false
+  xr: false
+  device: "cuda:3"
+  experience: ""
+  rendering_mode: balanced
+  kit_args: ""
+  anim_recording_enabled: false
+  anim_recording_start_time: 0
+  anim_recording_stop_time: 10

@@ -26,4 +26,4 @@ policy_kwargs:
 target_update_interval: 1
 
 # Observation normalization for stable learning
-normalize_input: true
+normalize_input: false

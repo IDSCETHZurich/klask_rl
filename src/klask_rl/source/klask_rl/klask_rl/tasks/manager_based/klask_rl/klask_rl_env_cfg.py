@@ -9,7 +9,7 @@ from .env_cfg import KlaskRlSceneCfg
 from .env_cfg import ActionsCfg, ActionsCfgPlayerOnly
 from .env_cfg import ObservationsCfg, GoalObservationsCfg
 from .env_cfg import EventCfg, EventCfgSac
-from .env_cfg import RewardsCfg, RewardsCfgDenseBallHit, RewardsCfgSparseGoal
+from .env_cfg import RewardsCfg, RewardsCfgDenseBallHit, RewardsCfgSparseGoal, RewardsCfgSparseHer
 from .env_cfg import TerminationsCfg, TerminationsCfgSac
 
 
@@ -99,3 +99,30 @@ class KlaskRlHerEnvCfg(KlaskRlGoalEnvCfg):
         """Post initialization."""
         super().__post_init__()
         # Can add HER-specific settings here if needed
+
+@configclass
+class KlaskRlHerSacEnvCfg(KlaskRlSacEnvCfg):
+    """Configuration for SAC+HER training for ball hitting task.
+
+    Uses the same observations as KlaskRlSacEnvCfg but with sparse rewards
+    suitable for HER (Hindsight Experience Replay).
+
+    Key differences from KlaskRlSacEnvCfg:
+    - Sparse reward (only on ball hit) instead of dense proximity reward
+    - Same observations, terminations, and episode length
+
+    HER will relabel failed experiences by substituting the achieved goal
+    (where the player ended up) as the desired goal, creating successful
+    trajectories from failures.
+    """
+
+    observations = ObservationsCfg()  # Same observations as dense SAC
+    actions = ActionsCfgPlayerOnly()
+    events = EventCfgSac()
+    rewards = RewardsCfgSparseHer()  # Sparse reward for HER
+    terminations = TerminationsCfgSac()
+    episode_length_s = 4.0
+
+    def __post_init__(self):
+        """Post initialization."""
+        super().__post_init__()

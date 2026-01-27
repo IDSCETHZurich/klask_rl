@@ -30,6 +30,13 @@ class TrainConfig:
     video: bool = False
     video_length: int = 200
     video_interval: int = 2000
+    # HER (Hindsight Experience Replay) settings
+    use_her: bool = False  # Enable HER replay buffer
+    her_goal_selection_strategy: str = "future"  # 'future', 'final', 'episode', 'random'
+    her_n_sampled_goal: int = 4  # Number of virtual transitions to create per real transition
+    her_achieved_goal_indices: list[int] | None = None  # [start, end] indices for achieved_goal in obs
+    her_desired_goal_indices: list[int] | None = None  # [start, end] indices for desired_goal in obs
+    her_distance_threshold: float = 0.02  # Distance threshold for goal achievement
     app_launcher: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod

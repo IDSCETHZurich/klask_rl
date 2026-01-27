@@ -2,6 +2,7 @@
 
 """Launch Isaac Sim Simulator first."""
 
+import argparse
 import contextlib
 import signal
 import sys
@@ -11,7 +12,26 @@ from isaaclab.app import AppLauncher
 from train_config import TrainConfig
 from utils import cleanup_pbar
 
-TRAIN_CFG_PATH = Path(__file__).parent / "config" / "klask_rl_sac.yaml"
+# Parse config file argument before IsaacLab takes over sys.argv
+parser = argparse.ArgumentParser(description="Train SAC agent", add_help=False)
+parser.add_argument(
+    "--config",
+    "-c",
+    type=str,
+    default="klask_rl_sac.yaml",
+    help="Config file name in scripts/sb3/config/ (default: klask_rl_sac.yaml)",
+)
+args, remaining_argv = parser.parse_known_args()
+
+# Resolve config path
+config_dir = Path(__file__).parent / "config"
+if Path(args.config).is_absolute():
+    TRAIN_CFG_PATH = Path(args.config)
+elif "/" in args.config or "\\" in args.config:
+    TRAIN_CFG_PATH = Path(args.config)
+else:
+    TRAIN_CFG_PATH = config_dir / args.config
+
 TRAIN_CFG = TrainConfig.from_file(TRAIN_CFG_PATH)
 
 # Ignore any CLI overrides; training is fully config-driven.
@@ -35,6 +55,7 @@ import omni
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.vec_env import VecNormalize
+from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
 
 # Optional wandb import
 try:
@@ -61,6 +82,7 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import klask_rl.tasks  # noqa: F401
+from klask_rl.tasks.manager_based.klask_rl.wrappers import Sb3VecHerWrapper
 
 
 @hydra_task_config(TRAIN_CFG.task, TRAIN_CFG.agent)
@@ -138,6 +160,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # wrap around environment for stable baselines
     env = Sb3VecEnvWrapper(env, fast_variant=not train_cfg.keep_all_info)
 
+    # Wrap with HER wrapper if enabled
+    if train_cfg.use_her:
+        print("[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper...")
+        # Default indices for KLASK: peg_1_pos (0:2) and ball_pos_rel (8:10)
+        achieved_indices = tuple(train_cfg.her_achieved_goal_indices or [0, 2])
+        desired_indices = tuple(train_cfg.her_desired_goal_indices or [8, 10])
+        print(f"[INFO] HER achieved_goal indices: {achieved_indices}")
+        print(f"[INFO] HER desired_goal indices: {desired_indices}")
+        print(f"[INFO] HER distance threshold: {train_cfg.her_distance_threshold}")
+        env = Sb3VecHerWrapper(
+            env,
+            achieved_goal_indices=achieved_indices,
+            desired_goal_indices=desired_indices,
+            distance_threshold=train_cfg.her_distance_threshold,
+        )
+
     # handle normalization settings if present
     norm_keys = {"normalize_input", "normalize_value", "clip_obs"}
     norm_args = {}
@@ -146,22 +184,52 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             norm_args[key] = agent_cfg.pop(key)
 
     if norm_args and norm_args.get("normalize_input"):
-        print(f"Normalizing input, {norm_args=}")
-        env = VecNormalize(
-            env,
-            training=True,
-            norm_obs=norm_args["normalize_input"],
-            norm_reward=norm_args.get("normalize_value", False),
-            clip_obs=norm_args.get("clip_obs", 100.0),
-            gamma=agent_cfg.get("gamma", 0.99),
-            clip_reward=np.inf,
-        )
+        # Note: VecNormalize with HER requires special handling
+        if train_cfg.use_her:
+            print("[WARNING] VecNormalize is not fully compatible with HER. Disabling observation normalization.")
+        else:
+            print(f"Normalizing input, {norm_args=}")
+            env = VecNormalize(
+                env,
+                training=True,
+                norm_obs=norm_args["normalize_input"],
+                norm_reward=norm_args.get("normalize_value", False),
+                clip_obs=norm_args.get("clip_obs", 100.0),
+                gamma=agent_cfg.get("gamma", 0.99),
+                clip_reward=np.inf,
+            )
+
+    # Configure replay buffer (standard or HER)
+    replay_buffer_class = None
+    replay_buffer_kwargs = None
+
+    if train_cfg.use_her:
+        print("[INFO] Configuring HER replay buffer...")
+        print(f"[INFO] HER goal selection strategy: {train_cfg.her_goal_selection_strategy}")
+        print(f"[INFO] HER n_sampled_goal: {train_cfg.her_n_sampled_goal}")
+        replay_buffer_class = HerReplayBuffer
+        replay_buffer_kwargs = {
+            "n_sampled_goal": train_cfg.her_n_sampled_goal,
+            "goal_selection_strategy": train_cfg.her_goal_selection_strategy,
+        }
+        # HER requires MultiInputPolicy for dict observation space
+        if policy_arch == "MlpPolicy":
+            print("[INFO] Switching to MultiInputPolicy for HER (dict observation space)")
+            policy_arch = "MultiInputPolicy"
 
     # create SAC agent from stable baselines
     print("[INFO] Creating SAC agent...")
     print_dict(agent_cfg, nesting=4)
 
-    agent = SAC(policy_arch, env, verbose=1, tensorboard_log=log_dir, **agent_cfg)
+    agent = SAC(
+        policy_arch,
+        env,
+        verbose=1,
+        tensorboard_log=log_dir,
+        replay_buffer_class=replay_buffer_class,
+        replay_buffer_kwargs=replay_buffer_kwargs,
+        **agent_cfg,
+    )
 
     # load checkpoint if provided
     if train_cfg.checkpoint is not None:

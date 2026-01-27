@@ -195,6 +195,22 @@ class RewardsCfgDenseBallHit:
 
 
 @configclass
+class RewardsCfgSparseHer:
+    """Sparse rewards for HER training - only termination reward, no dense proximity."""
+
+    # Sparse termination-based reward only - no proximity bonus
+    # HER will relabel failed experiences to create successful trajectories
+    collision_player_ball_reward = RewTerm(
+        func=termination_reward_time_decay,
+        params={
+            "termination_term": "ball_hit",
+            "decay_type": "linear",
+        },
+        weight=500.0,
+    )
+
+
+@configclass
 class RewardsCfgSparseGoal(RewardsCfg):
     """Sparse rewards for SAC+HER training - only reward for scoring goals.
 
