@@ -63,10 +63,10 @@ class TerminationsCfgSac:
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    # ball_hit = DoneTerm(
-    #     func=collision_player_ball_bool,
-    #     params={
-    #         "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
-    #         "ball_cfg": SceneEntityCfg("ball"),
-    #     },
-    # )
+    ball_hit = DoneTerm(
+        func=collision_player_ball_bool,
+        params={
+            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+            "ball_cfg": SceneEntityCfg("ball"),
+        },
+    )

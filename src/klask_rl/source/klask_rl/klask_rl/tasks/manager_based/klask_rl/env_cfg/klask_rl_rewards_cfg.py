@@ -184,7 +184,7 @@ class RewardsCfgDenseBallHit:
             "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
             "ball_cfg": SceneEntityCfg("ball"),
         },
-        weight=50.0,
+        weight=500.0,
     )
 
 
