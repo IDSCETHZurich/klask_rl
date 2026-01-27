@@ -14,6 +14,7 @@ from ..utils_manager_based import (
     ball_stationary,
     collision_player_ball,
     collision_player_ball_bool,
+    collision_player_ball_time_decay,
     distance_ball_goal,
     distance_player_ball_own_half,
     proximity_player_ball,
@@ -156,10 +157,12 @@ class RewardsCfgDenseBallHit:
 
     Reward structure:
     - Proximity reward: Exponential decay with distance, provides dense gradient everywhere
-    - Collision reward: Bonus for making contact with the ball
+    - Collision reward: Time-decaying bonus for making contact (faster contact = higher reward)
 
-    No time penalty needed - proximity reward naturally incentivizes fast approach
-    (getting close sooner = more cumulative reward over episode).
+    The collision reward uses linear time decay to reward faster ball contact:
+    - At episode start: full collision bonus
+    - At episode end: zero collision bonus
+    This naturally incentivizes quick approach and contact.
     """
 
     # Dense reward for being close to the ball (exponential, so gradient exists everywhere)
@@ -170,17 +173,18 @@ class RewardsCfgDenseBallHit:
             "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
             "ball_cfg": SceneEntityCfg("ball"),
         },
-        weight=5.0,  # Strong proximity reward signal
+        weight=5.0,
     )
 
-    # Bonus for actually hitting the ball (important to incentivize contact!)
+    # Time-decaying bonus for hitting the ball - rewards faster contact!
+    # Weight=10.0 means hitting at t=0 gives +10.0, at t=50% gives +5.0, at t=100% gives 0.0
     collision_player_ball_reward = RewTerm(
-        func=collision_player_ball_bool,
+        func=collision_player_ball_time_decay,
         params={
             "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
             "ball_cfg": SceneEntityCfg("ball"),
         },
-        weight=10.0,  # Strong bonus reward for hitting the ball
+        weight=50.0,
     )
 
 

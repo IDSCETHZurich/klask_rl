@@ -56,14 +56,13 @@ class TerminationsCfgSac:
 
     Episode ends when:
     - Timeout (allowing agent to track the ball continuously)
-    
-    Note: We don't terminate on ball hit anymore, so the agent learns to 
+
+    Note: We don't terminate on ball hit anymore, so the agent learns to
     continuously track and hit the ball, not just reach it once.
     """
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    # DISABLED: Don't terminate on ball collision - let agent learn continuous tracking
     # ball_hit = DoneTerm(
     #     func=collision_player_ball_bool,
     #     params={

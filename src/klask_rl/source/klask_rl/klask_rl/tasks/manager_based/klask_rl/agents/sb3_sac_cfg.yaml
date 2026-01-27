@@ -4,17 +4,14 @@ policy: "MlpPolicy"
 
 # SAC specific parameters
 learning_rate: !!float 3e-4
-buffer_size: 1_000_000 # Smaller buffer for faster turnover with dense rewards
-learning_starts: 1000 # Start learning after collecting more diverse experiences
-batch_size: 256 # Smaller batches, more frequent updates
+buffer_size: 1_000_000
+learning_starts: 1000
+batch_size: 1024
 tau: 0.005
-gamma: 0.99 # Standard gamma value
+gamma: 0.99
 
-# Dense reward strategy:
-# - Start learning quickly since we have dense signal
-# - Update frequently to learn from proximity gradient
-train_freq: 1 # Update every 4 env steps
-gradient_steps: 1 # Gradient steps per update
+train_freq: 64 # Update every x env steps
+gradient_steps: 32 # Gradient steps per update
 
 # Lower entropy for simpler task - we want more exploitation
 ent_coef: 0.01 # Fixed low entropy (auto tends to keep it too high)

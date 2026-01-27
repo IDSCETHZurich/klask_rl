@@ -16,7 +16,7 @@ video_interval: 2000
 
 wandb_project: "KLASK"
 wandb_entity: null
-wandb_name: "full-obs-sac-64x64-dense-noterm"
+wandb_name: "full-obs-sac-64x64-dense"
 
 app_launcher:
   headless: true

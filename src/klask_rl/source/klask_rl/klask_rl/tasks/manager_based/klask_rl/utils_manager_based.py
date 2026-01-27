@@ -290,6 +290,38 @@ def collision_player_ball_bool(
     return dist < eps
 
 
+def collision_player_ball_time_decay(
+    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg, eps=0.02
+) -> torch.Tensor:
+    """Returns collision reward that decays linearly with episode progress.
+
+    Rewards faster ball contact - the earlier in the episode the collision happens,
+    the higher the reward. Uses linear decay: reward = collision * (1 - progress).
+
+    At episode start (step 0): full reward (multiplier = 1.0)
+    At episode end (max steps): zero reward (multiplier = 0.0)
+
+    Args:
+        env: The environment instance
+        player_cfg: Configuration for the player entity
+        ball_cfg: Configuration for the ball entity
+        eps: Distance threshold for collision detection (default: 0.02)
+
+    Returns:
+        Time-decayed collision reward (0.0 to 1.0 range before weight scaling)
+    """
+    # Check if collision occurred
+    collision = collision_player_ball_bool(env, player_cfg, ball_cfg, eps)
+
+    # Calculate episode progress (0.0 at start, 1.0 at max_episode_length)
+    progress = env.episode_length_buf.float() / env.max_episode_length
+
+    # Linear decay: reward is highest at start, zero at end
+    time_multiplier = 1.0 - progress
+
+    return collision.float() * time_multiplier
+
+
 def ball_in_own_half(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg):
     ball_pos = root_xy_pos_w(env, ball_cfg)
     return 1.0 * (ball_pos[:, 1] < 0.0)
