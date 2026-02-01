@@ -8,11 +8,7 @@ import signal
 import sys
 from pathlib import Path
 
-from isaaclab.app import AppLauncher
-from train_config import TrainConfig
-from utils import cleanup_pbar
-
-# Parse config file argument before IsaacLab takes over sys.argv
+# Parse config file argument BEFORE any isaaclab imports
 parser = argparse.ArgumentParser(description="Train SAC agent", add_help=False)
 parser.add_argument(
     "--config",
@@ -32,7 +28,14 @@ elif "/" in args.config or "\\" in args.config:
 else:
     TRAIN_CFG_PATH = config_dir / args.config
 
+# Load config and set CUDA_VISIBLE_DEVICES BEFORE importing isaaclab
+from train_config import TrainConfig
 TRAIN_CFG = TrainConfig.from_file(TRAIN_CFG_PATH)
+TRAIN_CFG.setup_cuda_visibility()
+
+# NOW import isaaclab after CUDA_VISIBLE_DEVICES is set
+from isaaclab.app import AppLauncher
+from utils import cleanup_pbar
 
 # Ignore any CLI overrides; training is fully config-driven.
 sys.argv = [sys.argv[0]]

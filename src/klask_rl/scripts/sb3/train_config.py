@@ -98,6 +98,26 @@ class TrainConfig:
             sys.exit(1)
         return cls(app_launcher=app_launcher, **data)
 
+    def setup_cuda_visibility(self) -> None:
+        """Set CUDA_VISIBLE_DEVICES based on device in app_launcher config.
+        Must be called BEFORE AppLauncher initialization to prevent Isaac Sim
+        from allocating memory on all GPUs.
+        """
+        import os
+
+        device = self.app_launcher.get("device")
+        if device and isinstance(device, str) and device.startswith("cuda:"):
+            try:
+                gpu_id = device.split(":")[1]
+                os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
+                print(
+                    f"[INFO] Set CUDA_VISIBLE_DEVICES={gpu_id} (Physical GPU {gpu_id} will appear as cuda:0 to the application)"
+                )
+                # Update config to use cuda:0 since we've remapped the GPU
+                self.app_launcher["device"] = "cuda:0"
+            except (IndexError, ValueError):
+                print(f"[WARNING] Could not parse GPU ID from device: {device}")
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
