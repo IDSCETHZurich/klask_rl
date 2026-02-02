@@ -14,9 +14,12 @@ from .klask_rl_env_cfg import (
     KlaskRlHerEnvCfg,
     KlaskRlHerSacEnvCfg,
     KlaskRlSacEnvCfg,
+    KlaskRlTwoStageHerEnvCfg,
     RewardsCfgSparseGoal,
     RewardsCfgSparseHer,
+    RewardsCfgTwoStageHer,
     TerminationsCfgSac,
+    TerminationsCfgTwoStageHer,
 )
 
 ##
@@ -69,6 +72,17 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlHerSacEnvCfg",
+        "sb3_sac_cfg_entry_point": f"{agents.__name__}:sb3_sac_cfg.yaml",
+    },
+)
+
+
+gym.register(
+    id="Klask-Rl-TwoStage-HER-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlTwoStageHerEnvCfg",
         "sb3_sac_cfg_entry_point": f"{agents.__name__}:sb3_sac_cfg.yaml",
     },
 )

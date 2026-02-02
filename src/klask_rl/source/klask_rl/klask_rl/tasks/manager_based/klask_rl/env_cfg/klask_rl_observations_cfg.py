@@ -37,12 +37,20 @@ class ObservationsCfg:
 
         peg_1_x_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["slider_to_peg_1"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["slider_to_peg_1"]
+                )
+            },
         )
 
         peg_1_y_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["ground_to_slider_1"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["ground_to_slider_1"]
+                )
+            },
         )
 
         peg_2_pos = ObsTerm(
@@ -57,17 +65,29 @@ class ObservationsCfg:
 
         peg_2_x_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["slider_to_peg_2"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["slider_to_peg_2"]
+                )
+            },
         )
 
         peg_2_y_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["ground_to_slider_2"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["ground_to_slider_2"]
+                )
+            },
         )
 
-        ball_pos_rel = ObsTerm(func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
+        ball_pos_rel = ObsTerm(
+            func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")}
+        )
 
-        ball_vel_rel = ObsTerm(func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
+        ball_vel_rel = ObsTerm(
+            func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")}
+        )
 
         if KLASK_PARAMS.get("additional_observations", 0):
             angle_pegball_pegoppgoal = ObsTerm(
@@ -108,11 +128,17 @@ class ObservationsCfg:
 
             distance_ball_goal = ObsTerm(
                 func=distance_to_goal,
-                params={"ball_cfg": SceneEntityCfg(name="ball"), "goal": KLASK_PARAMS["player_goal"]},
+                params={
+                    "ball_cfg": SceneEntityCfg(name="ball"),
+                    "goal": KLASK_PARAMS["player_goal"],
+                },
             )
             distance_ball_oppgoal = ObsTerm(
                 func=distance_to_goal,
-                params={"ball_cfg": SceneEntityCfg(name="ball"), "goal": KLASK_PARAMS["opponent_goal"]},
+                params={
+                    "ball_cfg": SceneEntityCfg(name="ball"),
+                    "goal": KLASK_PARAMS["opponent_goal"],
+                },
             )
 
             distance_ball_player = ObsTerm(
@@ -133,11 +159,15 @@ class ObservationsCfg:
 
         if KLASK_PARAMS.get("action_history", 0):
             action_history_x = ObsTerm(
-                func=mdp.last_action, params={"action_name": "player_x"}, history_length=KLASK_PARAMS["action_history"]
+                func=mdp.last_action,
+                params={"action_name": "player_x"},
+                history_length=KLASK_PARAMS["action_history"],
             )
 
             action_history_y = ObsTerm(
-                func=mdp.last_action, params={"action_name": "player_y"}, history_length=KLASK_PARAMS["action_history"]
+                func=mdp.last_action,
+                params={"action_name": "player_y"},
+                history_length=KLASK_PARAMS["action_history"],
             )
 
         def __post_init__(self) -> None:
@@ -161,12 +191,20 @@ class ObservationsCfg:
 
         peg_2_x_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["slider_to_peg_2"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["slider_to_peg_2"]
+                )
+            },
         )
 
         peg_2_y_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["ground_to_slider_2"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["ground_to_slider_2"]
+                )
+            },
         )
 
         peg_1_pos = ObsTerm(
@@ -176,17 +214,29 @@ class ObservationsCfg:
 
         peg_1_x_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["slider_to_peg_1"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["slider_to_peg_1"]
+                )
+            },
         )
 
         peg_1_y_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["ground_to_slider_1"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["ground_to_slider_1"]
+                )
+            },
         )
 
-        ball_pos_rel = ObsTerm(func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
+        ball_pos_rel = ObsTerm(
+            func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")}
+        )
 
-        ball_vel_rel = ObsTerm(func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
+        ball_vel_rel = ObsTerm(
+            func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")}
+        )
 
         if KLASK_PARAMS.get("additional_observations", 0):
             angle_oppball_oppgoal = ObsTerm(
@@ -227,11 +277,17 @@ class ObservationsCfg:
 
             distance_ball_oppgoal = ObsTerm(
                 func=distance_to_goal,
-                params={"ball_cfg": SceneEntityCfg(name="ball"), "goal": KLASK_PARAMS["opponent_goal"]},
+                params={
+                    "ball_cfg": SceneEntityCfg(name="ball"),
+                    "goal": KLASK_PARAMS["opponent_goal"],
+                },
             )
             distance_ball_goal = ObsTerm(
                 func=distance_to_goal,
-                params={"ball_cfg": SceneEntityCfg(name="ball"), "goal": KLASK_PARAMS["player_goal"]},
+                params={
+                    "ball_cfg": SceneEntityCfg(name="ball"),
+                    "goal": KLASK_PARAMS["player_goal"],
+                },
             )
 
             distance_ball_opp = ObsTerm(
@@ -289,12 +345,20 @@ class GoalObservationsCfg:
 
         peg_1_x_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["slider_to_peg_1"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["slider_to_peg_1"]
+                )
+            },
         )
 
         peg_1_y_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["ground_to_slider_1"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["ground_to_slider_1"]
+                )
+            },
         )
 
         peg_2_pos = ObsTerm(
@@ -309,17 +373,29 @@ class GoalObservationsCfg:
 
         peg_2_x_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["slider_to_peg_2"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["slider_to_peg_2"]
+                )
+            },
         )
 
         peg_2_y_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["ground_to_slider_2"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["ground_to_slider_2"]
+                )
+            },
         )
 
-        ball_pos_rel = ObsTerm(func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
+        ball_pos_rel = ObsTerm(
+            func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")}
+        )
 
-        ball_vel_rel = ObsTerm(func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
+        ball_vel_rel = ObsTerm(
+            func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")}
+        )
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -327,8 +403,12 @@ class GoalObservationsCfg:
 
     @configclass
     class AchievedGoalCfg(ObsGroup):
-        ball_pos_rel = ObsTerm(func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
-        ball_vel_rel = ObsTerm(func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
+        ball_pos_rel = ObsTerm(
+            func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")}
+        )
+        ball_vel_rel = ObsTerm(
+            func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")}
+        )
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -362,12 +442,20 @@ class GoalObservationsCfg:
 
         peg_1_x_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["slider_to_peg_1"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["slider_to_peg_1"]
+                )
+            },
         )
 
         peg_1_y_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["ground_to_slider_1"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["ground_to_slider_1"]
+                )
+            },
         )
 
         peg_2_pos = ObsTerm(
@@ -382,17 +470,29 @@ class GoalObservationsCfg:
 
         peg_2_x_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["slider_to_peg_2"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["slider_to_peg_2"]
+                )
+            },
         )
 
         peg_2_y_vel = ObsTerm(
             func=mdp.joint_vel_rel,
-            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=["ground_to_slider_2"])},
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["ground_to_slider_2"]
+                )
+            },
         )
 
-        ball_pos_rel = ObsTerm(func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
+        ball_pos_rel = ObsTerm(
+            func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")}
+        )
 
-        ball_vel_rel = ObsTerm(func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
+        ball_vel_rel = ObsTerm(
+            func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")}
+        )
 
         if KLASK_PARAMS.get("additional_observations", 0):
             angle_pegball_pegoppgoal = ObsTerm(
@@ -433,11 +533,17 @@ class GoalObservationsCfg:
 
             distance_ball_goal = ObsTerm(
                 func=distance_to_goal,
-                params={"ball_cfg": SceneEntityCfg(name="ball"), "goal": KLASK_PARAMS["player_goal"]},
+                params={
+                    "ball_cfg": SceneEntityCfg(name="ball"),
+                    "goal": KLASK_PARAMS["player_goal"],
+                },
             )
             distance_ball_oppgoal = ObsTerm(
                 func=distance_to_goal,
-                params={"ball_cfg": SceneEntityCfg(name="ball"), "goal": KLASK_PARAMS["opponent_goal"]},
+                params={
+                    "ball_cfg": SceneEntityCfg(name="ball"),
+                    "goal": KLASK_PARAMS["opponent_goal"],
+                },
             )
 
             distance_ball_player = ObsTerm(
@@ -458,13 +564,109 @@ class GoalObservationsCfg:
 
         if KLASK_PARAMS.get("action_history", 0):
             action_history_x = ObsTerm(
-                func=mdp.last_action, params={"action_name": "player_x"}, history_length=KLASK_PARAMS["action_history"]
+                func=mdp.last_action,
+                params={"action_name": "player_x"},
+                history_length=KLASK_PARAMS["action_history"],
             )
 
             action_history_y = ObsTerm(
-                func=mdp.last_action, params={"action_name": "player_y"}, history_length=KLASK_PARAMS["action_history"]
+                func=mdp.last_action,
+                params={"action_name": "player_y"},
+                history_length=KLASK_PARAMS["action_history"],
             )
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
             self.concatenate_terms = True
+
+
+@configclass
+class TwoStageHerObservationsCfg:
+    """Observation specifications for two-stage HER goal-scoring task.
+
+    This config provides observations suitable for learning to:
+    1. Hit the ball (player → ball)
+    2. Score a goal (ball → opponent goal)
+
+    The observation structure is:
+    - peg_1_pos (2): player XY position
+    - peg_1_vel (2): player XY velocity
+    - peg_2_pos (2): opponent XY position
+    - peg_2_vel (2): opponent XY velocity
+    - ball_pos (2): ball XY position
+    - ball_vel (2): ball XY velocity
+    Total: 12 dimensions
+
+    Note: opponent_goal_center is added by the Sb3TwoStageHerWrapper,
+    not in the base observation, so HER can relabel it.
+    """
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """Observations for policy group - two-stage HER compatible."""
+
+        # Player position and velocity (indices 0-3)
+        peg_1_pos = ObsTerm(
+            func=body_xy_pos_w,
+            params={"asset_cfg": SceneEntityCfg(name="klask", body_names=["Peg_1"])},
+        )
+
+        peg_1_x_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["slider_to_peg_1"]
+                )
+            },
+        )
+
+        peg_1_y_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["ground_to_slider_1"]
+                )
+            },
+        )
+
+        # Opponent position and velocity (indices 4-7)
+        peg_2_pos = ObsTerm(
+            func=body_xy_pos_w,
+            params={"asset_cfg": SceneEntityCfg(name="klask", body_names=["Peg_2"])},
+        )
+
+        peg_2_x_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["slider_to_peg_2"]
+                )
+            },
+        )
+
+        peg_2_y_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    name="klask", joint_names=["ground_to_slider_2"]
+                )
+            },
+        )
+
+        # Ball position and velocity (indices 8-11)
+        ball_pos_rel = ObsTerm(
+            func=root_xy_pos_w,
+            params={"asset_cfg": SceneEntityCfg(name="ball")},
+        )
+
+        ball_vel_rel = ObsTerm(
+            func=root_lin_xy_vel_w,
+            params={"asset_cfg": SceneEntityCfg(name="ball")},
+        )
+
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    # observation groups
+    policy: PolicyCfg = PolicyCfg()

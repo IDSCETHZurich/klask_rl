@@ -42,13 +42,19 @@ class RewardsCfg:
     )
     player_in_goal = RewTerm(
         func=in_goal,
-        params={"asset_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]), "goal": KLASK_PARAMS["player_goal"]},
+        params={
+            "asset_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+            "goal": KLASK_PARAMS["player_goal"],
+        },
         weight=0.0,
     )
 
     opponent_in_goal = RewTerm(
         func=in_goal,
-        params={"asset_cfg": SceneEntityCfg("klask", body_names=["Peg_2"]), "goal": KLASK_PARAMS["opponent_goal"]},
+        params={
+            "asset_cfg": SceneEntityCfg("klask", body_names=["Peg_2"]),
+            "goal": KLASK_PARAMS["opponent_goal"],
+        },
         weight=0.0,
     )
 
@@ -83,12 +89,18 @@ class RewardsCfg:
 
     distance_ball_opponent_goal = RewTerm(
         func=distance_ball_goal,
-        params={"ball_cfg": SceneEntityCfg("ball"), "goal": KLASK_PARAMS["opponent_goal"]},
+        params={
+            "ball_cfg": SceneEntityCfg("ball"),
+            "goal": KLASK_PARAMS["opponent_goal"],
+        },
         weight=0.0,
     )
     distance_ball_own_goal = RewTerm(
         func=distance_ball_goal,
-        params={"ball_cfg": SceneEntityCfg("ball"), "goal": KLASK_PARAMS["player_goal"]},
+        params={
+            "ball_cfg": SceneEntityCfg("ball"),
+            "goal": KLASK_PARAMS["player_goal"],
+        },
         weight=0.0,
     )
 
@@ -117,10 +129,14 @@ class RewardsCfg:
         weight=0.0,
     )
 
-    ball_in_own_half = RewTerm(func=ball_in_own_half, params={"ball_cfg": SceneEntityCfg("ball")}, weight=0.0)
+    ball_in_own_half = RewTerm(
+        func=ball_in_own_half, params={"ball_cfg": SceneEntityCfg("ball")}, weight=0.0
+    )
 
     close_to_boundaries = RewTerm(
-        func=distance_to_wall, params={"player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"])}, weight=0.0
+        func=distance_to_wall,
+        params={"player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"])},
+        weight=0.0,
     )
     player_strategically_positioned = RewTerm(
         func=peg_in_defense_line_with_rebounds,
@@ -239,4 +255,43 @@ class RewardsCfgSparseGoal(RewardsCfg):
             "max_ball_vel": KLASK_PARAMS["max_ball_vel"],
         },
         weight=-10.0,  # Large negative reward for conceding
+    )
+
+
+@configclass
+class RewardsCfgTwoStageHer:
+    """Rewards for two-stage HER goal-scoring task.
+
+    This reward config is designed for hierarchical goal-conditioned learning:
+    1. Stage 1: Sparse reward for hitting the ball (non-terminating)
+    2. Stage 2: Larger sparse reward for scoring a goal (terminating)
+
+    Note: The actual reward values are computed by the Sb3TwoStageHerWrapper,
+    which handles the two-stage logic. This config defines the base reward
+    terms that can be used for logging/monitoring.
+
+    The wrapper computes rewards as:
+    - Ball hit: ball_hit_reward (default 1.0)
+    - Goal scored: goal_score_reward (default 10.0)
+    """
+
+    # Ball hit detection (for monitoring, actual reward from wrapper)
+    collision_player_ball = RewTerm(
+        func=collision_player_ball_bool,
+        params={
+            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+            "ball_cfg": SceneEntityCfg("ball"),
+        },
+        weight=0.0,  # Monitoring only, wrapper handles actual reward
+    )
+
+    # Goal scored detection (for monitoring, actual reward from wrapper)
+    goal_scored = RewTerm(
+        func=ball_in_goal,
+        params={
+            "asset_cfg": SceneEntityCfg("ball"),
+            "goal": KLASK_PARAMS["opponent_goal"],
+            "max_ball_vel": KLASK_PARAMS["max_ball_vel"],
+        },
+        weight=0.0,  # Monitoring only, wrapper handles actual reward
     )

@@ -1,0 +1,78 @@
+# Configuration for Two-Stage HER (Hindsight Experience Replay) training
+# This implements hierarchical goal-conditioned learning:
+# Stage 1: Learn to hit the ball (player → ball)
+# Stage 2: Learn to score a goal (ball → opponent goal)
+
+task: Klask-Rl-TwoStage-HER-v0
+agent: sb3_sac_cfg_entry_point
+
+num_envs: 4096
+seed: 42
+log_interval: 1000
+checkpoint: null
+max_timesteps: 1e8
+export_io_descriptors: false
+keep_all_info: false
+max_velocity: 0.2 # [m/s] Maximum velocity for player movement
+
+video: false
+video_length: 200
+video_interval: 2000
+
+# Two-Stage HER settings
+use_her: true # Still using HER buffer
+use_two_stage_her: true # Enable two-stage wrapper
+her_goal_selection_strategy: "final"
+her_n_sampled_goal: 4
+
+# Observation indices for two-stage goal extraction:
+# Base observation structure (12 dims):
+# - peg_1_pos: indices 0-2 (player XY position)
+# - peg_1_vel: indices 2-4 (player velocity)
+# - peg_2_pos: indices 4-6 (opponent XY position)
+# - peg_2_vel: indices 6-8 (opponent velocity)
+# - ball_pos: indices 8-10 (ball XY position)
+# - ball_vel: indices 10-12 (ball velocity)
+#
+# Extended by wrapper (14 dims total):
+# - opponent_goal: indices 12-14 (goal center XY)
+#
+# Two-stage goal structure:
+# Pre-hit:  achieved=player_pos(0:2), desired=ball_pos(8:10)
+# Post-hit: achieved=ball_pos(8:10), desired=opponent_goal(wrapper-managed)
+
+her_achieved_goal_indices: [0, 2] # Player position (pre-hit) / Ball position (post-hit) - handled by wrapper
+her_desired_goal_indices: [8, 10] # Ball position (pre-hit) / Opponent goal (post-hit) - handled by wrapper
+
+# Two-stage specific settings
+two_stage_player_pos_indices: [0, 2]
+two_stage_ball_pos_indices: [8, 10]
+two_stage_opponent_goal_center: [0.0, 0.176215] # Opponent goal XY
+
+# Threshold settings
+two_stage_ball_hit_threshold: 0.02 # Distance for ball hit detection
+two_stage_goal_score_threshold: 0.025 # Distance for goal scoring (slightly larger than goal radius)
+
+# Reward settings (sparse two-stage rewards)
+two_stage_ball_hit_reward: 1.0 # Reward for hitting ball (non-terminating)
+two_stage_goal_score_reward: 10.0 # Reward for scoring goal (terminating)
+
+# Legacy HER threshold (used by HER buffer, not two-stage logic)
+her_distance_threshold: 0.02
+
+wandb_project: "KLASK"
+wandb_entity: null
+wandb_name: "two-stage-her-sac-goal-scoring"
+
+app_launcher:
+  headless: true
+  livestream: 1
+  enable_cameras: false
+  xr: false
+  device: "cuda:3"
+  experience: ""
+  rendering_mode: balanced
+  kit_args: ""
+  anim_recording_enabled: false
+  anim_recording_start_time: 0
+  anim_recording_stop_time: 10

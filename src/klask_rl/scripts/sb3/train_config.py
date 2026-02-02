@@ -32,17 +32,44 @@ class TrainConfig:
     video_interval: int = 2000
     # HER (Hindsight Experience Replay) settings
     use_her: bool = False  # Enable HER replay buffer
-    her_goal_selection_strategy: str = "future"  # 'future', 'final', 'episode', 'random'
-    her_n_sampled_goal: int = 4  # Number of virtual transitions to create per real transition
-    her_achieved_goal_indices: list[int] | None = None  # [start, end] indices for achieved_goal in obs
-    her_desired_goal_indices: list[int] | None = None  # [start, end] indices for desired_goal in obs
+    her_goal_selection_strategy: str = (
+        "future"  # 'future', 'final', 'episode', 'random'
+    )
+    her_n_sampled_goal: int = (
+        4  # Number of virtual transitions to create per real transition
+    )
+    her_achieved_goal_indices: list[int] | None = (
+        None  # [start, end] indices for achieved_goal in obs
+    )
+    her_desired_goal_indices: list[int] | None = (
+        None  # [start, end] indices for desired_goal in obs
+    )
     her_distance_threshold: float = 0.02  # Distance threshold for goal achievement
+
+    # Two-Stage HER settings (for goal-scoring task)
+    use_two_stage_her: bool = False  # Enable two-stage HER wrapper
+    two_stage_player_pos_indices: list[int] | None = (
+        None  # [start, end] indices for player position
+    )
+    two_stage_ball_pos_indices: list[int] | None = (
+        None  # [start, end] indices for ball position
+    )
+    two_stage_opponent_goal_center: list[float] | None = (
+        None  # [x, y] opponent goal center
+    )
+    two_stage_ball_hit_threshold: float = 0.02  # Distance for ball hit detection
+    two_stage_goal_score_threshold: float = 0.025  # Distance for goal scoring
+    two_stage_ball_hit_reward: float = 1.0  # Reward for hitting ball (non-terminating)
+    two_stage_goal_score_reward: float = 10.0  # Reward for scoring goal (terminating)
+
     app_launcher: dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
     def _coerce_int(value: Any, field_name: str) -> int:
         if isinstance(value, bool):
-            print(f"[ERROR] Training config '{field_name}' must be an integer, got bool.")
+            print(
+                f"[ERROR] Training config '{field_name}' must be an integer, got bool."
+            )
             sys.exit(1)
         if isinstance(value, int):
             return value
@@ -55,9 +82,13 @@ class TrainConfig:
                 try:
                     return int(float(value))
                 except ValueError:
-                    print(f"[ERROR] Training config '{field_name}' must be numeric, got: {value!r}")
+                    print(
+                        f"[ERROR] Training config '{field_name}' must be numeric, got: {value!r}"
+                    )
                     sys.exit(1)
-        print(f"[ERROR] Training config '{field_name}' must be numeric, got: {type(value).__name__}")
+        print(
+            f"[ERROR] Training config '{field_name}' must be numeric, got: {type(value).__name__}"
+        )
         sys.exit(1)
 
     @staticmethod
@@ -80,7 +111,9 @@ class TrainConfig:
         if data is None:
             data = {}
         if not isinstance(data, dict):
-            print(f"[ERROR] Training config must be a mapping, got: {type(data).__name__}")
+            print(
+                f"[ERROR] Training config must be a mapping, got: {type(data).__name__}"
+            )
             sys.exit(1)
         return data
 
@@ -125,7 +158,9 @@ class TrainConfig:
         args = dict(self.app_launcher)
         if self.video:
             if args.get("enable_cameras") is False:
-                print("[WARNING] video=true requires enable_cameras; overriding to True.")
+                print(
+                    "[WARNING] video=true requires enable_cameras; overriding to True."
+                )
             args["enable_cameras"] = True
         return args
 
@@ -147,7 +182,9 @@ class TrainConfig:
             self.max_timesteps = self._coerce_int(self.max_timesteps, "max_timesteps")
             agent_cfg["n_timesteps"] = self.max_timesteps
         elif "n_timesteps" not in agent_cfg:
-            print("[ERROR] Training config missing max_timesteps and agent config missing n_timesteps.")
+            print(
+                "[ERROR] Training config missing max_timesteps and agent config missing n_timesteps."
+            )
             sys.exit(1)
 
         device = self.app_launcher.get("device")

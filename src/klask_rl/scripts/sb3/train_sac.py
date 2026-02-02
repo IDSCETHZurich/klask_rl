@@ -30,6 +30,7 @@ else:
 
 # Load config and set CUDA_VISIBLE_DEVICES BEFORE importing isaaclab
 from train_config import TrainConfig
+
 TRAIN_CFG = TrainConfig.from_file(TRAIN_CFG_PATH)
 TRAIN_CFG.setup_cuda_visibility()
 
@@ -85,11 +86,16 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import klask_rl.tasks  # noqa: F401
-from klask_rl.tasks.manager_based.klask_rl.wrappers import Sb3VecHerWrapper
+from klask_rl.tasks.manager_based.klask_rl.wrappers import (
+    Sb3VecHerWrapper,
+    Sb3TwoStageHerWrapper,
+)
 
 
 @hydra_task_config(TRAIN_CFG.task, TRAIN_CFG.agent)
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
+def main(
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict
+):
     """Train with stable-baselines SAC agent."""
     train_cfg = TRAIN_CFG
     train_cfg.apply(env_cfg, agent_cfg)
@@ -133,7 +139,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.log_dir = log_dir
 
     # create isaac environment
-    env = gym.make(train_cfg.task, cfg=env_cfg, render_mode="rgb_array" if train_cfg.video else None)
+    env = gym.make(
+        train_cfg.task,
+        cfg=env_cfg,
+        render_mode="rgb_array" if train_cfg.video else None,
+    )
 
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
@@ -146,7 +156,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env.unwrapped.single_action_space = gym.spaces.Box(
         low=-max_vel, high=max_vel, shape=(action_dim,), dtype=np.float32
     )
-    env.unwrapped.action_space = gym.vector.utils.batch_space(env.unwrapped.single_action_space, env.unwrapped.num_envs)
+    env.unwrapped.action_space = gym.vector.utils.batch_space(
+        env.unwrapped.single_action_space, env.unwrapped.num_envs
+    )
 
     # wrap for video recording
     if train_cfg.video:
@@ -164,8 +176,44 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env = Sb3VecEnvWrapper(env, fast_variant=not train_cfg.keep_all_info)
 
     # Wrap with HER wrapper if enabled
-    if train_cfg.use_her:
-        print("[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper...")
+    if train_cfg.use_two_stage_her:
+        # Two-Stage HER for goal-scoring task
+        print("[INFO] Wrapping environment with Two-Stage HER wrapper...")
+        player_pos_indices = tuple(train_cfg.two_stage_player_pos_indices or [0, 2])
+        ball_pos_indices = tuple(train_cfg.two_stage_ball_pos_indices or [8, 10])
+        opponent_goal_center = tuple(
+            train_cfg.two_stage_opponent_goal_center or [0.0, 0.176215]
+        )
+        print(f"[INFO] Two-Stage HER player_pos indices: {player_pos_indices}")
+        print(f"[INFO] Two-Stage HER ball_pos indices: {ball_pos_indices}")
+        print(f"[INFO] Two-Stage HER opponent_goal_center: {opponent_goal_center}")
+        print(
+            f"[INFO] Two-Stage HER ball_hit_threshold: {train_cfg.two_stage_ball_hit_threshold}"
+        )
+        print(
+            f"[INFO] Two-Stage HER goal_score_threshold: {train_cfg.two_stage_goal_score_threshold}"
+        )
+        print(
+            f"[INFO] Two-Stage HER ball_hit_reward: {train_cfg.two_stage_ball_hit_reward}"
+        )
+        print(
+            f"[INFO] Two-Stage HER goal_score_reward: {train_cfg.two_stage_goal_score_reward}"
+        )
+        env = Sb3TwoStageHerWrapper(
+            env,
+            player_pos_indices=player_pos_indices,
+            ball_pos_indices=ball_pos_indices,
+            opponent_goal_center=opponent_goal_center,
+            ball_hit_threshold=train_cfg.two_stage_ball_hit_threshold,
+            goal_score_threshold=train_cfg.two_stage_goal_score_threshold,
+            ball_hit_reward=train_cfg.two_stage_ball_hit_reward,
+            goal_score_reward=train_cfg.two_stage_goal_score_reward,
+        )
+    elif train_cfg.use_her:
+        # Standard single-stage HER for ball-hitting task
+        print(
+            "[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper..."
+        )
         # Default indices for KLASK: peg_1_pos (0:2) and ball_pos_rel (8:10)
         achieved_indices = tuple(train_cfg.her_achieved_goal_indices or [0, 2])
         desired_indices = tuple(train_cfg.her_desired_goal_indices or [8, 10])
@@ -188,8 +236,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     if norm_args and norm_args.get("normalize_input"):
         # Note: VecNormalize with HER requires special handling
-        if train_cfg.use_her:
-            print("[WARNING] VecNormalize is not fully compatible with HER. Disabling observation normalization.")
+        if train_cfg.use_her or train_cfg.use_two_stage_her:
+            print(
+                "[WARNING] VecNormalize is not fully compatible with HER. Disabling observation normalization."
+            )
         else:
             print(f"Normalizing input, {norm_args=}")
             env = VecNormalize(
@@ -208,7 +258,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     if train_cfg.use_her:
         print("[INFO] Configuring HER replay buffer...")
-        print(f"[INFO] HER goal selection strategy: {train_cfg.her_goal_selection_strategy}")
+        print(
+            f"[INFO] HER goal selection strategy: {train_cfg.her_goal_selection_strategy}"
+        )
         print(f"[INFO] HER n_sampled_goal: {train_cfg.her_n_sampled_goal}")
         replay_buffer_class = HerReplayBuffer
         replay_buffer_kwargs = {
@@ -217,7 +269,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         }
         # HER requires MultiInputPolicy for dict observation space
         if policy_arch == "MlpPolicy":
-            print("[INFO] Switching to MultiInputPolicy for HER (dict observation space)")
+            print(
+                "[INFO] Switching to MultiInputPolicy for HER (dict observation space)"
+            )
             policy_arch = "MultiInputPolicy"
 
     # create SAC agent from stable baselines
@@ -243,7 +297,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     wandb_run = None
     if train_cfg.wandb_project is not None:
         if not WANDB_AVAILABLE:
-            print("[WARNING] wandb not installed. Skipping wandb logging. Install with: pip install wandb")
+            print(
+                "[WARNING] wandb not installed. Skipping wandb logging. Install with: pip install wandb"
+            )
         else:
             print(f"[INFO] Initializing wandb project: {train_cfg.wandb_project}")
             wandb_api_key = os.getenv("WANDB_API_KEY")
@@ -251,7 +307,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 # Use API key from environment to avoid interactive login.
                 wandb.login(key=wandb_api_key, relogin=False)
             else:
-                print("[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init.")
+                print(
+                    "[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init."
+                )
             wandb_run = wandb.init(
                 project=train_cfg.wandb_project,
                 entity=train_cfg.wandb_entity,
@@ -271,7 +329,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # callbacks for agent
     checkpoint_callback = CheckpointCallback(
-        save_freq=10000, save_path=log_dir, name_prefix="sac_model", verbose=2  # Save every 10k steps
+        save_freq=10000,
+        save_path=log_dir,
+        name_prefix="sac_model",
+        verbose=2,  # Save every 10k steps
     )
     callbacks = [checkpoint_callback]
 

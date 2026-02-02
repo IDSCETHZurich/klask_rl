@@ -1,9 +1,24 @@
 from .klask_rl_scene_cfg import KlaskRlSceneCfg
 from .klask_rl_actions_cfg import ActionsCfg, ActionsCfgPlayerOnly
-from .klask_rl_observations_cfg import ObservationsCfg, GoalObservationsCfg
+from .klask_rl_observations_cfg import (
+    ObservationsCfg,
+    GoalObservationsCfg,
+    TwoStageHerObservationsCfg,
+)
 from .klask_rl_event_cfg import EventCfg, EventCfgSac
-from .klask_rl_rewards_cfg import RewardsCfg, RewardsCfgSparseBallHit, RewardsCfgDenseBallHit, RewardsCfgSparseGoal, RewardsCfgSparseHer
-from .klask_rl_terminations_cfg import TerminationsCfg, TerminationsCfgSac
+from .klask_rl_rewards_cfg import (
+    RewardsCfg,
+    RewardsCfgSparseBallHit,
+    RewardsCfgDenseBallHit,
+    RewardsCfgSparseGoal,
+    RewardsCfgSparseHer,
+    RewardsCfgTwoStageHer,
+)
+from .klask_rl_terminations_cfg import (
+    TerminationsCfg,
+    TerminationsCfgSac,
+    TerminationsCfgTwoStageHer,
+)
 
 __all__ = [
     "KlaskRlSceneCfg",
@@ -11,6 +26,7 @@ __all__ = [
     "ActionsCfgPlayerOnly",
     "ObservationsCfg",
     "GoalObservationsCfg",
+    "TwoStageHerObservationsCfg",
     "EventCfg",
     "EventCfgSac",
     "RewardsCfg",
@@ -18,6 +34,8 @@ __all__ = [
     "RewardsCfgDenseBallHit",
     "RewardsCfgSparseGoal",
     "RewardsCfgSparseHer",
+    "RewardsCfgTwoStageHer",
     "TerminationsCfg",
     "TerminationsCfgSac",
+    "TerminationsCfgTwoStageHer",
 ]
