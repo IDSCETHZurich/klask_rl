@@ -57,7 +57,7 @@ from datetime import datetime
 
 import omni
 from stable_baselines3 import SAC
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.vec_env import VecNormalize
 from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
 
@@ -90,6 +90,69 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     Sb3VecHerWrapper,
     Sb3TwoStageHerWrapper,
 )
+
+
+class TwoStageHerMetricsCallback(BaseCallback):
+    """Callback to track and log two-stage HER goal achievements.
+
+    Tracks:
+    - Number of envs (out of total) that hit the ball (goal 1) per rollout
+    - Number of envs (out of total) that scored a goal (goal 2) per rollout
+    """
+
+    def __init__(self, num_envs: int, verbose: int = 0):
+        super().__init__(verbose)
+        self.num_envs = num_envs
+        self.envs_hit_ball = set()  # Track which env indices hit ball in rollout
+        self.envs_scored_goal = set()  # Track which env indices scored goal in rollout
+
+    def _on_step(self) -> bool:
+        # Extract infos from the step
+        if "infos" in self.locals:
+            infos = self.locals["infos"]
+            dones = self.locals.get("dones", [])
+
+            for i, info in enumerate(infos):
+                # Check if this env hit the ball (current state or terminal state)
+                if info.get("ball_hit", False) or info.get("terminal_ball_hit", False):
+                    self.envs_hit_ball.add(i)
+
+                # Check if this env scored a goal (done but not timeout)
+                if dones[i]:
+                    # Goal scored = episode ended without timeout and ball was hit
+                    if info.get("ball_hit", False) and not info.get(
+                        "TimeLimit.truncated", False
+                    ):
+                        self.envs_scored_goal.add(i)
+
+        return True
+
+    def _on_rollout_end(self) -> None:
+        """Log metrics at the end of each rollout."""
+        # Count how many envs achieved each goal
+        ball_hits_count = len(self.envs_hit_ball)
+        goal_scores_count = len(self.envs_scored_goal)
+
+        # Calculate rates relative to total number of environments
+        ball_hit_rate = ball_hits_count / self.num_envs if self.num_envs > 0 else 0
+        goal_score_rate = goal_scores_count / self.num_envs if self.num_envs > 0 else 0
+
+        # Log to tensorboard/wandb via self.logger
+        self.logger.record("two_stage/ball_hits_count", ball_hits_count)
+        self.logger.record("two_stage/goal_scores_count", goal_scores_count)
+        self.logger.record("two_stage/total_envs", self.num_envs)
+        self.logger.record("two_stage/ball_hit_rate", ball_hit_rate)
+        self.logger.record("two_stage/goal_score_rate", goal_score_rate)
+
+        if self.verbose > 0:
+            print(
+                f"[TwoStageMetrics] Envs that hit ball: {ball_hits_count}/{self.num_envs} ({ball_hit_rate:.2%}), "
+                f"Envs that scored: {goal_scores_count}/{self.num_envs} ({goal_score_rate:.2%})"
+            )
+
+        # Reset counters for next rollout
+        self.envs_hit_ball.clear()
+        self.envs_scored_goal.clear()
 
 
 @hydra_task_config(TRAIN_CFG.task, TRAIN_CFG.agent)
@@ -178,36 +241,27 @@ def main(
     # Wrap with HER wrapper if enabled
     if train_cfg.use_two_stage_her:
         # Two-Stage HER for goal-scoring task
+        # Note: rewards/terminations are handled by env's managers, not wrapper
         print("[INFO] Wrapping environment with Two-Stage HER wrapper...")
         player_pos_indices = tuple(train_cfg.two_stage_player_pos_indices or [0, 2])
         ball_pos_indices = tuple(train_cfg.two_stage_ball_pos_indices or [8, 10])
-        opponent_goal_center = tuple(
-            train_cfg.two_stage_opponent_goal_center or [0.0, 0.176215]
-        )
+        goal_pos_indices = tuple(train_cfg.two_stage_goal_pos_indices or [12, 14])
         print(f"[INFO] Two-Stage HER player_pos indices: {player_pos_indices}")
         print(f"[INFO] Two-Stage HER ball_pos indices: {ball_pos_indices}")
-        print(f"[INFO] Two-Stage HER opponent_goal_center: {opponent_goal_center}")
+        print(f"[INFO] Two-Stage HER goal_pos indices: {goal_pos_indices}")
         print(
             f"[INFO] Two-Stage HER ball_hit_threshold: {train_cfg.two_stage_ball_hit_threshold}"
         )
         print(
             f"[INFO] Two-Stage HER goal_score_threshold: {train_cfg.two_stage_goal_score_threshold}"
         )
-        print(
-            f"[INFO] Two-Stage HER ball_hit_reward: {train_cfg.two_stage_ball_hit_reward}"
-        )
-        print(
-            f"[INFO] Two-Stage HER goal_score_reward: {train_cfg.two_stage_goal_score_reward}"
-        )
         env = Sb3TwoStageHerWrapper(
             env,
             player_pos_indices=player_pos_indices,
             ball_pos_indices=ball_pos_indices,
-            opponent_goal_center=opponent_goal_center,
+            goal_pos_indices=goal_pos_indices,
             ball_hit_threshold=train_cfg.two_stage_ball_hit_threshold,
             goal_score_threshold=train_cfg.two_stage_goal_score_threshold,
-            ball_hit_reward=train_cfg.two_stage_ball_hit_reward,
-            goal_score_reward=train_cfg.two_stage_goal_score_reward,
         )
     elif train_cfg.use_her:
         # Standard single-stage HER for ball-hitting task
@@ -335,6 +389,14 @@ def main(
         verbose=2,  # Save every 10k steps
     )
     callbacks = [checkpoint_callback]
+
+    # Add two-stage HER metrics callback if using two-stage HER
+    if train_cfg.use_two_stage_her:
+        two_stage_callback = TwoStageHerMetricsCallback(
+            num_envs=env_cfg.scene.num_envs, verbose=1
+        )
+        callbacks.append(two_stage_callback)
+        print("[INFO] Added TwoStageHerMetricsCallback to track goal achievements")
 
     # Add wandb callback if enabled
     if wandb_run is not None:

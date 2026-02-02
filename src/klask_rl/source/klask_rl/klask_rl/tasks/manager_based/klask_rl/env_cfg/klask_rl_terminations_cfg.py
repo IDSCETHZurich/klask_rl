@@ -83,21 +83,16 @@ class TerminationsCfgTwoStageHer:
     """Termination terms for two-stage HER goal-scoring task.
 
     Episode ends when:
-    - Timeout (truncation, handled by base env)
-    - Goal scored (success termination, handled by wrapper)
+    - Timeout (truncation) - max episode length reached
+    - Goal scored (success) - ball enters opponent goal
 
-    Note: Ball hit does NOT terminate the episode - it just transitions
-    to stage 2 (scoring phase). The wrapper handles the termination logic
-    for goal scoring.
-
-    This config only specifies timeout, as the wrapper overrides
-    termination for goal scored events.
+    Note: Ball hit does NOT terminate the episode. The agent continues
+    to control the ball in stage 2 (scoring phase) after hitting it.
     """
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
-    # Goal scored termination (monitored by wrapper, not base env)
-    # The wrapper will override dones when goal is scored
+    # Goal scored termination - episode ends successfully
     goal_scored = DoneTerm(
         func=ball_in_goal,
         params={

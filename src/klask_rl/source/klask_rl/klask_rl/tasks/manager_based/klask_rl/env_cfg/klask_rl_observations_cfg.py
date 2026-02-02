@@ -14,6 +14,7 @@ from ..utils_manager_based import (
     body_xy_pos_w,
     distance_ball_to_player,
     distance_to_goal,
+    goal_position_obs,
     opponent_goal_obs,
     root_lin_xy_vel_w,
     root_xy_pos_w,
@@ -595,10 +596,11 @@ class TwoStageHerObservationsCfg:
     - peg_2_vel (2): opponent XY velocity
     - ball_pos (2): ball XY position
     - ball_vel (2): ball XY velocity
-    Total: 12 dimensions
+    - opponent_goal (2): opponent goal XY position
+    Total: 14 dimensions
 
-    Note: opponent_goal_center is added by the Sb3TwoStageHerWrapper,
-    not in the base observation, so HER can relabel it.
+    The goal position is included in base observations so the model works
+    at inference without the HER wrapper.
     """
 
     @configclass
@@ -662,6 +664,12 @@ class TwoStageHerObservationsCfg:
         ball_vel_rel = ObsTerm(
             func=root_lin_xy_vel_w,
             params={"asset_cfg": SceneEntityCfg(name="ball")},
+        )
+
+        # Opponent goal position (indices 12-13)
+        opponent_goal = ObsTerm(
+            func=goal_position_obs,
+            params={"goal": KLASK_PARAMS["opponent_goal"][:2]},  # Just XY, not radius
         )
 
         def __post_init__(self) -> None:

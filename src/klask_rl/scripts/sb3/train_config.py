@@ -47,20 +47,19 @@ class TrainConfig:
     her_distance_threshold: float = 0.02  # Distance threshold for goal achievement
 
     # Two-Stage HER settings (for goal-scoring task)
+    # Note: rewards are handled by env's RewardsCfgTwoStageHer, not the wrapper
     use_two_stage_her: bool = False  # Enable two-stage HER wrapper
     two_stage_player_pos_indices: list[int] | None = (
-        None  # [start, end] indices for player position
+        None  # [start, end] indices for player position in obs
     )
     two_stage_ball_pos_indices: list[int] | None = (
-        None  # [start, end] indices for ball position
+        None  # [start, end] indices for ball position in obs
     )
-    two_stage_opponent_goal_center: list[float] | None = (
-        None  # [x, y] opponent goal center
+    two_stage_goal_pos_indices: list[int] | None = (
+        None  # [start, end] indices for goal position in obs (from TwoStageHerObservationsCfg)
     )
     two_stage_ball_hit_threshold: float = 0.02  # Distance for ball hit detection
     two_stage_goal_score_threshold: float = 0.025  # Distance for goal scoring
-    two_stage_ball_hit_reward: float = 1.0  # Reward for hitting ball (non-terminating)
-    two_stage_goal_score_reward: float = 10.0  # Reward for scoring goal (terminating)
 
     app_launcher: dict[str, Any] = field(default_factory=dict)
 

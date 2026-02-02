@@ -14,6 +14,7 @@ from ..utils_manager_based import (
     ball_stationary,
     collision_player_ball,
     collision_player_ball_bool,
+    collision_player_ball_time_decay,
     distance_ball_goal,
     distance_player_ball_own_half,
     proximity_player_ball,
@@ -150,24 +151,6 @@ class RewardsCfg:
 
 
 @configclass
-class RewardsCfgSparseBallHit:
-    """Sparse rewards for SAC training - only reward for hitting the ball."""
-
-    # Small time penalty to encourage faster hitting
-    # time_punishment = RewTerm(func=mdp.is_alive, weight=-0.01)
-
-    # Main reward: hitting the ball
-    collision_player_ball_reward = RewTerm(
-        func=collision_player_ball_bool,
-        params={
-            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
-            "ball_cfg": SceneEntityCfg("ball"),
-        },
-        weight=1.0,  # Sparse reward for hitting the ball
-    )
-
-
-@configclass
 class RewardsCfgDenseBallHit:
     """Dense rewards for SAC training - dense reward for approaching and hitting the ball.
 
@@ -227,38 +210,6 @@ class RewardsCfgSparseHer:
 
 
 @configclass
-class RewardsCfgSparseGoal(RewardsCfg):
-    """Sparse rewards for SAC+HER training - only reward for scoring goals.
-
-    This is Step 3 of the SAC+HER curriculum:
-    - Goal-conditioned learning with HER
-    - Sparse reward only for scoring
-    """
-
-    # Enable goal scoring reward
-    goal_scored = RewTerm(
-        func=ball_in_goal,
-        params={
-            "asset_cfg": SceneEntityCfg("ball"),
-            "goal": KLASK_PARAMS["opponent_goal"],
-            "max_ball_vel": KLASK_PARAMS["max_ball_vel"],
-        },
-        weight=10.0,  # Large positive reward for scoring
-    )
-
-    # Penalty for conceding a goal
-    goal_conceded = RewTerm(
-        func=ball_in_goal,
-        params={
-            "asset_cfg": SceneEntityCfg("ball"),
-            "goal": KLASK_PARAMS["player_goal"],
-            "max_ball_vel": KLASK_PARAMS["max_ball_vel"],
-        },
-        weight=-10.0,  # Large negative reward for conceding
-    )
-
-
-@configclass
 class RewardsCfgTwoStageHer:
     """Rewards for two-stage HER goal-scoring task.
 
@@ -266,26 +217,26 @@ class RewardsCfgTwoStageHer:
     1. Stage 1: Sparse reward for hitting the ball (non-terminating)
     2. Stage 2: Larger sparse reward for scoring a goal (terminating)
 
-    Note: The actual reward values are computed by the Sb3TwoStageHerWrapper,
-    which handles the two-stage logic. This config defines the base reward
-    terms that can be used for logging/monitoring.
+    Reward structure:
+    - Ball hit: 500.0 (given each time player hits the ball)
+    - Goal scored: 5000.0 (given when ball enters opponent goal)
 
-    The wrapper computes rewards as:
-    - Ball hit: ball_hit_reward (default 1.0)
-    - Goal scored: goal_score_reward (default 10.0)
+    These rewards are handled by the env's reward manager, so the
+    trained model works at inference without the HER wrapper.
     """
 
-    # Ball hit detection (for monitoring, actual reward from wrapper)
+    # Ball hit detection - sparse reward for making contact
     collision_player_ball = RewTerm(
-        func=collision_player_ball_bool,
+        func=collision_player_ball_time_decay,
         params={
             "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
             "ball_cfg": SceneEntityCfg("ball"),
+            "decay_type": "linear",
         },
-        weight=0.0,  # Monitoring only, wrapper handles actual reward
+        weight=500.0,  # Sparse reward for hitting the ball
     )
 
-    # Goal scored detection (for monitoring, actual reward from wrapper)
+    # Goal scored detection - larger sparse reward for scoring
     goal_scored = RewTerm(
         func=ball_in_goal,
         params={
@@ -293,5 +244,5 @@ class RewardsCfgTwoStageHer:
             "goal": KLASK_PARAMS["opponent_goal"],
             "max_ball_vel": KLASK_PARAMS["max_ball_vel"],
         },
-        weight=0.0,  # Monitoring only, wrapper handles actual reward
+        weight=5000.0,  # Large reward for scoring a goal
     )

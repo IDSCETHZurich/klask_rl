@@ -12,7 +12,6 @@ from .env_cfg import EventCfg, EventCfgSac
 from .env_cfg import (
     RewardsCfg,
     RewardsCfgDenseBallHit,
-    RewardsCfgSparseGoal,
     RewardsCfgSparseHer,
     RewardsCfgTwoStageHer,
 )
@@ -101,23 +100,6 @@ class KlaskRlSacEnvCfg(KlaskRlEnvCfg):
 
 
 @configclass
-class KlaskRlHerEnvCfg(KlaskRlGoalEnvCfg):
-    """Configuration for SAC+HER training with goal-based observations and sparse goal rewards.
-
-    Step 3 of SAC+HER curriculum:
-    - Uses GoalObservationsCfg for HER compatibility
-    - Sparse rewards for goal scoring only
-    """
-
-    rewards = RewardsCfgSparseGoal()
-
-    def __post_init__(self):
-        """Post initialization."""
-        super().__post_init__()
-        # Can add HER-specific settings here if needed
-
-
-@configclass
 class KlaskRlHerSacEnvCfg(KlaskRlSacEnvCfg):
     """Configuration for SAC+HER training for ball hitting task.
 
@@ -154,24 +136,26 @@ class KlaskRlTwoStageHerEnvCfg(KlaskRlEnvCfg):
     2. Stage 2: Learn to score a goal (ball → opponent goal)
 
     Key features:
-    - Uses TwoStageHerObservationsCfg with 12 base dims (extended by wrapper with goal)
-    - Rewards handled by Sb3TwoStageHerWrapper (sparse two-stage)
+    - Observations: 14 dims (12 base + 2 for opponent goal XY)
+    - Rewards: collision_player_ball (500) and goal_scored (5000) - sparse
     - Terminations: timeout or goal scored (ball hit does NOT terminate)
-    - Longer episode length (8s) to allow ball dynamics after hit
+    - Episode length: 4s (allows time for ball dynamics after hit)
 
-    The Sb3TwoStageHerWrapper adds:
-    - opponent_goal_center (2 dims) to observations
-    - Phase tracking (pre-hit vs post-hit)
-    - Two-stage reward computation
-    - Phase-aware HER goal relabeling
+    The Sb3TwoStageHerWrapper:
+    - Converts flat obs to GoalEnv dict (observation, achieved_goal, desired_goal)
+    - Tracks phase (pre-hit vs post-hit) for goal extraction
+    - Provides compute_reward for HER goal relabeling
+
+    Note: The model can run at inference WITHOUT the HER wrapper since
+    observations and rewards are handled by the env, not the wrapper.
     """
 
     observations = TwoStageHerObservationsCfg()
     actions = ActionsCfgPlayerOnly()
     events = EventCfgSac()
-    rewards = RewardsCfgTwoStageHer()  # Monitoring only, wrapper handles rewards
+    rewards = RewardsCfgTwoStageHer()
     terminations = TerminationsCfgTwoStageHer()
-    episode_length_s = 8.0  # Longer episode for ball dynamics after hit
+    episode_length_s = 4.0
 
     def __post_init__(self):
         """Post initialization."""

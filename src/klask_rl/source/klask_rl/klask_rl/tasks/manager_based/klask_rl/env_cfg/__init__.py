@@ -8,9 +8,7 @@ from .klask_rl_observations_cfg import (
 from .klask_rl_event_cfg import EventCfg, EventCfgSac
 from .klask_rl_rewards_cfg import (
     RewardsCfg,
-    RewardsCfgSparseBallHit,
     RewardsCfgDenseBallHit,
-    RewardsCfgSparseGoal,
     RewardsCfgSparseHer,
     RewardsCfgTwoStageHer,
 )
@@ -30,10 +28,8 @@ __all__ = [
     "EventCfg",
     "EventCfgSac",
     "RewardsCfg",
-    "RewardsCfgSparseBallHit",
-    "RewardsCfgDenseBallHit",
-    "RewardsCfgSparseGoal",
     "RewardsCfgSparseHer",
+    "RewardsCfgDenseBallHit",
     "RewardsCfgTwoStageHer",
     "TerminationsCfg",
     "TerminationsCfgSac",
