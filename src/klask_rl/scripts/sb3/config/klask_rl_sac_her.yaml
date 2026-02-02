@@ -33,7 +33,7 @@ her_distance_threshold: 0.02 # Same as collision detection eps
 
 wandb_project: "KLASK"
 wandb_entity: null
-wandb_name: "sparse-sac-her-64x64-final-full"
+wandb_name: "sparse-sac-her-64x64-final-auto"
 
 app_launcher:
   headless: true

@@ -14,7 +14,7 @@ train_freq: 64 # Update every x env steps
 gradient_steps: 32 # Gradient steps per update
 
 # Lower entropy for simpler task - we want more exploitation
-ent_coef: 0.01 # Fixed low entropy (auto tends to keep it too high)
+ent_coef: "auto_0.1" # Fixed low entropy (auto tends to keep it too high)
 target_entropy: "auto"
 
 # Network architecture
