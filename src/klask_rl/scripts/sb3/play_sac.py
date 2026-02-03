@@ -1,6 +1,6 @@
 """Script to play a checkpoint of an RL agent trained with Stable-Baselines3 SAC.
 
-This script uses the new unified configuration system.
+This script uses the unified configuration system with Hydra overrides.
 
 Usage:
     python play_sac.py --config experiments/klask_sac_base.yaml
@@ -58,10 +58,19 @@ from experiment_config import ExperimentConfig
 CONFIG = ExperimentConfig.from_file(CONFIG_PATH)
 CONFIG.setup_cuda_visibility()
 
-from isaaclab.app import AppLauncher
+# Set Hydra CLI overrides before importing isaaclab
+# Override num_envs for playback if specified
+hydra_overrides = CONFIG.get_hydra_overrides()
+if args.num_envs is not None:
+    # Filter out existing num_envs override and add the playback one
+    hydra_overrides = [
+        o for o in hydra_overrides if not o.startswith("env.scene.num_envs=")
+    ]
+    hydra_overrides.append(f"env.scene.num_envs={args.num_envs}")
+sys.argv = [sys.argv[0]] + hydra_overrides
+print(f"[INFO] Hydra overrides: {hydra_overrides}")
 
-# Ignore any CLI overrides; playback is config-driven.
-sys.argv = [sys.argv[0]]
+from isaaclab.app import AppLauncher
 
 # Override for video if requested
 if args.video:
@@ -94,28 +103,26 @@ from isaaclab.utils.dict import print_dict
 from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
 
 import isaaclab_tasks  # noqa: F401
-from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry, get_checkpoint_path
+from isaaclab_tasks.utils.parse_cfg import get_checkpoint_path
+from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import klask_rl.tasks  # noqa: F401
 
 
-def main():
-    """Play with stable-baselines SAC agent."""
+@hydra_task_config(CONFIG.task, "sb3_sac_cfg_entry_point")
+def main(
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+    agent_cfg: dict,
+):
+    """Play with stable-baselines SAC agent.
+
+    Uses Hydra for configuration, same mechanism as training.
+    """
     cfg = CONFIG
 
-    # Load environment config from registry
-    env_cfg = load_cfg_from_registry(cfg.task, "env_cfg_entry_point")
-
-    # Get agent config from our unified config
-    agent_cfg = cfg.get_agent_cfg()
-
-    # Apply config
-    cfg.apply_to_env_cfg(env_cfg)
-    cfg.apply_to_agent_cfg(agent_cfg)
-
-    # Override num_envs for playback
-    if args.num_envs is not None:
-        env_cfg.scene.num_envs = args.num_envs
+    # Override agent_cfg with our experiment config values
+    for key, value in cfg.agent_cfg.items():
+        agent_cfg[key] = value
 
     print(f"[INFO] Loaded experiment config: {CONFIG_PATH}")
     print_dict(cfg.to_dict(), nesting=4)

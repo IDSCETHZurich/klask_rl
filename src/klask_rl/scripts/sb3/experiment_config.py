@@ -345,6 +345,72 @@ class ExperimentConfig:
             args["enable_cameras"] = True
         return args
 
+    def get_hydra_overrides(self) -> list[str]:
+        """Generate Hydra CLI override arguments from this config.
+
+        This is the KEY method for unified config handling. Both standalone
+        training and Ray tuning use these overrides to configure env/agent.
+
+        Returns:
+            List of Hydra override strings like ["env.seed=42", "agent.learning_rate=0.0003"]
+        """
+        overrides = []
+
+        # Environment overrides
+        if self.seed is not None:
+            seed_value = self._coerce_int(self.seed, "seed")
+            if seed_value == -1:
+                seed_value = random.randint(0, 10000)
+                self.seed = seed_value  # Update for logging
+            overrides.append(f"env.seed={seed_value}")
+
+        if self.num_envs is not None:
+            overrides.append(f"env.scene.num_envs={self.num_envs}")
+
+        device = self.app_launcher.get("device")
+        if device is not None:
+            overrides.append(f"env.sim.device={device}")
+
+        # Agent overrides - flatten the agent_cfg dict into Hydra format
+        overrides.extend(
+            self._flatten_dict_to_overrides(self.agent_cfg, prefix="agent")
+        )
+
+        return overrides
+
+    def _flatten_dict_to_overrides(
+        self, d: dict[str, Any], prefix: str = ""
+    ) -> list[str]:
+        """Recursively flatten a dict into Hydra override format.
+
+        Example: {"policy_kwargs": {"net_arch": [64, 64]}} with prefix="agent"
+        becomes: ["agent.policy_kwargs.net_arch=[64,64]"]
+        """
+        overrides = []
+        for key, value in d.items():
+            full_key = f"{prefix}.{key}" if prefix else key
+
+            if isinstance(value, dict):
+                # Recurse into nested dicts
+                overrides.extend(self._flatten_dict_to_overrides(value, full_key))
+            elif isinstance(value, list):
+                # Format lists for Hydra
+                formatted = "[" + ",".join(str(v) for v in value) + "]"
+                overrides.append(f"{full_key}={formatted}")
+            elif isinstance(value, bool):
+                # Hydra expects lowercase booleans
+                overrides.append(f"{full_key}={str(value).lower()}")
+            elif isinstance(value, str):
+                # Quote strings that might have special characters
+                if " " in value or "," in value:
+                    overrides.append(f"'{full_key}={value}'")
+                else:
+                    overrides.append(f"{full_key}={value}")
+            elif value is not None:
+                overrides.append(f"{full_key}={value}")
+
+        return overrides
+
     def get_agent_cfg(self) -> dict[str, Any]:
         """Get a copy of the agent configuration dict.
 
@@ -359,8 +425,9 @@ class ExperimentConfig:
 
         return cfg
 
+    # Keep these for backward compatibility but mark as deprecated
     def apply_to_env_cfg(self, env_cfg) -> None:
-        """Apply configuration to environment config object."""
+        """DEPRECATED: Use get_hydra_overrides() instead for unified config handling."""
         # Set seed
         if self.seed is not None:
             seed_value = self._coerce_int(self.seed, "seed")
@@ -379,7 +446,7 @@ class ExperimentConfig:
             env_cfg.sim.device = device
 
     def apply_to_agent_cfg(self, agent_cfg: dict) -> None:
-        """Apply configuration to agent config dict."""
+        """DEPRECATED: Use get_hydra_overrides() instead for unified config handling."""
         # Set seed
         if self.seed is not None:
             seed_value = self._coerce_int(self.seed, "seed")

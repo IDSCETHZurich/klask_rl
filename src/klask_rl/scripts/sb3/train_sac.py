@@ -1,7 +1,8 @@
 """Script to train RL agent with Stable Baselines3 SAC.
 
 This script uses a unified configuration system where all hyperparameters
-are loaded from a single YAML file. No dependency on entry points in source folder.
+are loaded from a single YAML file. Uses Hydra for parameter overrides,
+enabling the same mechanism for both standalone training and Ray tuning.
 
 Usage:
     python train_sac.py --config experiments/klask_sac_base.yaml
@@ -49,12 +50,16 @@ from experiment_config import ExperimentConfig
 CONFIG = ExperimentConfig.from_file(CONFIG_PATH)
 CONFIG.setup_cuda_visibility()
 
-# NOW import isaaclab after CUDA_VISIBLE_DEVICES is set
+# IMPORTANT: Set Hydra CLI overrides BEFORE importing isaaclab
+# This is the key for unified config handling - both standalone and Ray
+# use the same Hydra override mechanism
+hydra_overrides = CONFIG.get_hydra_overrides()
+sys.argv = [sys.argv[0]] + hydra_overrides
+print(f"[INFO] Hydra overrides: {hydra_overrides}")
+
+# NOW import isaaclab after CUDA_VISIBLE_DEVICES is set and sys.argv is configured
 from isaaclab.app import AppLauncher
 from utils import cleanup_pbar
-
-# Ignore any CLI overrides; training is fully config-driven.
-sys.argv = [sys.argv[0]]
 
 # launch omniverse app
 app_launcher = AppLauncher(CONFIG.app_launcher_args())
@@ -98,7 +103,7 @@ from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
 
 import isaaclab_tasks  # noqa: F401
-from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
+from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import klask_rl.tasks  # noqa: F401
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
@@ -161,19 +166,25 @@ class TwoStageHerMetricsCallback(BaseCallback):
         self.envs_scored_goal.clear()
 
 
-def main():
-    """Train with stable-baselines SAC agent."""
+@hydra_task_config(CONFIG.task, "sb3_sac_cfg_entry_point")
+def main(
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+    agent_cfg: dict,
+):
+    """Train with stable-baselines SAC agent.
+
+    This function uses Hydra for configuration. The env_cfg and agent_cfg
+    are loaded from the registry and then overridden by Hydra CLI args.
+    Our experiment config is converted to Hydra overrides in sys.argv,
+    enabling the same mechanism for both standalone and Ray tuning.
+    """
     cfg = CONFIG
 
-    # Load environment config from registry
-    env_cfg = load_cfg_from_registry(cfg.task, "env_cfg_entry_point")
-
-    # Get agent config directly from our unified config (no entry point needed)
-    agent_cfg = cfg.get_agent_cfg()
-
-    # Apply our config to env and agent
-    cfg.apply_to_env_cfg(env_cfg)
-    cfg.apply_to_agent_cfg(agent_cfg)
+    # Override agent_cfg with our experiment config values
+    # (Hydra only handles env.* and agent.* overrides, but our YAML
+    # has additional agent params not in the registry config)
+    for key, value in cfg.agent_cfg.items():
+        agent_cfg[key] = value
 
     print(f"[INFO] Loaded experiment config: {CONFIG_PATH}")
     print_dict(cfg.to_dict(), nesting=4)
@@ -187,6 +198,7 @@ def main():
 
     # Dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
     dump_yaml(os.path.join(log_dir, "params", "experiment.yaml"), cfg.to_dict())
 
