@@ -205,7 +205,7 @@ class RewardsCfgSparseHer:
             "termination_term": "ball_hit",
             "decay_type": "linear",
         },
-        weight=500.0,
+        weight=0.0,
     )
 
 
@@ -233,7 +233,7 @@ class RewardsCfgTwoStageHer:
             "ball_cfg": SceneEntityCfg("ball"),
             "decay_type": "linear",
         },
-        weight=500.0,  # Sparse reward for hitting the ball
+        weight=0.0,
     )
 
     # Goal scored detection - larger sparse reward for scoring
@@ -244,5 +244,5 @@ class RewardsCfgTwoStageHer:
             "goal": KLASK_PARAMS["opponent_goal"],
             "max_ball_vel": KLASK_PARAMS["max_ball_vel"],
         },
-        weight=5000.0,  # Large reward for scoring a goal
+        weight=0.0,
     )

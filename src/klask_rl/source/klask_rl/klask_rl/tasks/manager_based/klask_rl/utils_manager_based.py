@@ -7,6 +7,29 @@ from isaaclab.envs import ManagerBasedRLEnv
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 
+def reset_ball_hit_tracking(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+):
+    """Reset the ball hit tracking flag for specified environments.
+
+    This should be called on environment reset to clear the one-time collision
+    reward tracking, allowing the agent to earn the reward again in the new episode.
+
+    Args:
+        env: The environment instance
+        env_ids: The environment IDs to reset
+    """
+    # Initialize the tracking buffer if it doesn't exist
+    if not hasattr(env, "ball_hit_this_episode"):
+        env.ball_hit_this_episode = torch.zeros(
+            env.num_envs, dtype=torch.bool, device=env.device
+        )
+
+    # Reset the flag for the specified environments
+    env.ball_hit_this_episode[env_ids] = False
+
+
 def reset_joints_by_offset(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,
@@ -365,15 +388,29 @@ def collision_player_ball_bool(
     env: ManagerBasedRLEnv,
     player_cfg: SceneEntityCfg,
     ball_cfg: SceneEntityCfg,
-    eps=0.017,
+    eps: float = 0.017,
+    min_relative_vel: float = 0.08,
+    min_ball_speed: float = 0.01,
 ) -> torch.Tensor:
     """Returns True (bool) if player is colliding with ball.
 
-    Uses physics contact forces if available (more accurate),
-    falls back to distance check otherwise.
+    Requires both proximity AND relative velocity to detect actual hits,
+    preventing false positives from "hovering near the ball".
+
+    Args:
+        env: The environment instance
+        player_cfg: Configuration for the player entity
+        ball_cfg: Configuration for the ball entity
+        eps: Distance threshold for collision detection (default: 0.017)
+        min_relative_vel: Minimum relative velocity to count as hit (default: 0.08 m/s)
+        min_ball_speed: Minimum ball speed to count as hit (default: 0.01 m/s)
+    Returns:
+        Boolean tensor indicating collision
     """
     dist = distance_player_ball(env, player_cfg, ball_cfg)
-    return dist < eps
+    rel_vel = difference_speed(env, player_cfg, ball_cfg)
+    ball_vel = ball_speed(env, ball_cfg)
+    return (dist < eps) & (rel_vel > min_relative_vel) & (ball_vel > min_ball_speed)
 
 
 def collision_player_ball_time_decay(
@@ -381,6 +418,8 @@ def collision_player_ball_time_decay(
     player_cfg: SceneEntityCfg,
     ball_cfg: SceneEntityCfg,
     eps: float = 0.017,
+    min_relative_vel: float = 0.08,
+    min_ball_speed: float = 0.01,
     decay_type: str = "linear",
     decay_rate: float = 5.0,
 ) -> torch.Tensor:
@@ -388,6 +427,10 @@ def collision_player_ball_time_decay(
 
     Rewards faster ball contact - the earlier in the episode the collision happens,
     the higher the reward. Supports both linear and exponential decay.
+
+    IMPORTANT: This reward is given ONLY ONCE per episode. After the first collision,
+    subsequent collisions give zero reward. This prevents reward exploitation from
+    repeated ball touches.
 
     Decay modes:
     - "linear": reward = collision * (1 - progress)
@@ -407,15 +450,29 @@ def collision_player_ball_time_decay(
         env: The environment instance
         player_cfg: Configuration for the player entity
         ball_cfg: Configuration for the ball entity
-        eps: Distance threshold for collision detection (default: 0.02)
+        eps: Distance threshold for collision detection (default: 0.017)
+        min_relative_vel: Minimum relative velocity to count as hit (default: 0.08 m/s)
+        min_ball_speed: Minimum ball speed to count as hit (default: 0.01 m/s)
         decay_type: Type of decay - "linear" or "exponential" (default: "linear")
         decay_rate: Rate of exponential decay (only used if decay_type="exponential", default: 5.0)
 
     Returns:
         Time-decayed collision reward (0.0 to 1.0 range before weight scaling)
+        Returns 0.0 if collision already happened this episode.
     """
-    # Check if collision occurred
-    collision = collision_player_ball_bool(env, player_cfg, ball_cfg, eps)
+    # Initialize the tracking buffer if it doesn't exist
+    if not hasattr(env, "ball_hit_this_episode"):
+        env.ball_hit_this_episode = torch.zeros(
+            env.num_envs, dtype=torch.bool, device=env.device
+        )
+
+    # Check if collision occurred (with improved detection)
+    collision_now = collision_player_ball_bool(
+        env, player_cfg, ball_cfg, eps, min_relative_vel, min_ball_speed
+    )
+
+    # Only reward if collision AND not yet rewarded this episode
+    should_reward = collision_now & (~env.ball_hit_this_episode)
 
     # Calculate episode progress (0.0 at start, 1.0 at max_episode_length)
     progress = env.episode_length_buf.float() / env.max_episode_length
@@ -432,7 +489,10 @@ def collision_player_ball_time_decay(
             f"Invalid decay_type '{decay_type}'. Must be 'linear' or 'exponential'."
         )
 
-    return collision.float() * time_multiplier
+    # Mark environments that had collision (for future timesteps)
+    env.ball_hit_this_episode |= collision_now
+
+    return should_reward.float() * time_multiplier
 
 
 def termination_reward_time_decay(

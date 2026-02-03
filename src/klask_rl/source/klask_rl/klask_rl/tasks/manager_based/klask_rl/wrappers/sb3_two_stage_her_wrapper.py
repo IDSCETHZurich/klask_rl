@@ -66,6 +66,9 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         # Thresholds for phase detection and HER reward computation
         ball_hit_threshold: float = 0.02,  # distance for ball hit detection
         goal_score_threshold: float = 0.025,  # distance for goal scoring
+        # Reward scales (must match environment reward weights)
+        ball_hit_reward: float = 0.0,  # reward for hitting ball
+        goal_score_reward: float = 0.0,  # reward for scoring goal
     ):
         """Initialize the two-stage HER wrapper.
 
@@ -76,12 +79,16 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
             goal_pos_indices: Start and end indices for opponent goal position in obs
             ball_hit_threshold: Distance threshold for ball hit detection
             goal_score_threshold: Distance threshold for goal scoring
+            ball_hit_reward: Reward scale for ball hit (should match env reward weight)
+            goal_score_reward: Reward scale for goal scoring (should match env reward weight)
         """
         self.player_pos_indices = player_pos_indices
         self.ball_pos_indices = ball_pos_indices
         self.goal_pos_indices = goal_pos_indices
         self.ball_hit_threshold = ball_hit_threshold
         self.goal_score_threshold = goal_score_threshold
+        self.ball_hit_reward = ball_hit_reward
+        self.goal_score_reward = goal_score_reward
 
         # Get observation dimension from wrapped env
         orig_obs_space = venv.observation_space
@@ -291,7 +298,11 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         """Compute sparse reward for HER goal relabeling.
 
         This method is called by HER to compute rewards for relabeled goals.
-        The reward is 1.0 if achieved_goal is close to desired_goal.
+
+        IMPORTANT: Returns reward scales matching the environment to maintain
+        consistent value function learning. The reward scale depends on the phase:
+        - Pre-hit phase (player -> ball): ball_hit_reward (500.0)
+        - Post-hit phase (ball -> goal): goal_score_reward (5000.0)
 
         For two-stage HER:
         - Pre-hit phase: player reached ball position -> success
@@ -300,17 +311,34 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         Args:
             achieved_goal: The goal that was actually achieved
             desired_goal: The goal that was desired (possibly relabeled by HER)
-            info: Additional info (unused)
+            info: Additional info (unused, but could contain phase info)
 
         Returns:
-            Sparse reward: 1.0 if distance < threshold, 0.0 otherwise
+            Sparse reward with proper scaling based on goal distance thresholds
         """
         distance = np.linalg.norm(achieved_goal - desired_goal, axis=-1)
 
-        # Use the smaller threshold to be conservative
-        threshold = min(self.ball_hit_threshold, self.goal_score_threshold)
+        # Determine reward scale based on distance threshold
+        # If within ball_hit_threshold -> pre-hit phase reward
+        # If within goal_score_threshold -> post-hit phase reward
+        # Use conservative approach: check both thresholds
+        ball_hit_success = distance < self.ball_hit_threshold
+        goal_score_success = distance < self.goal_score_threshold
 
-        return (distance < threshold).astype(np.float32)
+        # Apply appropriate reward scale
+        # For simplicity, use goal_score_reward for very close distances (goal scoring)
+        # and ball_hit_reward for moderate distances (ball hitting)
+        reward = np.where(
+            goal_score_success,
+            self.goal_score_reward,  # Very close -> goal reward
+            np.where(
+                ball_hit_success,
+                self.ball_hit_reward,  # Moderately close -> ball hit reward
+                0.0,  # Too far -> no reward
+            ),
+        )
+
+        return reward.astype(np.float32)
 
     def env_method(
         self,

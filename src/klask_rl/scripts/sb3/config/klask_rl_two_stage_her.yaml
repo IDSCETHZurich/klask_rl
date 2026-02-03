@@ -53,6 +53,10 @@ two_stage_goal_pos_indices: [12, 14] # Goal position is now in obs (TwoStageHerO
 two_stage_ball_hit_threshold: 0.017 # Distance for ball hit detection
 two_stage_goal_score_threshold: 0.025 # Distance for goal scoring (slightly larger than goal radius)
 
+# Reward scales (MUST match env's RewardsCfgTwoStageHer weights)
+two_stage_ball_hit_reward: 500.0 # Must match env collision_player_ball weight
+two_stage_goal_score_reward: 5000.0 # Must match env goal_scored weight
+
 # Note: Rewards are now in env's RewardsCfgTwoStageHer:
 # - collision_player_ball: weight=500.0 (ball hit)
 # - goal_scored: weight=5000.0 (goal scored)

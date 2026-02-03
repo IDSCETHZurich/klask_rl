@@ -10,6 +10,7 @@ from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 from ..utils_manager_based import (
     reset_joints_by_offset,
+    reset_ball_hit_tracking,
 )
 
 
@@ -24,7 +25,9 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("ball"),
-                "mass_distribution_params": KLASK_PARAMS["domain_randomization"]["ball_mass_range"],
+                "mass_distribution_params": KLASK_PARAMS["domain_randomization"][
+                    "ball_mass_range"
+                ],
                 "operation": "abs",
             },
         )
@@ -34,9 +37,15 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("ball"),
-                "static_friction_range": KLASK_PARAMS["domain_randomization"]["static_friction_range"],
-                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"]["dynamic_friction_range"],
-                "restitution_range": KLASK_PARAMS["domain_randomization"]["restitution_range"],
+                "static_friction_range": KLASK_PARAMS["domain_randomization"][
+                    "static_friction_range"
+                ],
+                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"][
+                    "dynamic_friction_range"
+                ],
+                "restitution_range": KLASK_PARAMS["domain_randomization"][
+                    "restitution_range"
+                ],
                 "num_buckets": 100,
                 "make_consistent": True,
             },
@@ -47,9 +56,15 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("klask"),
-                "static_friction_range": KLASK_PARAMS["domain_randomization"]["static_friction_range"],
-                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"]["dynamic_friction_range"],
-                "restitution_range": KLASK_PARAMS["domain_randomization"]["restitution_range"],
+                "static_friction_range": KLASK_PARAMS["domain_randomization"][
+                    "static_friction_range"
+                ],
+                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"][
+                    "dynamic_friction_range"
+                ],
+                "restitution_range": KLASK_PARAMS["domain_randomization"][
+                    "restitution_range"
+                ],
                 "num_buckets": 100,
                 "make_consistent": True,
             },
@@ -60,8 +75,12 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("klask"),
-                "stiffness_distribution_params": KLASK_PARAMS["domain_randomization"]["stiffness_range"],
-                "damping_distribution_params": KLASK_PARAMS["domain_randomization"]["damping_range"],
+                "stiffness_distribution_params": KLASK_PARAMS["domain_randomization"][
+                    "stiffness_range"
+                ],
+                "damping_distribution_params": KLASK_PARAMS["domain_randomization"][
+                    "damping_range"
+                ],
                 "operation": "abs",
             },
         )
@@ -124,6 +143,12 @@ class EventCfg:
         },
     )
 
+    reset_ball_hit_flag = EventTerm(
+        func=reset_ball_hit_tracking,
+        mode="reset",
+        params={},
+    )
+
 
 @configclass
 class EventCfgSac(EventCfg):
@@ -145,7 +170,10 @@ class EventCfgSac(EventCfg):
                 "y": (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
                 "z": (0.032, 0.032),
             },
-            "velocity_range": {"x": (0.0, 0.0), "y": (0.0, 0.0)},  # Ball starts stationary
+            "velocity_range": {
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+            },  # Ball starts stationary
         },
     )
 

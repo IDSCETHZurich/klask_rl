@@ -41,6 +41,7 @@ class Sb3HerWrapper(gym.Wrapper):
         achieved_goal_indices: tuple[int, int] = (0, 2),  # peg_1_pos XY
         desired_goal_indices: tuple[int, int] = (8, 10),  # ball_pos_rel XY
         distance_threshold: float = 0.02,  # Same as collision detection eps
+        reward_scale: float = 500.0,  # Match environment reward weight
     ):
         """Initialize the HER wrapper.
 
@@ -48,6 +49,7 @@ class Sb3HerWrapper(gym.Wrapper):
             env: The environment to wrap
             achieved_goal_indices: Start and end indices for achieved_goal in obs
             desired_goal_indices: Start and end indices for desired_goal in obs
+            reward_scale: Reward value for successful goal achievement (should match env reward weight)
             distance_threshold: Distance threshold for successful goal achievement
         """
         super().__init__(env)
@@ -55,6 +57,7 @@ class Sb3HerWrapper(gym.Wrapper):
         self.achieved_goal_indices = achieved_goal_indices
         self.desired_goal_indices = desired_goal_indices
         self.distance_threshold = distance_threshold
+        self.reward_scale = reward_scale
 
         # Get the original observation space
         if isinstance(self.env.observation_space, spaces.Dict):
@@ -62,7 +65,9 @@ class Sb3HerWrapper(gym.Wrapper):
             if "policy" in self.env.observation_space.spaces:
                 self._orig_obs_space = self.env.observation_space["policy"]
             else:
-                self._orig_obs_space = list(self.env.observation_space.spaces.values())[0]
+                self._orig_obs_space = list(self.env.observation_space.spaces.values())[
+                    0
+                ]
         else:
             self._orig_obs_space = self.env.observation_space
 
@@ -70,7 +75,9 @@ class Sb3HerWrapper(gym.Wrapper):
         if isinstance(self._orig_obs_space, spaces.Box):
             obs_dim = self._orig_obs_space.shape[-1]
         else:
-            raise ValueError(f"Unsupported observation space type: {type(self._orig_obs_space)}")
+            raise ValueError(
+                f"Unsupported observation space type: {type(self._orig_obs_space)}"
+            )
 
         # Goal dimension (XY position)
         goal_dim = achieved_goal_indices[1] - achieved_goal_indices[0]
@@ -79,9 +86,15 @@ class Sb3HerWrapper(gym.Wrapper):
         # For vectorized envs, we need to handle the batch dimension
         self.observation_space = spaces.Dict(
             {
-                "observation": spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32),
-                "achieved_goal": spaces.Box(low=-np.inf, high=np.inf, shape=(goal_dim,), dtype=np.float32),
-                "desired_goal": spaces.Box(low=-np.inf, high=np.inf, shape=(goal_dim,), dtype=np.float32),
+                "observation": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
+                ),
+                "achieved_goal": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(goal_dim,), dtype=np.float32
+                ),
+                "desired_goal": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(goal_dim,), dtype=np.float32
+                ),
             }
         )
 
@@ -99,8 +112,12 @@ class Sb3HerWrapper(gym.Wrapper):
             obs = obs.cpu().numpy()
 
         # Handle both single and batched observations
-        achieved_goal = obs[..., self.achieved_goal_indices[0] : self.achieved_goal_indices[1]]
-        desired_goal = obs[..., self.desired_goal_indices[0] : self.desired_goal_indices[1]]
+        achieved_goal = obs[
+            ..., self.achieved_goal_indices[0] : self.achieved_goal_indices[1]
+        ]
+        desired_goal = obs[
+            ..., self.desired_goal_indices[0] : self.desired_goal_indices[1]
+        ]
 
         return {
             "observation": obs.astype(np.float32),
@@ -108,7 +125,9 @@ class Sb3HerWrapper(gym.Wrapper):
             "desired_goal": desired_goal.astype(np.float32),
         }
 
-    def _process_obs(self, obs: dict | np.ndarray | torch.Tensor) -> dict[str, np.ndarray]:
+    def _process_obs(
+        self, obs: dict | np.ndarray | torch.Tensor
+    ) -> dict[str, np.ndarray]:
         """Process observation from environment into GoalEnv format.
 
         Args:
@@ -136,7 +155,9 @@ class Sb3HerWrapper(gym.Wrapper):
         obs, info = self.env.reset(seed=seed, options=options)
         return self._process_obs(obs), info
 
-    def step(self, action: np.ndarray) -> tuple[dict[str, np.ndarray], SupportsFloat, bool, bool, dict[str, Any]]:
+    def step(
+        self, action: np.ndarray
+    ) -> tuple[dict[str, np.ndarray], SupportsFloat, bool, bool, dict[str, Any]]:
         """Step the environment and return GoalEnv-compatible observation."""
         obs, reward, terminated, truncated, info = self.env.step(action)
 
@@ -160,19 +181,24 @@ class Sb3HerWrapper(gym.Wrapper):
         achieved_goal/desired_goal pair, allowing HER to relabel failed
         experiences as successful ones.
 
+        IMPORTANT: Returns the same reward scale as the environment to maintain
+        consistent value function learning between real and HER-relabeled experiences.
+
         Args:
             achieved_goal: The goal that was actually achieved (player position)
             desired_goal: The goal that was desired (ball position)
             info: Additional info (unused)
 
         Returns:
-            Sparse reward: 1.0 if distance < threshold, 0.0 otherwise
+            Sparse reward: reward_scale if distance < threshold, 0.0 otherwise
         """
         # Compute L2 distance between achieved and desired goals
         distance = np.linalg.norm(achieved_goal - desired_goal, axis=-1)
 
-        # Sparse reward: success if within threshold
-        return (distance < self.distance_threshold).astype(np.float32)
+        # Sparse reward: use same scale as environment reward
+        return (distance < self.distance_threshold).astype(
+            np.float32
+        ) * self.reward_scale
 
 
 class Sb3VecHerWrapper(VecEnvWrapper):
@@ -191,6 +217,7 @@ class Sb3VecHerWrapper(VecEnvWrapper):
         achieved_goal_indices: tuple[int, int] = (0, 2),  # peg_1_pos XY
         desired_goal_indices: tuple[int, int] = (8, 10),  # ball_pos_rel XY
         distance_threshold: float = 0.02,
+        reward_scale: float = 0.0,
     ):
         """Initialize the vectorized HER wrapper.
 
@@ -199,26 +226,36 @@ class Sb3VecHerWrapper(VecEnvWrapper):
             achieved_goal_indices: Start and end indices for achieved_goal
             desired_goal_indices: Start and end indices for desired_goal
             distance_threshold: Distance threshold for goal achievement
+            reward_scale: Reward value for successful goal achievement (should match env reward weight)
         """
         self.achieved_goal_indices = achieved_goal_indices
         self.desired_goal_indices = desired_goal_indices
         self.distance_threshold = distance_threshold
+        self.reward_scale = reward_scale
 
         # Get observation dimension from wrapped env
         orig_obs_space = venv.observation_space
         if isinstance(orig_obs_space, spaces.Box):
             obs_dim = orig_obs_space.shape[-1]
         else:
-            raise ValueError(f"Expected Box observation space, got {type(orig_obs_space)}")
+            raise ValueError(
+                f"Expected Box observation space, got {type(orig_obs_space)}"
+            )
 
         goal_dim = achieved_goal_indices[1] - achieved_goal_indices[0]
 
         # Create GoalEnv observation space (single env version for SB3)
         observation_space = spaces.Dict(
             {
-                "observation": spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32),
-                "achieved_goal": spaces.Box(low=-np.inf, high=np.inf, shape=(goal_dim,), dtype=np.float32),
-                "desired_goal": spaces.Box(low=-np.inf, high=np.inf, shape=(goal_dim,), dtype=np.float32),
+                "observation": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
+                ),
+                "achieved_goal": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(goal_dim,), dtype=np.float32
+                ),
+                "desired_goal": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(goal_dim,), dtype=np.float32
+                ),
             }
         )
 
@@ -227,8 +264,12 @@ class Sb3VecHerWrapper(VecEnvWrapper):
 
     def _extract_goals(self, obs: np.ndarray) -> dict[str, np.ndarray]:
         """Extract goals from batched observations."""
-        achieved_goal = obs[..., self.achieved_goal_indices[0] : self.achieved_goal_indices[1]]
-        desired_goal = obs[..., self.desired_goal_indices[0] : self.desired_goal_indices[1]]
+        achieved_goal = obs[
+            ..., self.achieved_goal_indices[0] : self.achieved_goal_indices[1]
+        ]
+        desired_goal = obs[
+            ..., self.desired_goal_indices[0] : self.desired_goal_indices[1]
+        ]
 
         return {
             "observation": obs.astype(np.float32),
@@ -238,7 +279,9 @@ class Sb3VecHerWrapper(VecEnvWrapper):
 
     def _extract_goals_single(self, obs: np.ndarray) -> dict[str, np.ndarray]:
         """Extract goals from a single observation (not batched)."""
-        achieved_goal = obs[self.achieved_goal_indices[0] : self.achieved_goal_indices[1]]
+        achieved_goal = obs[
+            self.achieved_goal_indices[0] : self.achieved_goal_indices[1]
+        ]
         desired_goal = obs[self.desired_goal_indices[0] : self.desired_goal_indices[1]]
 
         return {
@@ -254,7 +297,9 @@ class Sb3VecHerWrapper(VecEnvWrapper):
             obs = obs.cpu().numpy()
         return self._extract_goals(obs)
 
-    def step_wait(self) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray, list[dict]]:
+    def step_wait(
+        self,
+    ) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray, list[dict]]:
         """Wait for step and return GoalEnv observation.
 
         Returns:
@@ -305,10 +350,12 @@ class Sb3VecHerWrapper(VecEnvWrapper):
             info: Additional info (unused)
 
         Returns:
-            Sparse reward: 1.0 if distance < threshold, 0.0 otherwise
+            Sparse reward: reward_scale if distance < threshold, 0.0 otherwise
         """
         distance = np.linalg.norm(achieved_goal - desired_goal, axis=-1)
-        return (distance < self.distance_threshold).astype(np.float32)
+        return (distance < self.distance_threshold).astype(
+            np.float32
+        ) * self.reward_scale
 
     def env_method(
         self,
@@ -337,4 +384,6 @@ class Sb3VecHerWrapper(VecEnvWrapper):
             return [self.compute_reward(*method_args, **method_kwargs)]
         else:
             # Pass through to underlying environment
-            return self.venv.env_method(method_name, *method_args, indices=indices, **method_kwargs)
+            return self.venv.env_method(
+                method_name, *method_args, indices=indices, **method_kwargs
+            )

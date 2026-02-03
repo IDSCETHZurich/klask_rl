@@ -201,6 +201,39 @@ def main(
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = log_dir
 
+    # Apply reward weights from YAML to environment config
+    if train_cfg.use_her and train_cfg.her_reward_scale is not None:
+        # Update environment reward weight to match YAML config
+        if hasattr(env_cfg, "rewards"):
+            if hasattr(env_cfg.rewards, "collision_player_ball_reward"):
+                print(
+                    f"[INFO] Setting env collision_player_ball_reward weight to {train_cfg.her_reward_scale}"
+                )
+                env_cfg.rewards.collision_player_ball_reward.weight = (
+                    train_cfg.her_reward_scale
+                )
+
+    if train_cfg.use_two_stage_her:
+        if train_cfg.two_stage_ball_hit_reward is not None:
+            # Update environment reward weights to match YAML config
+            if hasattr(env_cfg, "rewards"):
+                if hasattr(env_cfg.rewards, "collision_player_ball"):
+                    print(
+                        f"[INFO] Setting env collision_player_ball weight to {train_cfg.two_stage_ball_hit_reward}"
+                    )
+                    env_cfg.rewards.collision_player_ball.weight = (
+                        train_cfg.two_stage_ball_hit_reward
+                    )
+        if train_cfg.two_stage_goal_score_reward is not None:
+            if hasattr(env_cfg, "rewards"):
+                if hasattr(env_cfg.rewards, "goal_scored"):
+                    print(
+                        f"[INFO] Setting env goal_scored weight to {train_cfg.two_stage_goal_score_reward}"
+                    )
+                    env_cfg.rewards.goal_scored.weight = (
+                        train_cfg.two_stage_goal_score_reward
+                    )
+
     # create isaac environment
     env = gym.make(
         train_cfg.task,
@@ -255,6 +288,12 @@ def main(
         print(
             f"[INFO] Two-Stage HER goal_score_threshold: {train_cfg.two_stage_goal_score_threshold}"
         )
+        print(
+            f"[INFO] Two-Stage HER ball_hit_reward: {train_cfg.two_stage_ball_hit_reward}"
+        )
+        print(
+            f"[INFO] Two-Stage HER goal_score_reward: {train_cfg.two_stage_goal_score_reward}"
+        )
         env = Sb3TwoStageHerWrapper(
             env,
             player_pos_indices=player_pos_indices,
@@ -262,6 +301,8 @@ def main(
             goal_pos_indices=goal_pos_indices,
             ball_hit_threshold=train_cfg.two_stage_ball_hit_threshold,
             goal_score_threshold=train_cfg.two_stage_goal_score_threshold,
+            ball_hit_reward=train_cfg.two_stage_ball_hit_reward,
+            goal_score_reward=train_cfg.two_stage_goal_score_reward,
         )
     elif train_cfg.use_her:
         # Standard single-stage HER for ball-hitting task
@@ -274,11 +315,13 @@ def main(
         print(f"[INFO] HER achieved_goal indices: {achieved_indices}")
         print(f"[INFO] HER desired_goal indices: {desired_indices}")
         print(f"[INFO] HER distance threshold: {train_cfg.her_distance_threshold}")
+        print(f"[INFO] HER reward scale: {train_cfg.her_reward_scale}")
         env = Sb3VecHerWrapper(
             env,
             achieved_goal_indices=achieved_indices,
             desired_goal_indices=desired_indices,
             distance_threshold=train_cfg.her_distance_threshold,
+            reward_scale=train_cfg.her_reward_scale,
         )
 
     # handle normalization settings if present
