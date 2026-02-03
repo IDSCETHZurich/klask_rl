@@ -1,13 +1,4 @@
-"""Script to train RL agent with Stable Baselines3 SAC.
-
-This script uses a unified configuration system where all hyperparameters
-are loaded from a single YAML file. No dependency on entry points in source folder.
-
-Usage:
-    python train_sac.py --config experiments/klask_sac_base.yaml
-    python train_sac.py --config experiments/klask_sac_her.yaml
-    python train_sac.py -c experiments/klask_sac_two_stage_her.yaml
-"""
+"""Script to train RL agent with Stable Baselines3 SAC."""
 
 """Launch Isaac Sim Simulator first."""
 
@@ -23,31 +14,25 @@ parser.add_argument(
     "--config",
     "-c",
     type=str,
-    default="experiments/klask_sac_base.yaml",
-    help="Config file path relative to scripts/sb3/config/ (default: experiments/klask_sac_base.yaml)",
+    default="klask_rl_sac.yaml",
+    help="Config file name in scripts/sb3/config/ (default: klask_rl_sac.yaml)",
 )
 args, remaining_argv = parser.parse_known_args()
 
 # Resolve config path
 config_dir = Path(__file__).parent / "config"
 if Path(args.config).is_absolute():
-    CONFIG_PATH = Path(args.config)
-elif (
-    args.config.startswith("experiments/") or "/" in args.config or "\\" in args.config
-):
-    CONFIG_PATH = config_dir / args.config
+    TRAIN_CFG_PATH = Path(args.config)
+elif "/" in args.config or "\\" in args.config:
+    TRAIN_CFG_PATH = Path(args.config)
 else:
-    # Check experiments folder first, then root config folder
-    if (config_dir / "experiments" / args.config).exists():
-        CONFIG_PATH = config_dir / "experiments" / args.config
-    else:
-        CONFIG_PATH = config_dir / args.config
+    TRAIN_CFG_PATH = config_dir / args.config
 
 # Load config and set CUDA_VISIBLE_DEVICES BEFORE importing isaaclab
-from experiment_config import ExperimentConfig
+from train_config import TrainConfig
 
-CONFIG = ExperimentConfig.from_file(CONFIG_PATH)
-CONFIG.setup_cuda_visibility()
+TRAIN_CFG = TrainConfig.from_file(TRAIN_CFG_PATH)
+TRAIN_CFG.setup_cuda_visibility()
 
 # NOW import isaaclab after CUDA_VISIBLE_DEVICES is set
 from isaaclab.app import AppLauncher
@@ -57,7 +42,7 @@ from utils import cleanup_pbar
 sys.argv = [sys.argv[0]]
 
 # launch omniverse app
-app_launcher = AppLauncher(CONFIG.app_launcher_args())
+app_launcher = AppLauncher(TRAIN_CFG.app_launcher_args())
 simulation_app = app_launcher.app
 
 # disable KeyboardInterrupt override
@@ -98,7 +83,7 @@ from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
 
 import isaaclab_tasks  # noqa: F401
-from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
+from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import klask_rl.tasks  # noqa: F401
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
@@ -118,19 +103,23 @@ class TwoStageHerMetricsCallback(BaseCallback):
     def __init__(self, num_envs: int, verbose: int = 0):
         super().__init__(verbose)
         self.num_envs = num_envs
-        self.envs_hit_ball = set()
-        self.envs_scored_goal = set()
+        self.envs_hit_ball = set()  # Track which env indices hit ball in rollout
+        self.envs_scored_goal = set()  # Track which env indices scored goal in rollout
 
     def _on_step(self) -> bool:
+        # Extract infos from the step
         if "infos" in self.locals:
             infos = self.locals["infos"]
             dones = self.locals.get("dones", [])
 
             for i, info in enumerate(infos):
+                # Check if this env hit the ball (current state or terminal state)
                 if info.get("ball_hit", False) or info.get("terminal_ball_hit", False):
                     self.envs_hit_ball.add(i)
 
+                # Check if this env scored a goal (done but not timeout)
                 if dones[i]:
+                    # Goal scored = episode ended without timeout and ball was hit
                     if info.get("ball_hit", False) and not info.get(
                         "TimeLimit.truncated", False
                     ):
@@ -139,12 +128,16 @@ class TwoStageHerMetricsCallback(BaseCallback):
         return True
 
     def _on_rollout_end(self) -> None:
+        """Log metrics at the end of each rollout."""
+        # Count how many envs achieved each goal
         ball_hits_count = len(self.envs_hit_ball)
         goal_scores_count = len(self.envs_scored_goal)
 
+        # Calculate rates relative to total number of environments
         ball_hit_rate = ball_hits_count / self.num_envs if self.num_envs > 0 else 0
         goal_score_rate = goal_scores_count / self.num_envs if self.num_envs > 0 else 0
 
+        # Log to tensorboard/wandb via self.logger
         self.logger.record("two_stage/ball_hits_count", ball_hits_count)
         self.logger.record("two_stage/goal_scores_count", goal_scores_count)
         self.logger.record("two_stage/total_envs", self.num_envs)
@@ -157,106 +150,113 @@ class TwoStageHerMetricsCallback(BaseCallback):
                 f"Envs that scored: {goal_scores_count}/{self.num_envs} ({goal_score_rate:.2%})"
             )
 
+        # Reset counters for next rollout
         self.envs_hit_ball.clear()
         self.envs_scored_goal.clear()
 
 
-def main():
+@hydra_task_config(TRAIN_CFG.task, TRAIN_CFG.agent)
+def main(
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict
+):
     """Train with stable-baselines SAC agent."""
-    cfg = CONFIG
+    train_cfg = TRAIN_CFG
+    train_cfg.apply(env_cfg, agent_cfg)
+    print(f"[INFO] Loaded training config: {TRAIN_CFG_PATH}")
+    print_dict(train_cfg.to_dict(), nesting=4)
 
-    # Load environment config from registry
-    env_cfg = load_cfg_from_registry(cfg.task, "env_cfg_entry_point")
-
-    # Get agent config directly from our unified config (no entry point needed)
-    agent_cfg = cfg.get_agent_cfg()
-
-    # Apply our config to env and agent
-    cfg.apply_to_env_cfg(env_cfg)
-    cfg.apply_to_agent_cfg(agent_cfg)
-
-    print(f"[INFO] Loaded experiment config: {CONFIG_PATH}")
-    print_dict(cfg.to_dict(), nesting=4)
-
-    # Directory for logging
+    # directory for logging into
     run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_root_path = os.path.abspath(os.path.join("logs", "sb3_sac", cfg.task))
+    log_root_path = os.path.abspath(os.path.join("logs", "sb3_sac", train_cfg.task))
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     print(f"[INFO] Experiment name: {run_info}")
     log_dir = os.path.join(log_root_path, run_info)
 
-    # Dump the configuration into log-directory
+    # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    dump_yaml(os.path.join(log_dir, "params", "experiment.yaml"), cfg.to_dict())
+    dump_yaml(os.path.join(log_dir, "params", "train.yaml"), train_cfg.to_dict())
 
-    # Save command used to run the script
+    # save command used to run the script
     command = " ".join(sys.orig_argv)
-    command += f"\nconfig: {CONFIG_PATH}"
+    command += f"\nconfig: {TRAIN_CFG_PATH}"
     (Path(log_dir) / "command.txt").write_text(command)
 
-    # Post-process agent configuration for SB3
+    # post-process agent configuration
     agent_cfg = process_sb3_cfg(agent_cfg, env_cfg.scene.num_envs)
 
-    # Read configurations about the agent-training
+    # read configurations about the agent-training
     policy_arch = agent_cfg.pop("policy")
     n_timesteps = agent_cfg.pop("n_timesteps")
 
-    # Set the IO descriptors output directory if requested
+    # set the IO descriptors output directory if requested
     if isinstance(env_cfg, ManagerBasedRLEnvCfg):
-        env_cfg.export_io_descriptors = cfg.export_io_descriptors
+        env_cfg.export_io_descriptors = train_cfg.export_io_descriptors
         env_cfg.io_descriptors_output_dir = log_dir
     else:
         omni.log.warn(
-            "IO descriptors are only supported for manager based RL environments."
+            "IO descriptors are only supported for manager based RL environments. No IO descriptors will be exported."
         )
 
-    # Set the log directory for the environment
+    # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = log_dir
 
-    # Apply reward weights from config to environment
-    if cfg.use_her and cfg.her_env_reward_scale is not None:
-        if hasattr(env_cfg, "rewards"):
-            if hasattr(env_cfg.rewards, "collision_player_ball_reward"):
-                print(
-                    f"[INFO] Setting env collision_player_ball_reward weight to {cfg.her_env_reward_scale}"
-                )
-                env_cfg.rewards.collision_player_ball_reward.weight = (
-                    cfg.her_env_reward_scale
-                )
+    # Apply reward weights from YAML to environment config
+    if train_cfg.use_her:
+        # Handle both old single-scale and new dual-scale config formats
+        env_reward_scale = getattr(train_cfg, "her_env_reward_scale", None) or getattr(
+            train_cfg, "her_reward_scale", None
+        )
+        if env_reward_scale is not None:
+            # Update environment reward weight to match YAML config
+            if hasattr(env_cfg, "rewards"):
+                if hasattr(env_cfg.rewards, "collision_player_ball_reward"):
+                    print(
+                        f"[INFO] Setting env collision_player_ball_reward weight to {env_reward_scale}"
+                    )
+                    env_cfg.rewards.collision_player_ball_reward.weight = (
+                        env_reward_scale
+                    )
 
-    if cfg.use_two_stage_her:
-        if cfg.two_stage_ball_hit_env_reward is not None:
-            if hasattr(env_cfg, "rewards") and hasattr(
-                env_cfg.rewards, "collision_player_ball"
-            ):
-                print(
-                    f"[INFO] Setting env collision_player_ball weight to {cfg.two_stage_ball_hit_env_reward}"
-                )
-                env_cfg.rewards.collision_player_ball.weight = (
-                    cfg.two_stage_ball_hit_env_reward
-                )
-        if cfg.two_stage_goal_score_env_reward is not None:
-            if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "goal_scored"):
-                print(
-                    f"[INFO] Setting env goal_scored weight to {cfg.two_stage_goal_score_env_reward}"
-                )
-                env_cfg.rewards.goal_scored.weight = cfg.two_stage_goal_score_env_reward
+    if train_cfg.use_two_stage_her:
+        # Handle both old and new config parameter names
+        ball_hit_env_reward = getattr(
+            train_cfg, "two_stage_ball_hit_env_reward", None
+        ) or getattr(train_cfg, "two_stage_ball_hit_reward", None)
+        goal_score_env_reward = getattr(
+            train_cfg, "two_stage_goal_score_env_reward", None
+        ) or getattr(train_cfg, "two_stage_goal_score_reward", None)
 
-    # Create isaac environment
+        if ball_hit_env_reward is not None:
+            # Update environment reward weights to match YAML config
+            if hasattr(env_cfg, "rewards"):
+                if hasattr(env_cfg.rewards, "collision_player_ball"):
+                    print(
+                        f"[INFO] Setting env collision_player_ball weight to {ball_hit_env_reward}"
+                    )
+                    env_cfg.rewards.collision_player_ball.weight = ball_hit_env_reward
+        if goal_score_env_reward is not None:
+            if hasattr(env_cfg, "rewards"):
+                if hasattr(env_cfg.rewards, "goal_scored"):
+                    print(
+                        f"[INFO] Setting env goal_scored weight to {goal_score_env_reward}"
+                    )
+                    env_cfg.rewards.goal_scored.weight = goal_score_env_reward
+
+    # create isaac environment
     env = gym.make(
-        cfg.task,
+        train_cfg.task,
         cfg=env_cfg,
-        render_mode="rgb_array" if cfg.video else None,
+        render_mode="rgb_array" if train_cfg.video else None,
     )
 
-    # Convert to single-agent instance if required
+    # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
-    # Set bounded action space for SAC
+    # Set bounded action space for SAC.
     action_dim = env.unwrapped.single_action_space.shape[-1]
-    max_vel = cfg.max_velocity
+    max_vel = train_cfg.max_velocity
     print(f"[INFO] Setting action space bounds to [-{max_vel}, {max_vel}] m/s")
     env.unwrapped.single_action_space = gym.spaces.Box(
         low=-max_vel, high=max_vel, shape=(action_dim,), dtype=np.float32
@@ -265,75 +265,90 @@ def main():
         env.unwrapped.single_action_space, env.unwrapped.num_envs
     )
 
-    # Wrap for video recording
-    if cfg.video:
+    # wrap for video recording
+    if train_cfg.video:
         video_kwargs = {
             "video_folder": os.path.join(log_dir, "videos", "train"),
-            "step_trigger": lambda step: step % cfg.video_interval == 0,
-            "video_length": cfg.video_length,
+            "step_trigger": lambda step: step % train_cfg.video_interval == 0,
+            "video_length": train_cfg.video_length,
             "disable_logger": True,
         }
         print("[INFO] Recording videos during training.")
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # Wrap around environment for stable baselines
-    env = Sb3VecEnvWrapper(env, fast_variant=True)
+    # wrap around environment for stable baselines
+    env = Sb3VecEnvWrapper(env, fast_variant=not train_cfg.keep_all_info)
 
     # Wrap with HER wrapper if enabled
-    if cfg.use_two_stage_her:
+    if train_cfg.use_two_stage_her:
+        # Two-Stage HER for goal-scoring task
+        # Note: rewards/terminations are handled by env's managers, not wrapper
         print("[INFO] Wrapping environment with Two-Stage HER wrapper...")
-        player_pos_indices = tuple(cfg.two_stage_player_pos_indices or [0, 2])
-        ball_pos_indices = tuple(cfg.two_stage_ball_pos_indices or [8, 10])
-        goal_pos_indices = tuple(cfg.two_stage_goal_pos_indices or [12, 14])
+        player_pos_indices = tuple(train_cfg.two_stage_player_pos_indices or [0, 2])
+        ball_pos_indices = tuple(train_cfg.two_stage_ball_pos_indices or [8, 10])
+        goal_pos_indices = tuple(train_cfg.two_stage_goal_pos_indices or [12, 14])
+
+        # Get wrapper reward scales (fallback to env scales for backward compatibility)
+        ball_hit_wrapper_reward = getattr(
+            train_cfg, "two_stage_ball_hit_wrapper_reward", None
+        ) or getattr(train_cfg, "two_stage_ball_hit_reward", None)
+        goal_score_wrapper_reward = getattr(
+            train_cfg, "two_stage_goal_score_wrapper_reward", None
+        ) or getattr(train_cfg, "two_stage_goal_score_reward", None)
 
         print(f"[INFO] Two-Stage HER player_pos indices: {player_pos_indices}")
         print(f"[INFO] Two-Stage HER ball_pos indices: {ball_pos_indices}")
         print(f"[INFO] Two-Stage HER goal_pos indices: {goal_pos_indices}")
         print(
-            f"[INFO] Two-Stage HER ball_hit_threshold: {cfg.two_stage_ball_hit_threshold}"
+            f"[INFO] Two-Stage HER ball_hit_threshold: {train_cfg.two_stage_ball_hit_threshold}"
         )
         print(
-            f"[INFO] Two-Stage HER goal_score_threshold: {cfg.two_stage_goal_score_threshold}"
+            f"[INFO] Two-Stage HER goal_score_threshold: {train_cfg.two_stage_goal_score_threshold}"
         )
         print(
-            f"[INFO] Two-Stage HER ball_hit_wrapper_reward: {cfg.two_stage_ball_hit_wrapper_reward}"
+            f"[INFO] Two-Stage HER ball_hit_wrapper_reward: {ball_hit_wrapper_reward}"
         )
         print(
-            f"[INFO] Two-Stage HER goal_score_wrapper_reward: {cfg.two_stage_goal_score_wrapper_reward}"
+            f"[INFO] Two-Stage HER goal_score_wrapper_reward: {goal_score_wrapper_reward}"
         )
-
         env = Sb3TwoStageHerWrapper(
             env,
             player_pos_indices=player_pos_indices,
             ball_pos_indices=ball_pos_indices,
             goal_pos_indices=goal_pos_indices,
-            ball_hit_threshold=cfg.two_stage_ball_hit_threshold,
-            goal_score_threshold=cfg.two_stage_goal_score_threshold,
-            ball_hit_reward=cfg.two_stage_ball_hit_wrapper_reward,
-            goal_score_reward=cfg.two_stage_goal_score_wrapper_reward,
+            ball_hit_threshold=train_cfg.two_stage_ball_hit_threshold,
+            goal_score_threshold=train_cfg.two_stage_goal_score_threshold,
+            ball_hit_reward=ball_hit_wrapper_reward,
+            goal_score_reward=goal_score_wrapper_reward,
         )
-    elif cfg.use_her:
+    elif train_cfg.use_her:
+        # Standard single-stage HER for ball-hitting task
         print(
             "[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper..."
         )
-        achieved_indices = tuple(cfg.her_achieved_goal_indices or [0, 2])
-        desired_indices = tuple(cfg.her_desired_goal_indices or [8, 10])
+        # Default indices for KLASK: peg_1_pos (0:2) and ball_pos_rel (8:10)
+        achieved_indices = tuple(train_cfg.her_achieved_goal_indices or [0, 2])
+        desired_indices = tuple(train_cfg.her_desired_goal_indices or [8, 10])
+
+        # Get wrapper reward scale (fallback to old parameter name for backward compatibility)
+        wrapper_reward_scale = getattr(
+            train_cfg, "her_wrapper_reward_scale", None
+        ) or getattr(train_cfg, "her_reward_scale", None)
 
         print(f"[INFO] HER achieved_goal indices: {achieved_indices}")
         print(f"[INFO] HER desired_goal indices: {desired_indices}")
-        print(f"[INFO] HER distance threshold: {cfg.her_distance_threshold}")
-        print(f"[INFO] HER wrapper reward scale: {cfg.her_wrapper_reward_scale}")
-
+        print(f"[INFO] HER distance threshold: {train_cfg.her_distance_threshold}")
+        print(f"[INFO] HER wrapper reward scale: {wrapper_reward_scale}")
         env = Sb3VecHerWrapper(
             env,
             achieved_goal_indices=achieved_indices,
             desired_goal_indices=desired_indices,
-            distance_threshold=cfg.her_distance_threshold,
-            reward_scale=cfg.her_wrapper_reward_scale,
+            distance_threshold=train_cfg.her_distance_threshold,
+            reward_scale=wrapper_reward_scale,
         )
 
-    # Handle normalization settings if present
+    # handle normalization settings if present
     norm_keys = {"normalize_input", "normalize_value", "clip_obs"}
     norm_args = {}
     for key in norm_keys:
@@ -341,7 +356,8 @@ def main():
             norm_args[key] = agent_cfg.pop(key)
 
     if norm_args and norm_args.get("normalize_input"):
-        if cfg.use_her or cfg.use_two_stage_her:
+        # Note: VecNormalize with HER requires special handling
+        if train_cfg.use_her or train_cfg.use_two_stage_her:
             print(
                 "[WARNING] VecNormalize is not fully compatible with HER. Disabling observation normalization."
             )
@@ -361,14 +377,16 @@ def main():
     replay_buffer_class = None
     replay_buffer_kwargs = None
 
-    if cfg.use_her or cfg.use_two_stage_her:
+    if train_cfg.use_her:
         print("[INFO] Configuring HER replay buffer...")
-        print(f"[INFO] HER goal selection strategy: {cfg.her_goal_selection_strategy}")
-        print(f"[INFO] HER n_sampled_goal: {cfg.her_n_sampled_goal}")
+        print(
+            f"[INFO] HER goal selection strategy: {train_cfg.her_goal_selection_strategy}"
+        )
+        print(f"[INFO] HER n_sampled_goal: {train_cfg.her_n_sampled_goal}")
         replay_buffer_class = HerReplayBuffer
         replay_buffer_kwargs = {
-            "n_sampled_goal": cfg.her_n_sampled_goal,
-            "goal_selection_strategy": cfg.her_goal_selection_strategy,
+            "n_sampled_goal": train_cfg.her_n_sampled_goal,
+            "goal_selection_strategy": train_cfg.her_goal_selection_strategy,
         }
         # HER requires MultiInputPolicy for dict observation space
         if policy_arch == "MlpPolicy":
@@ -377,7 +395,7 @@ def main():
             )
             policy_arch = "MultiInputPolicy"
 
-    # Create SAC agent
+    # create SAC agent from stable baselines
     print("[INFO] Creating SAC agent...")
     print_dict(agent_cfg, nesting=4)
 
@@ -391,34 +409,35 @@ def main():
         **agent_cfg,
     )
 
-    # Load checkpoint if provided
-    if cfg.checkpoint is not None:
-        print(f"[INFO] Loading checkpoint from: {cfg.checkpoint}")
-        agent = agent.load(cfg.checkpoint, env, print_system_info=True)
+    # load checkpoint if provided
+    if train_cfg.checkpoint is not None:
+        print(f"[INFO] Loading checkpoint from: {train_cfg.checkpoint}")
+        agent = agent.load(train_cfg.checkpoint, env, print_system_info=True)
 
     # Initialize wandb if requested
     wandb_run = None
-    if cfg.wandb_project is not None:
+    if train_cfg.wandb_project is not None:
         if not WANDB_AVAILABLE:
             print(
                 "[WARNING] wandb not installed. Skipping wandb logging. Install with: pip install wandb"
             )
         else:
-            print(f"[INFO] Initializing wandb project: {cfg.wandb_project}")
+            print(f"[INFO] Initializing wandb project: {train_cfg.wandb_project}")
             wandb_api_key = os.getenv("WANDB_API_KEY")
             if wandb_api_key:
+                # Use API key from environment to avoid interactive login.
                 wandb.login(key=wandb_api_key, relogin=False)
             else:
                 print(
                     "[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init."
                 )
             wandb_run = wandb.init(
-                project=cfg.wandb_project,
-                entity=cfg.wandb_entity,
-                name=cfg.wandb_name or run_info,
+                project=train_cfg.wandb_project,
+                entity=train_cfg.wandb_entity,
+                name=train_cfg.wandb_name or run_info,
                 config={
                     "algorithm": "SAC",
-                    "task": cfg.task,
+                    "task": train_cfg.task,
                     "num_envs": env_cfg.scene.num_envs,
                     "policy": policy_arch,
                     "n_timesteps": n_timesteps,
@@ -429,17 +448,17 @@ def main():
                 save_code=True,
             )
 
-    # Callbacks for agent
+    # callbacks for agent
     checkpoint_callback = CheckpointCallback(
         save_freq=10000,
         save_path=log_dir,
         name_prefix="sac_model",
-        verbose=2,
+        verbose=2,  # Save every 10k steps
     )
     callbacks = [checkpoint_callback]
 
     # Add two-stage HER metrics callback if using two-stage HER
-    if cfg.use_two_stage_her:
+    if train_cfg.use_two_stage_her:
         two_stage_callback = TwoStageHerMetricsCallback(
             num_envs=env_cfg.scene.num_envs, verbose=1
         )
@@ -455,22 +474,22 @@ def main():
         )
         callbacks.append(wandb_callback)
 
-    # Train the agent
+    # train the agent
     print(f"[INFO] Starting SAC training for {n_timesteps} timesteps...")
     with contextlib.suppress(KeyboardInterrupt):
         agent.learn(
             total_timesteps=n_timesteps,
             callback=callbacks,
             progress_bar=True,
-            log_interval=cfg.log_interval,
+            log_interval=train_cfg.log_interval,
         )
 
-    # Save the final model
+    # save the final model
     final_model_path = os.path.join(log_dir, "sac_model_final")
     agent.save(final_model_path)
     print(f"[INFO] Final model saved to: {final_model_path}.zip")
 
-    # Save normalization stats if used
+    # save normalization stats if used
     if isinstance(env, VecNormalize):
         norm_path = os.path.join(log_dir, "sac_model_vecnormalize.pkl")
         print(f"[INFO] Saving normalization stats to: {norm_path}")
@@ -478,20 +497,23 @@ def main():
 
     # Finish wandb run
     if wandb_run is not None:
+        # Log final model as artifact
         artifact = wandb.Artifact(
-            name=f"sac-{cfg.task}-model",
+            name=f"sac-{train_cfg.task}-model",
             type="model",
-            description=f"SAC model trained on {cfg.task}",
+            description=f"SAC model trained on {train_cfg.task}",
         )
         artifact.add_file(f"{final_model_path}.zip")
         wandb_run.log_artifact(artifact)
         wandb.finish()
         print("[INFO] Wandb run finished and model artifact logged.")
 
-    # Close the simulator
+    # close the simulator
     env.close()
 
 
 if __name__ == "__main__":
+    # run the main function
     main()
+    # close sim app
     simulation_app.close()
