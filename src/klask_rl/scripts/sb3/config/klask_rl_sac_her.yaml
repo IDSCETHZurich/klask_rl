@@ -30,11 +30,12 @@ her_n_sampled_goal: 4 # Create 4 virtual transitions per real transition
 her_achieved_goal_indices: [0, 2]
 her_desired_goal_indices: [8, 10]
 her_distance_threshold: 0.02 # Same as collision detection eps
-her_reward_scale: 500.0
+her_env_reward_scale: 500.0 # Reward weight for actual env collisions
+her_wrapper_reward_scale: 1.0 # Reward scale for HER's compute_reward (hindsight relabeling)
 
 wandb_project: "KLASK"
 wandb_entity: null
-wandb_name: "sparse-sac-her-64x64-final-equal-rewards-500.0-ent-0.02"
+wandb_name: "sparse-sac-her-64x64-final-auto-500/1"
 
 app_launcher:
   headless: true
