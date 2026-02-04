@@ -14,7 +14,6 @@ from a single YAML file. Configuration sections:
 
 from __future__ import annotations
 
-import json
 import random
 import sys
 from dataclasses import dataclass, field
@@ -96,11 +95,7 @@ class ExperimentConfig:
     # HER property accessors
     @property
     def her_goal_selection_strategy(self) -> str:
-        return (
-            self.her_cfg.get("goal_selection_strategy", "future")
-            if self.her_cfg
-            else "future"
-        )
+        return self.her_cfg.get("goal_selection_strategy", "future") if self.her_cfg else "future"
 
     @property
     def her_n_sampled_goal(self) -> int:
@@ -129,69 +124,39 @@ class ExperimentConfig:
     # Two-stage HER property accessors
     @property
     def two_stage_player_pos_indices(self) -> list[int] | None:
-        return (
-            self.two_stage_cfg.get("player_pos_indices") if self.two_stage_cfg else None
-        )
+        return self.two_stage_cfg.get("player_pos_indices") if self.two_stage_cfg else None
 
     @property
     def two_stage_ball_pos_indices(self) -> list[int] | None:
-        return (
-            self.two_stage_cfg.get("ball_pos_indices") if self.two_stage_cfg else None
-        )
+        return self.two_stage_cfg.get("ball_pos_indices") if self.two_stage_cfg else None
 
     @property
     def two_stage_goal_pos_indices(self) -> list[int] | None:
-        return (
-            self.two_stage_cfg.get("goal_pos_indices") if self.two_stage_cfg else None
-        )
+        return self.two_stage_cfg.get("goal_pos_indices") if self.two_stage_cfg else None
 
     @property
     def two_stage_ball_hit_threshold(self) -> float:
-        return (
-            self.two_stage_cfg.get("ball_hit_threshold", 0.017)
-            if self.two_stage_cfg
-            else 0.017
-        )
+        return self.two_stage_cfg.get("ball_hit_threshold", 0.017) if self.two_stage_cfg else 0.017
 
     @property
     def two_stage_goal_score_threshold(self) -> float:
-        return (
-            self.two_stage_cfg.get("goal_score_threshold", 0.025)
-            if self.two_stage_cfg
-            else 0.025
-        )
+        return self.two_stage_cfg.get("goal_score_threshold", 0.025) if self.two_stage_cfg else 0.025
 
     @property
     def two_stage_ball_hit_env_reward(self) -> float | None:
-        return (
-            self.two_stage_cfg.get("ball_hit_env_reward")
-            if self.two_stage_cfg
-            else None
-        )
+        return self.two_stage_cfg.get("ball_hit_env_reward") if self.two_stage_cfg else None
 
     @property
     def two_stage_goal_score_env_reward(self) -> float | None:
-        return (
-            self.two_stage_cfg.get("goal_score_env_reward")
-            if self.two_stage_cfg
-            else None
-        )
+        return self.two_stage_cfg.get("goal_score_env_reward") if self.two_stage_cfg else None
 
     @property
     def two_stage_ball_hit_wrapper_reward(self) -> float | None:
-        return (
-            self.two_stage_cfg.get("ball_hit_wrapper_reward")
-            if self.two_stage_cfg
-            else None
-        )
+        return self.two_stage_cfg.get("ball_hit_wrapper_reward") if self.two_stage_cfg else None
 
     @property
     def two_stage_goal_score_wrapper_reward(self) -> float | None:
-        return (
-            self.two_stage_cfg.get("goal_score_wrapper_reward")
-            if self.two_stage_cfg
-            else None
-        )
+        return self.two_stage_cfg.get("goal_score_wrapper_reward") if self.two_stage_cfg else None
 
     # Wandb property accessors
     @property
@@ -223,13 +188,9 @@ class ExperimentConfig:
                 try:
                     return int(float(value))
                 except ValueError:
-                    print(
-                        f"[ERROR] Config '{field_name}' must be numeric, got: {value!r}"
-                    )
+                    print(f"[ERROR] Config '{field_name}' must be numeric, got: {value!r}")
                     sys.exit(1)
-        print(
-            f"[ERROR] Config '{field_name}' must be numeric, got: {type(value).__name__}"
-        )
+        print(f"[ERROR] Config '{field_name}' must be numeric, got: {type(value).__name__}")
         sys.exit(1)
 
     @staticmethod
@@ -393,17 +354,13 @@ class ExperimentConfig:
         agent_overrides = []
         for key, value in self.agent_cfg.items():
             if key in safe_agent_fields:
-                agent_overrides.extend(
-                    self._flatten_dict_to_overrides({key: value}, prefix="agent")
-                )
+                agent_overrides.extend(self._flatten_dict_to_overrides({key: value}, prefix="agent"))
 
         overrides.extend(agent_overrides)
 
         return overrides
 
-    def _flatten_dict_to_overrides(
-        self, d: dict[str, Any], prefix: str = ""
-    ) -> list[str]:
+    def _flatten_dict_to_overrides(self, d: dict[str, Any], prefix: str = "") -> list[str]:
         """Recursively flatten a dict into Hydra override format.
 
         Example: {"policy_kwargs": {"net_arch": [64, 64]}} with prefix="agent"

@@ -33,9 +33,7 @@ args, remaining_argv = parser.parse_known_args()
 config_dir = Path(__file__).parent / "config"
 if Path(args.config).is_absolute():
     CONFIG_PATH = Path(args.config)
-elif (
-    args.config.startswith("experiments/") or "/" in args.config or "\\" in args.config
-):
+elif args.config.startswith("experiments/") or "/" in args.config or "\\" in args.config:
     CONFIG_PATH = config_dir / args.config
 else:
     # Check experiments folder first, then root config folder
@@ -54,7 +52,9 @@ CONFIG.setup_cuda_visibility()
 # This is the key for unified config handling - both standalone and Ray
 # use the same Hydra override mechanism
 hydra_overrides = CONFIG.get_hydra_overrides()
-sys.argv = [sys.argv[0]] + hydra_overrides
+sys.argv = [sys.argv[0]] + hydra_overrides + remaining_argv
+if remaining_argv:
+    print(f"[INFO] Extra Hydra overrides: {remaining_argv}")
 print(f"[INFO] Hydra overrides: {hydra_overrides}")
 
 # NOW import isaaclab after CUDA_VISIBLE_DEVICES is set and sys.argv is configured
@@ -137,9 +137,7 @@ class TwoStageHerMetricsCallback(BaseCallback):
                     self.envs_hit_ball.add(i)
 
                 if dones[i]:
-                    if info.get("ball_hit", False) and not info.get(
-                        "TimeLimit.truncated", False
-                    ):
+                    if info.get("ball_hit", False) and not info.get("TimeLimit.truncated", False):
                         self.envs_scored_goal.add(i)
 
         return True
@@ -228,9 +226,7 @@ def main(
         env_cfg.export_io_descriptors = cfg.export_io_descriptors
         env_cfg.io_descriptors_output_dir = log_dir
     else:
-        omni.log.warn(
-            "IO descriptors are only supported for manager based RL environments."
-        )
+        omni.log.warn("IO descriptors are only supported for manager based RL environments.")
 
     # Set the log directory for the environment
     env_cfg.log_dir = log_dir
@@ -239,29 +235,17 @@ def main(
     if cfg.use_her and cfg.her_env_reward_scale is not None:
         if hasattr(env_cfg, "rewards"):
             if hasattr(env_cfg.rewards, "collision_player_ball_reward"):
-                print(
-                    f"[INFO] Setting env collision_player_ball_reward weight to {cfg.her_env_reward_scale}"
-                )
-                env_cfg.rewards.collision_player_ball_reward.weight = (
-                    cfg.her_env_reward_scale
-                )
+                print(f"[INFO] Setting env collision_player_ball_reward weight to {cfg.her_env_reward_scale}")
+                env_cfg.rewards.collision_player_ball_reward.weight = cfg.her_env_reward_scale
 
     if cfg.use_two_stage_her:
         if cfg.two_stage_ball_hit_env_reward is not None:
-            if hasattr(env_cfg, "rewards") and hasattr(
-                env_cfg.rewards, "collision_player_ball"
-            ):
-                print(
-                    f"[INFO] Setting env collision_player_ball weight to {cfg.two_stage_ball_hit_env_reward}"
-                )
-                env_cfg.rewards.collision_player_ball.weight = (
-                    cfg.two_stage_ball_hit_env_reward
-                )
+            if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "collision_player_ball"):
+                print(f"[INFO] Setting env collision_player_ball weight to {cfg.two_stage_ball_hit_env_reward}")
+                env_cfg.rewards.collision_player_ball.weight = cfg.two_stage_ball_hit_env_reward
         if cfg.two_stage_goal_score_env_reward is not None:
             if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "goal_scored"):
-                print(
-                    f"[INFO] Setting env goal_scored weight to {cfg.two_stage_goal_score_env_reward}"
-                )
+                print(f"[INFO] Setting env goal_scored weight to {cfg.two_stage_goal_score_env_reward}")
                 env_cfg.rewards.goal_scored.weight = cfg.two_stage_goal_score_env_reward
 
     # Create isaac environment
@@ -282,9 +266,7 @@ def main(
     env.unwrapped.single_action_space = gym.spaces.Box(
         low=-max_vel, high=max_vel, shape=(action_dim,), dtype=np.float32
     )
-    env.unwrapped.action_space = gym.vector.utils.batch_space(
-        env.unwrapped.single_action_space, env.unwrapped.num_envs
-    )
+    env.unwrapped.action_space = gym.vector.utils.batch_space(env.unwrapped.single_action_space, env.unwrapped.num_envs)
 
     # Wrap for video recording
     if cfg.video:
@@ -311,18 +293,10 @@ def main(
         print(f"[INFO] Two-Stage HER player_pos indices: {player_pos_indices}")
         print(f"[INFO] Two-Stage HER ball_pos indices: {ball_pos_indices}")
         print(f"[INFO] Two-Stage HER goal_pos indices: {goal_pos_indices}")
-        print(
-            f"[INFO] Two-Stage HER ball_hit_threshold: {cfg.two_stage_ball_hit_threshold}"
-        )
-        print(
-            f"[INFO] Two-Stage HER goal_score_threshold: {cfg.two_stage_goal_score_threshold}"
-        )
-        print(
-            f"[INFO] Two-Stage HER ball_hit_wrapper_reward: {cfg.two_stage_ball_hit_wrapper_reward}"
-        )
-        print(
-            f"[INFO] Two-Stage HER goal_score_wrapper_reward: {cfg.two_stage_goal_score_wrapper_reward}"
-        )
+        print(f"[INFO] Two-Stage HER ball_hit_threshold: {cfg.two_stage_ball_hit_threshold}")
+        print(f"[INFO] Two-Stage HER goal_score_threshold: {cfg.two_stage_goal_score_threshold}")
+        print(f"[INFO] Two-Stage HER ball_hit_wrapper_reward: {cfg.two_stage_ball_hit_wrapper_reward}")
+        print(f"[INFO] Two-Stage HER goal_score_wrapper_reward: {cfg.two_stage_goal_score_wrapper_reward}")
 
         env = Sb3TwoStageHerWrapper(
             env,
@@ -335,9 +309,7 @@ def main(
             goal_score_reward=cfg.two_stage_goal_score_wrapper_reward,
         )
     elif cfg.use_her:
-        print(
-            "[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper..."
-        )
+        print("[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper...")
         achieved_indices = tuple(cfg.her_achieved_goal_indices or [0, 2])
         desired_indices = tuple(cfg.her_desired_goal_indices or [8, 10])
 
@@ -363,9 +335,7 @@ def main(
 
     if norm_args and norm_args.get("normalize_input"):
         if cfg.use_her or cfg.use_two_stage_her:
-            print(
-                "[WARNING] VecNormalize is not fully compatible with HER. Disabling observation normalization."
-            )
+            print("[WARNING] VecNormalize is not fully compatible with HER. Disabling observation normalization.")
         else:
             print(f"Normalizing input, {norm_args=}")
             env = VecNormalize(
@@ -393,9 +363,7 @@ def main(
         }
         # HER requires MultiInputPolicy for dict observation space
         if policy_arch == "MlpPolicy":
-            print(
-                "[INFO] Switching to MultiInputPolicy for HER (dict observation space)"
-            )
+            print("[INFO] Switching to MultiInputPolicy for HER (dict observation space)")
             policy_arch = "MultiInputPolicy"
 
     # Create SAC agent
@@ -421,18 +389,14 @@ def main(
     wandb_run = None
     if cfg.wandb_project is not None:
         if not WANDB_AVAILABLE:
-            print(
-                "[WARNING] wandb not installed. Skipping wandb logging. Install with: pip install wandb"
-            )
+            print("[WARNING] wandb not installed. Skipping wandb logging. Install with: pip install wandb")
         else:
             print(f"[INFO] Initializing wandb project: {cfg.wandb_project}")
             wandb_api_key = os.getenv("WANDB_API_KEY")
             if wandb_api_key:
                 wandb.login(key=wandb_api_key, relogin=False)
             else:
-                print(
-                    "[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init."
-                )
+                print("[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init.")
             wandb_run = wandb.init(
                 project=cfg.wandb_project,
                 entity=cfg.wandb_entity,
@@ -461,9 +425,7 @@ def main(
 
     # Add two-stage HER metrics callback if using two-stage HER
     if cfg.use_two_stage_her:
-        two_stage_callback = TwoStageHerMetricsCallback(
-            num_envs=env_cfg.scene.num_envs, verbose=1
-        )
+        two_stage_callback = TwoStageHerMetricsCallback(num_envs=env_cfg.scene.num_envs, verbose=1)
         callbacks.append(two_stage_callback)
         print("[INFO] Added TwoStageHerMetricsCallback to track goal achievements")
 
