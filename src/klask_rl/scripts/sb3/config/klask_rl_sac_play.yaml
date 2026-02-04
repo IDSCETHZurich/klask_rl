@@ -1,6 +1,0 @@
-num_envs: 1
-play_checkpoint: null
-
-video: false
-video_length: 200
-video_interval: 2000
