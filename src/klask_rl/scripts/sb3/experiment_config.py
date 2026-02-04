@@ -351,18 +351,19 @@ class ExperimentConfig:
         This is the KEY method for unified config handling. Both standalone
         training and Ray tuning use these overrides to configure env/agent.
 
+        Note: Only generates overrides for fields that exist in the base config
+        from the registry (Hydra struct mode). Additional fields are merged
+        directly in the training script.
+
         Returns:
             List of Hydra override strings like ["env.seed=42", "agent.learning_rate=0.0003"]
         """
         overrides = []
 
         # Environment overrides
-        if self.seed is not None:
-            seed_value = self._coerce_int(self.seed, "seed")
-            if seed_value == -1:
-                seed_value = random.randint(0, 10000)
-                self.seed = seed_value  # Update for logging
-            overrides.append(f"env.seed={seed_value}")
+        # NOTE: We do NOT override env.seed via Hydra because the base config
+        # has seed=None and Hydra strict mode rejects type changes. Seed is
+        # set directly in the training script instead.
 
         if self.num_envs is not None:
             overrides.append(f"env.scene.num_envs={self.num_envs}")
@@ -371,10 +372,32 @@ class ExperimentConfig:
         if device is not None:
             overrides.append(f"env.sim.device={device}")
 
-        # Agent overrides - flatten the agent_cfg dict into Hydra format
-        overrides.extend(
-            self._flatten_dict_to_overrides(self.agent_cfg, prefix="agent")
-        )
+        # Agent overrides - only fields that exist in base sb3_sac_cfg.yaml
+        # to avoid Hydra struct mode errors. Other fields are merged directly.
+        safe_agent_fields = {
+            "learning_rate",
+            "buffer_size",
+            "learning_starts",
+            "batch_size",
+            "tau",
+            "gamma",
+            "train_freq",
+            "gradient_steps",
+            "ent_coef",
+            "target_entropy",
+            "target_update_interval",
+            "normalize_input",
+            "policy_kwargs",  # nested dict
+        }
+
+        agent_overrides = []
+        for key, value in self.agent_cfg.items():
+            if key in safe_agent_fields:
+                agent_overrides.extend(
+                    self._flatten_dict_to_overrides({key: value}, prefix="agent")
+                )
+
+        overrides.extend(agent_overrides)
 
         return overrides
 

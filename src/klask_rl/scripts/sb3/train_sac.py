@@ -73,6 +73,7 @@ signal.signal(signal.SIGINT, cleanup_pbar)
 import gymnasium as gym
 import numpy as np
 import os
+import random
 from datetime import datetime
 
 import omni
@@ -180,9 +181,17 @@ def main(
     """
     cfg = CONFIG
 
-    # Override agent_cfg with our experiment config values
-    # (Hydra only handles env.* and agent.* overrides, but our YAML
-    # has additional agent params not in the registry config)
+    # Set seed on env_cfg and agent_cfg (cannot be done via Hydra due to type constraints)
+    if cfg.seed is not None:
+        seed_value = cfg.seed if cfg.seed != -1 else random.randint(0, 10000)
+        env_cfg.seed = seed_value
+        agent_cfg["seed"] = seed_value
+        if cfg.seed == -1:
+            cfg.seed = seed_value  # Update for logging
+
+    # Merge our experiment config with the Hydra-configured agent_cfg
+    # Hydra struct mode only allows overriding fields in the base config,
+    # so we merge additional fields (like n_timesteps, policy, device) here
     for key, value in cfg.agent_cfg.items():
         agent_cfg[key] = value
 
