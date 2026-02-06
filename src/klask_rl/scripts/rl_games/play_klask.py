@@ -12,8 +12,12 @@ import argparse
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Play a checkpoint of an RL agent from RL-Games.")
-parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+parser = argparse.ArgumentParser(
+    description="Play a checkpoint of an RL agent from RL-Games."
+)
+parser.add_argument(
+    "--video", action="store_true", default=False, help="Record videos during training."
+)
 parser.add_argument(
     "--video_length",
     type=int,
@@ -26,9 +30,16 @@ parser.add_argument(
     default=False,
     help="Disable fabric and use USD I/O operations.",
 )
-parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
+parser.add_argument(
+    "--num_envs", type=int, default=1, help="Number of environments to simulate."
+)
 parser.add_argument("--task", type=str, default="Klask-Rl-v0", help="Name of the task.")
-parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
+parser.add_argument(
+    "--checkpoint",
+    type=str,
+    default="logs/rl_games/klask/demo_agents/best_one/klask.pth",
+    help="Path to model checkpoint.",
+)
 parser.add_argument(
     "--use_last_checkpoint",
     action="store_true",
@@ -37,7 +48,7 @@ parser.add_argument(
 parser.add_argument(
     "--config",
     type=str,
-    default=None,
+    default="logs/rl_games/klask/demo_agents/best_one/agent.yaml",
     help="config.yaml file, rl_games_cfg_entry_point used when not provided",
 )
 
@@ -112,7 +123,9 @@ def main():
         agent_cfg.update(config)
 
     # specify directory for logging experiments
-    log_root_path = os.path.join("logs", "rl_games", agent_cfg["params"]["config"]["name"])
+    log_root_path = os.path.join(
+        "logs", "rl_games", agent_cfg["params"]["config"]["name"]
+    )
     log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
     # find checkpoint
@@ -126,7 +139,9 @@ def main():
             # this loads the best checkpoint
             checkpoint_file = f"{agent_cfg['params']['config']['name']}.pth"
         # get path to previous checkpoint
-        resume_path = get_checkpoint_path(log_root_path, run_dir, checkpoint_file, other_dirs=["nn"])
+        resume_path = get_checkpoint_path(
+            log_root_path, run_dir, checkpoint_file, other_dirs=["nn"]
+        )
     else:
         resume_path = retrieve_file_path(args_cli.checkpoint)
     log_dir = os.path.dirname(os.path.dirname(resume_path))
@@ -140,7 +155,9 @@ def main():
     clip_actions = agent_cfg["params"]["env"].get("clip_actions", math.inf)
 
     # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    env = gym.make(
+        args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None
+    )
 
     # wrap for video recording
     if args_cli.video:
@@ -179,7 +196,9 @@ def main():
         env = CurriculumWrapper(env, agent_cfg["rewards"], mode="test")
 
     # wrap around environment for rl-games
-    env = RlGamesVecEnvWrapper(env, rl_device, clip_obs=clip_obs, clip_actions=clip_actions)
+    env = RlGamesVecEnvWrapper(
+        env, rl_device, clip_obs=clip_obs, clip_actions=clip_actions
+    )
 
     # register the environment to rl-games registry
     # note: in agents configuration: environment name must be "rlgpu"
@@ -198,7 +217,9 @@ def main():
     else:
         vecenv.register(
             "IsaacRlgWrapper",
-            lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(config_name, num_actors, **kwargs),
+            lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(
+                config_name, num_actors, **kwargs
+            ),
         )
         env_configurations.register(
             "rlgpu",
