@@ -333,6 +333,13 @@ class ExperimentConfig:
                 # Ray has filtered devices, just remap to logical device 0
                 original_device = device
                 self.app_launcher["device"] = "cuda:0"
+                # Disable livestream to avoid port conflicts in parallel training
+                if self.app_launcher.get("livestream", 0) != 0:
+                    print(
+                        f"[INFO] Ray Tune detected: disabling livestream "
+                        f"(was {self.app_launcher['livestream']}) to avoid port conflicts"
+                    )
+                    self.app_launcher["livestream"] = 0
                 print(
                     f"[INFO] Ray Tune detected: mapping {original_device} -> cuda:0 "
                     f"(CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})"
