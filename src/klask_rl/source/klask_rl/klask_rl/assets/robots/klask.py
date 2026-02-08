@@ -66,7 +66,7 @@ else:
 KLASK_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=os.path.join(
-            os.getcwd(), "source/klask_rl/klask_rl/assets/robots/klask.usd"
+            os.path.dirname(__file__), "klask.usd"
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(

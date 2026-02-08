@@ -14,8 +14,10 @@ Usage:
 
 import argparse
 import contextlib
+import os
 import signal
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Parse config file argument BEFORE any isaaclab imports
@@ -33,7 +35,9 @@ args, remaining_argv = parser.parse_known_args()
 config_dir = Path(__file__).parent / "config"
 if Path(args.config).is_absolute():
     CONFIG_PATH = Path(args.config)
-elif args.config.startswith("experiments/") or "/" in args.config or "\\" in args.config:
+elif (
+    args.config.startswith("experiments/") or "/" in args.config or "\\" in args.config
+):
     CONFIG_PATH = config_dir / args.config
 else:
     # Check experiments folder first, then root config folder
@@ -46,12 +50,32 @@ else:
 from experiment_config import ExperimentConfig
 
 CONFIG = ExperimentConfig.from_file(CONFIG_PATH)
+
+# Setup CUDA visibility (handles both normal training and Ray Tune cases)
 CONFIG.setup_cuda_visibility()
+
+# Print experiment info EARLY for Ray Tune to detect
+# (must be before Isaac Sim startup which produces lots of output)
+run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+# Use absolute path relative to script location (not cwd) for Ray Tune compatibility
+script_dir = Path(__file__).parent.parent  # Go up to klask_rl/
+log_root_path = str(script_dir / "logs" / "sb3_sac" / CONFIG.task)
+print(f"[INFO] Logging experiment in directory: {log_root_path}")
+print(f"Exact experiment name requested from command line: {run_info}")
 
 # IMPORTANT: Set Hydra CLI overrides BEFORE importing isaaclab
 # This is the key for unified config handling - both standalone and Ray
 # use the same Hydra override mechanism
-hydra_overrides = CONFIG.get_hydra_overrides()
+
+# Extract Ray Tune parameter keys from remaining_argv to avoid duplicates
+ray_tune_keys = set()
+for arg in remaining_argv:
+    # Parse Hydra overrides like "agent.policy_kwargs.net_arch=[256,128,64]"
+    if "=" in arg:
+        key = arg.split("=")[0].strip("'\"")
+        ray_tune_keys.add(key)
+
+hydra_overrides = CONFIG.get_hydra_overrides(exclude_keys=ray_tune_keys)
 sys.argv = [sys.argv[0]] + hydra_overrides + remaining_argv
 if remaining_argv:
     print(f"[INFO] Extra Hydra overrides: {remaining_argv}")
@@ -79,6 +103,7 @@ from datetime import datetime
 import omni
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import VecNormalize
 from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
 
@@ -88,7 +113,10 @@ try:
     from wandb.integration.sb3 import WandbCallback
 
     WANDB_AVAILABLE = True
-except ImportError:
+except (ImportError, TypeError, Exception) as e:
+    # TypeError can occur with pydantic/inspect issues when wandb tries to inspect isaaclab module
+    # Catch all exceptions to ensure wandb issues don't crash training
+    print(f"[WARNING] wandb import failed: {e}")
     WANDB_AVAILABLE = False
 
 from isaaclab.envs import (
@@ -137,7 +165,9 @@ class TwoStageHerMetricsCallback(BaseCallback):
                     self.envs_hit_ball.add(i)
 
                 if dones[i]:
-                    if info.get("ball_hit", False) and not info.get("TimeLimit.truncated", False):
+                    if info.get("ball_hit", False) and not info.get(
+                        "TimeLimit.truncated", False
+                    ):
                         self.envs_scored_goal.add(i)
 
         return True
@@ -172,10 +202,9 @@ def main(
 ):
     """Train with stable-baselines SAC agent.
 
-    This function uses Hydra for configuration. The env_cfg and agent_cfg
-    are loaded from the registry and then overridden by Hydra CLI args.
-    Our experiment config is converted to Hydra overrides in sys.argv,
-    enabling the same mechanism for both standalone and Ray tuning.
+    Uses Hydra to load configs from registry and apply overrides from sys.argv.
+    The experiment config generates Hydra overrides that are already in sys.argv,
+    so env_cfg and agent_cfg arrive with values from your experiment YAML.
     """
     cfg = CONFIG
 
@@ -187,20 +216,23 @@ def main(
         if cfg.seed == -1:
             cfg.seed = seed_value  # Update for logging
 
-    # Merge our experiment config with the Hydra-configured agent_cfg
-    # Hydra struct mode only allows overriding fields in the base config,
-    # so we merge additional fields (like n_timesteps, policy, device) here
-    for key, value in cfg.agent_cfg.items():
-        agent_cfg[key] = value
+    # Merge experiment config with Hydra-configured agent_cfg
+    # (Hydra overrides already applied most values, this catches any extras)
+    # Only merge fields that don't exist in agent_cfg to preserve Hydra overrides
+    def merge_preserving_overrides(target: dict, source: dict):
+        """Recursively merge source into target, preserving existing target values."""
+        for key, value in source.items():
+            if key not in target:
+                target[key] = value
+            elif isinstance(value, dict) and isinstance(target[key], dict):
+                merge_preserving_overrides(target[key], value)
+
+    merge_preserving_overrides(agent_cfg, cfg.agent_cfg)
 
     print(f"[INFO] Loaded experiment config: {CONFIG_PATH}")
     print_dict(cfg.to_dict(), nesting=4)
 
-    # Directory for logging
-    run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_root_path = os.path.abspath(os.path.join("logs", "sb3_sac", cfg.task))
-    print(f"[INFO] Logging experiment in directory: {log_root_path}")
-    print(f"[INFO] Experiment name: {run_info}")
+    # Directory for logging (run_info and log_root_path already printed early for Ray Tune)
     log_dir = os.path.join(log_root_path, run_info)
 
     # Dump the configuration into log-directory
@@ -226,7 +258,9 @@ def main(
         env_cfg.export_io_descriptors = cfg.export_io_descriptors
         env_cfg.io_descriptors_output_dir = log_dir
     else:
-        omni.log.warn("IO descriptors are only supported for manager based RL environments.")
+        omni.log.warn(
+            "IO descriptors are only supported for manager based RL environments."
+        )
 
     # Set the log directory for the environment
     env_cfg.log_dir = log_dir
@@ -235,17 +269,29 @@ def main(
     if cfg.use_her and cfg.her_env_reward_scale is not None:
         if hasattr(env_cfg, "rewards"):
             if hasattr(env_cfg.rewards, "collision_player_ball_reward"):
-                print(f"[INFO] Setting env collision_player_ball_reward weight to {cfg.her_env_reward_scale}")
-                env_cfg.rewards.collision_player_ball_reward.weight = cfg.her_env_reward_scale
+                print(
+                    f"[INFO] Setting env collision_player_ball_reward weight to {cfg.her_env_reward_scale}"
+                )
+                env_cfg.rewards.collision_player_ball_reward.weight = (
+                    cfg.her_env_reward_scale
+                )
 
     if cfg.use_two_stage_her:
         if cfg.two_stage_ball_hit_env_reward is not None:
-            if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "collision_player_ball"):
-                print(f"[INFO] Setting env collision_player_ball weight to {cfg.two_stage_ball_hit_env_reward}")
-                env_cfg.rewards.collision_player_ball.weight = cfg.two_stage_ball_hit_env_reward
+            if hasattr(env_cfg, "rewards") and hasattr(
+                env_cfg.rewards, "collision_player_ball"
+            ):
+                print(
+                    f"[INFO] Setting env collision_player_ball weight to {cfg.two_stage_ball_hit_env_reward}"
+                )
+                env_cfg.rewards.collision_player_ball.weight = (
+                    cfg.two_stage_ball_hit_env_reward
+                )
         if cfg.two_stage_goal_score_env_reward is not None:
             if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "goal_scored"):
-                print(f"[INFO] Setting env goal_scored weight to {cfg.two_stage_goal_score_env_reward}")
+                print(
+                    f"[INFO] Setting env goal_scored weight to {cfg.two_stage_goal_score_env_reward}"
+                )
                 env_cfg.rewards.goal_scored.weight = cfg.two_stage_goal_score_env_reward
 
     # Create isaac environment
@@ -266,7 +312,9 @@ def main(
     env.unwrapped.single_action_space = gym.spaces.Box(
         low=-max_vel, high=max_vel, shape=(action_dim,), dtype=np.float32
     )
-    env.unwrapped.action_space = gym.vector.utils.batch_space(env.unwrapped.single_action_space, env.unwrapped.num_envs)
+    env.unwrapped.action_space = gym.vector.utils.batch_space(
+        env.unwrapped.single_action_space, env.unwrapped.num_envs
+    )
 
     # Wrap for video recording
     if cfg.video:
@@ -293,10 +341,18 @@ def main(
         print(f"[INFO] Two-Stage HER player_pos indices: {player_pos_indices}")
         print(f"[INFO] Two-Stage HER ball_pos indices: {ball_pos_indices}")
         print(f"[INFO] Two-Stage HER goal_pos indices: {goal_pos_indices}")
-        print(f"[INFO] Two-Stage HER ball_hit_threshold: {cfg.two_stage_ball_hit_threshold}")
-        print(f"[INFO] Two-Stage HER goal_score_threshold: {cfg.two_stage_goal_score_threshold}")
-        print(f"[INFO] Two-Stage HER ball_hit_wrapper_reward: {cfg.two_stage_ball_hit_wrapper_reward}")
-        print(f"[INFO] Two-Stage HER goal_score_wrapper_reward: {cfg.two_stage_goal_score_wrapper_reward}")
+        print(
+            f"[INFO] Two-Stage HER ball_hit_threshold: {cfg.two_stage_ball_hit_threshold}"
+        )
+        print(
+            f"[INFO] Two-Stage HER goal_score_threshold: {cfg.two_stage_goal_score_threshold}"
+        )
+        print(
+            f"[INFO] Two-Stage HER ball_hit_wrapper_reward: {cfg.two_stage_ball_hit_wrapper_reward}"
+        )
+        print(
+            f"[INFO] Two-Stage HER goal_score_wrapper_reward: {cfg.two_stage_goal_score_wrapper_reward}"
+        )
 
         env = Sb3TwoStageHerWrapper(
             env,
@@ -309,7 +365,9 @@ def main(
             goal_score_reward=cfg.two_stage_goal_score_wrapper_reward,
         )
     elif cfg.use_her:
-        print("[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper...")
+        print(
+            "[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper..."
+        )
         achieved_indices = tuple(cfg.her_achieved_goal_indices or [0, 2])
         desired_indices = tuple(cfg.her_desired_goal_indices or [8, 10])
 
@@ -335,7 +393,9 @@ def main(
 
     if norm_args and norm_args.get("normalize_input"):
         if cfg.use_her or cfg.use_two_stage_her:
-            print("[WARNING] VecNormalize is not fully compatible with HER. Disabling observation normalization.")
+            print(
+                "[WARNING] VecNormalize is not fully compatible with HER. Disabling observation normalization."
+            )
         else:
             print(f"Normalizing input, {norm_args=}")
             env = VecNormalize(
@@ -363,22 +423,31 @@ def main(
         }
         # HER requires MultiInputPolicy for dict observation space
         if policy_arch == "MlpPolicy":
-            print("[INFO] Switching to MultiInputPolicy for HER (dict observation space)")
+            print(
+                "[INFO] Switching to MultiInputPolicy for HER (dict observation space)"
+            )
             policy_arch = "MultiInputPolicy"
 
-    # Create SAC agent
+    # Create SAC agent  
     print("[INFO] Creating SAC agent...")
     print_dict(agent_cfg, nesting=4)
 
+    # For Ray Tune compatibility: configure custom logger to write directly to log_dir
+    # For wandb compatibility: let agent create its logger first, then reconfigure it
     agent = SAC(
         policy_arch,
         env,
         verbose=1,
-        tensorboard_log=log_dir,
+        tensorboard_log=log_dir,  
         replay_buffer_class=replay_buffer_class,
         replay_buffer_kwargs=replay_buffer_kwargs,
         **agent_cfg,
     )
+    
+    # Reconfigure logger to write directly to log_dir without SAC_1 subdirectory
+    # This works for both Ray Tune (finds metrics) and wandb (we'll point it to log_dir)
+    new_logger = configure(log_dir, ["tensorboard", "stdout"])
+    agent.set_logger(new_logger)
 
     # Load checkpoint if provided
     if cfg.checkpoint is not None:
@@ -389,18 +458,25 @@ def main(
     wandb_run = None
     if cfg.wandb_project is not None:
         if not WANDB_AVAILABLE:
-            print("[WARNING] wandb not installed. Skipping wandb logging. Install with: pip install wandb")
+            print(
+                "[WARNING] wandb not installed. Skipping wandb logging. Install with: pip install wandb"
+            )
         else:
             print(f"[INFO] Initializing wandb project: {cfg.wandb_project}")
             wandb_api_key = os.getenv("WANDB_API_KEY")
             if wandb_api_key:
                 wandb.login(key=wandb_api_key, relogin=False)
             else:
-                print("[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init.")
+                print(
+                    "[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init."
+                )
+            # Set wandb to look for tensorboard logs in log_dir (where we reconfigured the logger to write)
             wandb_run = wandb.init(
                 project=cfg.wandb_project,
                 entity=cfg.wandb_entity,
                 name=cfg.wandb_name or run_info,
+                dir=log_dir,  # Set wandb working directory to log_dir
+                sync_tensorboard=True,  # Will sync tensorboard events from log_dir
                 config={
                     "algorithm": "SAC",
                     "task": cfg.task,
@@ -409,7 +485,6 @@ def main(
                     "n_timesteps": n_timesteps,
                     **agent_cfg,
                 },
-                sync_tensorboard=True,
                 monitor_gym=True,
                 save_code=True,
             )
@@ -425,7 +500,9 @@ def main(
 
     # Add two-stage HER metrics callback if using two-stage HER
     if cfg.use_two_stage_her:
-        two_stage_callback = TwoStageHerMetricsCallback(num_envs=env_cfg.scene.num_envs, verbose=1)
+        two_stage_callback = TwoStageHerMetricsCallback(
+            num_envs=env_cfg.scene.num_envs, verbose=1
+        )
         callbacks.append(two_stage_callback)
         print("[INFO] Added TwoStageHerMetricsCallback to track goal achievements")
 

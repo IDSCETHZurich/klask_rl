@@ -14,6 +14,7 @@ from a single YAML file. Configuration sections:
 
 from __future__ import annotations
 
+import os
 import random
 import sys
 from dataclasses import dataclass, field
@@ -95,7 +96,11 @@ class ExperimentConfig:
     # HER property accessors
     @property
     def her_goal_selection_strategy(self) -> str:
-        return self.her_cfg.get("goal_selection_strategy", "future") if self.her_cfg else "future"
+        return (
+            self.her_cfg.get("goal_selection_strategy", "future")
+            if self.her_cfg
+            else "future"
+        )
 
     @property
     def her_n_sampled_goal(self) -> int:
@@ -124,39 +129,69 @@ class ExperimentConfig:
     # Two-stage HER property accessors
     @property
     def two_stage_player_pos_indices(self) -> list[int] | None:
-        return self.two_stage_cfg.get("player_pos_indices") if self.two_stage_cfg else None
+        return (
+            self.two_stage_cfg.get("player_pos_indices") if self.two_stage_cfg else None
+        )
 
     @property
     def two_stage_ball_pos_indices(self) -> list[int] | None:
-        return self.two_stage_cfg.get("ball_pos_indices") if self.two_stage_cfg else None
+        return (
+            self.two_stage_cfg.get("ball_pos_indices") if self.two_stage_cfg else None
+        )
 
     @property
     def two_stage_goal_pos_indices(self) -> list[int] | None:
-        return self.two_stage_cfg.get("goal_pos_indices") if self.two_stage_cfg else None
+        return (
+            self.two_stage_cfg.get("goal_pos_indices") if self.two_stage_cfg else None
+        )
 
     @property
     def two_stage_ball_hit_threshold(self) -> float:
-        return self.two_stage_cfg.get("ball_hit_threshold", 0.017) if self.two_stage_cfg else 0.017
+        return (
+            self.two_stage_cfg.get("ball_hit_threshold", 0.017)
+            if self.two_stage_cfg
+            else 0.017
+        )
 
     @property
     def two_stage_goal_score_threshold(self) -> float:
-        return self.two_stage_cfg.get("goal_score_threshold", 0.025) if self.two_stage_cfg else 0.025
+        return (
+            self.two_stage_cfg.get("goal_score_threshold", 0.025)
+            if self.two_stage_cfg
+            else 0.025
+        )
 
     @property
     def two_stage_ball_hit_env_reward(self) -> float | None:
-        return self.two_stage_cfg.get("ball_hit_env_reward") if self.two_stage_cfg else None
+        return (
+            self.two_stage_cfg.get("ball_hit_env_reward")
+            if self.two_stage_cfg
+            else None
+        )
 
     @property
     def two_stage_goal_score_env_reward(self) -> float | None:
-        return self.two_stage_cfg.get("goal_score_env_reward") if self.two_stage_cfg else None
+        return (
+            self.two_stage_cfg.get("goal_score_env_reward")
+            if self.two_stage_cfg
+            else None
+        )
 
     @property
     def two_stage_ball_hit_wrapper_reward(self) -> float | None:
-        return self.two_stage_cfg.get("ball_hit_wrapper_reward") if self.two_stage_cfg else None
+        return (
+            self.two_stage_cfg.get("ball_hit_wrapper_reward")
+            if self.two_stage_cfg
+            else None
+        )
 
     @property
     def two_stage_goal_score_wrapper_reward(self) -> float | None:
-        return self.two_stage_cfg.get("goal_score_wrapper_reward") if self.two_stage_cfg else None
+        return (
+            self.two_stage_cfg.get("goal_score_wrapper_reward")
+            if self.two_stage_cfg
+            else None
+        )
 
     # Wandb property accessors
     @property
@@ -188,9 +223,13 @@ class ExperimentConfig:
                 try:
                     return int(float(value))
                 except ValueError:
-                    print(f"[ERROR] Config '{field_name}' must be numeric, got: {value!r}")
+                    print(
+                        f"[ERROR] Config '{field_name}' must be numeric, got: {value!r}"
+                    )
                     sys.exit(1)
-        print(f"[ERROR] Config '{field_name}' must be numeric, got: {type(value).__name__}")
+        print(
+            f"[ERROR] Config '{field_name}' must be numeric, got: {type(value).__name__}"
+        )
         sys.exit(1)
 
     @staticmethod
@@ -278,6 +317,10 @@ class ExperimentConfig:
     def setup_cuda_visibility(self) -> None:
         """Set CUDA_VISIBLE_DEVICES based on device in app_launcher config.
 
+        Handles two cases:
+        1. Normal training: Sets CUDA_VISIBLE_DEVICES from device (cuda:3 -> CUDA_VISIBLE_DEVICES=3, device=cuda:0)
+        2. Ray Tune: CUDA_VISIBLE_DEVICES already set, just remap device to cuda:0
+
         Must be called BEFORE AppLauncher initialization to prevent Isaac Sim
         from allocating memory on all GPUs.
         """
@@ -285,17 +328,28 @@ class ExperimentConfig:
 
         device = self.app_launcher.get("device")
         if device and isinstance(device, str) and device.startswith("cuda:"):
-            try:
-                gpu_id = device.split(":")[1]
-                os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
-                print(
-                    f"[INFO] Set CUDA_VISIBLE_DEVICES={gpu_id} "
-                    f"(Physical GPU {gpu_id} will appear as cuda:0 to the application)"
-                )
-                # Update config to use cuda:0 since we've remapped the GPU
+            # Check if Ray Tune (or another process) already set CUDA_VISIBLE_DEVICES
+            if "CUDA_VISIBLE_DEVICES" in os.environ:
+                # Ray has filtered devices, just remap to logical device 0
+                original_device = device
                 self.app_launcher["device"] = "cuda:0"
-            except (IndexError, ValueError):
-                print(f"[WARNING] Could not parse GPU ID from device: {device}")
+                print(
+                    f"[INFO] Ray Tune detected: mapping {original_device} -> cuda:0 "
+                    f"(CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})"
+                )
+            else:
+                # Normal case: set CUDA_VISIBLE_DEVICES ourselves
+                try:
+                    gpu_id = device.split(":")[1]
+                    os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id
+                    print(
+                        f"[INFO] Set CUDA_VISIBLE_DEVICES={gpu_id} "
+                        f"(Physical GPU {gpu_id} will appear as cuda:0 to the application)"
+                    )
+                    # Update config to use cuda:0 since we've remapped the GPU
+                    self.app_launcher["device"] = "cuda:0"
+                except (IndexError, ValueError):
+                    print(f"[WARNING] Could not parse GPU ID from device: {device}")
 
     def app_launcher_args(self) -> dict[str, Any]:
         """Get app launcher arguments, enabling cameras if video is requested."""
@@ -306,7 +360,7 @@ class ExperimentConfig:
             args["enable_cameras"] = True
         return args
 
-    def get_hydra_overrides(self) -> list[str]:
+    def get_hydra_overrides(self, exclude_keys: set[str] | None = None) -> list[str]:
         """Generate Hydra CLI override arguments from this config.
 
         This is the KEY method for unified config handling. Both standalone
@@ -316,9 +370,16 @@ class ExperimentConfig:
         from the registry (Hydra struct mode). Additional fields are merged
         directly in the training script.
 
+        Args:
+            exclude_keys: Set of full dot-notation keys to exclude (e.g., {"agent.policy_kwargs.net_arch"})
+                         Useful when Ray Tune provides these overrides to avoid duplicates.
+
         Returns:
             List of Hydra override strings like ["env.seed=42", "agent.learning_rate=0.0003"]
         """
+        if exclude_keys is None:
+            exclude_keys = set()
+
         overrides = []
 
         # Environment overrides
@@ -336,6 +397,7 @@ class ExperimentConfig:
         # Agent overrides - only fields that exist in base sb3_sac_cfg.yaml
         # to avoid Hydra struct mode errors. Other fields are merged directly.
         safe_agent_fields = {
+            "n_timesteps",
             "learning_rate",
             "buffer_size",
             "learning_starts",
@@ -354,25 +416,45 @@ class ExperimentConfig:
         agent_overrides = []
         for key, value in self.agent_cfg.items():
             if key in safe_agent_fields:
-                agent_overrides.extend(self._flatten_dict_to_overrides({key: value}, prefix="agent"))
+                agent_overrides.extend(
+                    self._flatten_dict_to_overrides(
+                        {key: value}, prefix="agent", exclude_keys=exclude_keys
+                    )
+                )
 
         overrides.extend(agent_overrides)
 
         return overrides
 
-    def _flatten_dict_to_overrides(self, d: dict[str, Any], prefix: str = "") -> list[str]:
+    def _flatten_dict_to_overrides(
+        self, d: dict[str, Any], prefix: str = "", exclude_keys: set[str] | None = None
+    ) -> list[str]:
         """Recursively flatten a dict into Hydra override format.
+
+        Args:
+            d: Dictionary to flatten
+            prefix: Key prefix for nested dicts
+            exclude_keys: Set of full dot-notation keys to exclude
 
         Example: {"policy_kwargs": {"net_arch": [64, 64]}} with prefix="agent"
         becomes: ["agent.policy_kwargs.net_arch=[64,64]"]
         """
+        if exclude_keys is None:
+            exclude_keys = set()
+
         overrides = []
         for key, value in d.items():
             full_key = f"{prefix}.{key}" if prefix else key
 
+            # Skip excluded keys
+            if full_key in exclude_keys:
+                continue
+
             if isinstance(value, dict):
                 # Recurse into nested dicts
-                overrides.extend(self._flatten_dict_to_overrides(value, full_key))
+                overrides.extend(
+                    self._flatten_dict_to_overrides(value, full_key, exclude_keys)
+                )
             elif isinstance(value, list):
                 # Format lists for Hydra
                 formatted = "[" + ",".join(str(v) for v in value) + "]"
