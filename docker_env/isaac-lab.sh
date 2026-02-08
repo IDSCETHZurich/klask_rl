@@ -1,4 +1,4 @@
-CONTAINER_NAME="isaac-lab-local"
+CONTAINER_NAME="isaac-lab:local"
 
 # Get the directory of this script
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
@@ -14,6 +14,7 @@ docker run -it --rm \
    --env="DISPLAY" \
    --env="LIVESTREAM=1" \
    --env="PUBLIC_IP=100.121.89.49" \
+   --env-file="${SCRIPT_DIR}/../.devcontainer/devcontainer.env" \
    --volume="$HOME/.Xauthority:/root/.Xauthority" \
    --volume="${CONTAINER_NAME}_cache_kit:/isaac-sim/kit/cache:rw" \
    --volume="${CONTAINER_NAME}_cache_ov:/root/.cache/ov:rw" \

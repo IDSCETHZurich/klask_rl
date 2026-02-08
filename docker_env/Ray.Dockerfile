@@ -1,3 +1,5 @@
+# This is a slightly modified version of the Isaac Lab Dockerfile with Ray and tuning libraries installed that can be found at https://github.com/isaac-sim/IsaacLab/blob/main/scripts/reinforcement_learning/ray/cluster_configs/Dockerfile 
+
 FROM nvcr.io/nvidia/isaac-lab:2.3.1
 
 # WGet is needed so that GCS or other cloud providers can mark the container as ready.
