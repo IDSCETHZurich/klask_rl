@@ -428,7 +428,7 @@ def main(
             )
             policy_arch = "MultiInputPolicy"
 
-    # Create SAC agent  
+    # Create SAC agent
     print("[INFO] Creating SAC agent...")
     print_dict(agent_cfg, nesting=4)
 
@@ -438,23 +438,20 @@ def main(
         policy_arch,
         env,
         verbose=1,
-        tensorboard_log=log_dir,  
+        tensorboard_log=log_dir,
         replay_buffer_class=replay_buffer_class,
         replay_buffer_kwargs=replay_buffer_kwargs,
         **agent_cfg,
     )
-    
-    # Reconfigure logger to write directly to log_dir without SAC_1 subdirectory
-    # This works for both Ray Tune (finds metrics) and wandb (we'll point it to log_dir)
-    new_logger = configure(log_dir, ["tensorboard", "stdout"])
-    agent.set_logger(new_logger)
 
     # Load checkpoint if provided
     if cfg.checkpoint is not None:
         print(f"[INFO] Loading checkpoint from: {cfg.checkpoint}")
         agent = agent.load(cfg.checkpoint, env, print_system_info=True)
 
-    # Initialize wandb if requested
+    # Initialize wandb BEFORE reconfiguring the logger.
+    # wandb.init(sync_tensorboard=True) monkey-patches SummaryWriter.__init__,
+    # so it must be called BEFORE configure() creates the TensorBoard writer.
     wandb_run = None
     if cfg.wandb_project is not None:
         if not WANDB_AVAILABLE:
@@ -470,13 +467,12 @@ def main(
                 print(
                     "[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init."
                 )
-            # Set wandb to look for tensorboard logs in log_dir (where we reconfigured the logger to write)
+            # Initialize wandb
             wandb_run = wandb.init(
                 project=cfg.wandb_project,
                 entity=cfg.wandb_entity,
                 name=cfg.wandb_name or run_info,
-                dir=log_dir,  # Set wandb working directory to log_dir
-                sync_tensorboard=True,  # Will sync tensorboard events from log_dir
+                sync_tensorboard=True,
                 config={
                     "algorithm": "SAC",
                     "task": cfg.task,
@@ -488,6 +484,12 @@ def main(
                 monitor_gym=True,
                 save_code=True,
             )
+
+    # Reconfigure logger to write directly to log_dir without SAC_1 subdirectory.
+    # IMPORTANT: This MUST happen AFTER wandb.init(sync_tensorboard=True) so the
+    # TensorBoard SummaryWriter created here is intercepted by wandb's monkey-patch.
+    new_logger = configure(log_dir, ["tensorboard", "stdout"])
+    agent.set_logger(new_logger)
 
     # Callbacks for agent
     checkpoint_callback = CheckpointCallback(
