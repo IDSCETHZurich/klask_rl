@@ -1,0 +1,21 @@
+# Minimal SAC configuration for Hydra registry
+# Actual values are overridden by experiment config via Hydra CLI args
+seed: 42
+n_timesteps: !!float 1e6
+policy: "MlpPolicy"
+learning_rate: !!float 3e-4
+buffer_size: 1000000
+learning_starts: 1000
+batch_size: 256
+tau: 0.005
+gamma: 0.99
+train_freq: 1
+gradient_steps: 1
+ent_coef: "auto"
+target_entropy: "auto"
+target_update_interval: 1
+policy_kwargs:
+  activation_fn: nn.ReLU
+  net_arch: [256, 256]
+device: "cuda:0"
+normalize_input: false

@@ -1,0 +1,1 @@
+/workspace/isaaclab/_isaac_sim/python.sh -m pip install -e source/klask_rl
