@@ -111,7 +111,7 @@ app_launcher:
   headless: true
   livestream: 1
   enable_cameras: false
-  device: cuda:0
+  device: cuda:3
   xr: false
   experience: ""
   rendering_mode: balanced
