@@ -367,6 +367,85 @@ class ExperimentConfig:
             args["enable_cameras"] = True
         return args
 
+    def apply_cli_overrides(self, argv: list[str]) -> list[str]:
+        """Apply her.* and two_stage.* CLI overrides to this config.
+
+        Since HER and two-stage parameters are NOT handled by Hydra (they live
+        in her_cfg / two_stage_cfg dicts), we need to intercept them from the
+        CLI args (e.g. passed by Ray Tune) and apply them directly.
+
+        Args:
+            argv: List of CLI arguments, e.g. ["her.n_sampled_goal=8", "agent.lr=1e-4"]
+
+        Returns:
+            Filtered list of CLI arguments with her.* and two_stage.* keys removed.
+        """
+        filtered = []
+        override_prefixes = {"her.": "her_cfg", "two_stage.": "two_stage_cfg"}
+
+        for arg in argv:
+            if "=" not in arg:
+                filtered.append(arg)
+                continue
+
+            key, raw_value = arg.split("=", 1)
+            key = key.strip("'\"")
+
+            matched = False
+            for prefix, cfg_attr in override_prefixes.items():
+                if key.startswith(prefix):
+                    param_name = key[len(prefix):]
+                    cfg_dict = getattr(self, cfg_attr)
+                    if cfg_dict is None:
+                        cfg_dict = {}
+                        setattr(self, cfg_attr, cfg_dict)
+                    cfg_dict[param_name] = self._parse_cli_value(raw_value)
+                    print(f"[INFO] CLI override: {cfg_attr}.{param_name} = {cfg_dict[param_name]}")
+                    matched = True
+                    break
+
+            if not matched:
+                filtered.append(arg)
+
+        return filtered
+
+    @staticmethod
+    def _parse_cli_value(raw: str) -> Any:
+        """Parse a CLI override value string into a Python object.
+
+        Handles ints, floats, bools, lists (e.g. "[1,2,3]"), and strings.
+        """
+        raw = raw.strip("'\"")
+
+        # Booleans
+        if raw.lower() == "true":
+            return True
+        if raw.lower() == "false":
+            return False
+
+        # Lists like [1,2,3]
+        if raw.startswith("[") and raw.endswith("]"):
+            inner = raw[1:-1].strip()
+            if not inner:
+                return []
+            items = [ExperimentConfig._parse_cli_value(v.strip()) for v in inner.split(",")]
+            return items
+
+        # Int
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+
+        # Float
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+
+        # String fallback
+        return raw
+
     def get_hydra_overrides(self, exclude_keys: set[str] | None = None) -> list[str]:
         """Generate Hydra CLI override arguments from this config.
 

@@ -93,9 +93,6 @@ class KlaskSacHerTuneJobCfg:
             "time_total_s": 86400,  # Stop after 24 hours
         }
 
-        # Increase timeout for env initialization (4096 envs + HER wrappers takes ~5 min)
-        self.process_response_timeout = 600.0  # 10 minutes
-
 
 class KlaskSacTwoStageHerJobCfg:
     """Two-stage HER SAC job config for Klask environment.
@@ -109,17 +106,11 @@ class KlaskSacTwoStageHerJobCfg:
                 "--config": "experiments/klask_sac_two_stage_her.yaml",
             },
             "hydra_args": {
-                "agent.learning_rate": tune.choice([3.0e-4]),
+                "agent.learning_rate": tune.loguniform(1e-5, 3e-4),
+                "agent.gamma": tune.uniform(0.95, 0.995),
+                "agent.tau": tune.loguniform(1e-3, 2e-2),
+                "agent.policy_kwargs.net_arch": tune.choice([[64, 64], [256, 128, 64]]),
+                "her.n_sampled_goal": tune.choice([2, 4, 8]),
+                "her.goal_selection_strategy": tune.choice(["final", "future"]),
             },
-        }
-
-        if "runner_args" in cfg:
-            self.runner_args.update(cfg["runner_args"])
-        if "hydra_args" in cfg:
-            self.hydra_args.update(cfg["hydra_args"])
-
-    def to_dict(self) -> dict:
-        return {
-            "runner_args": self.runner_args,
-            "hydra_args": self.hydra_args,
         }

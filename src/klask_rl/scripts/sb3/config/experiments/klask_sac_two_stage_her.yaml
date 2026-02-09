@@ -103,8 +103,8 @@ two_stage:
   goal_score_env_reward: 5000.0 # goal_scored weight
 
   # Reward scales - Wrapper rewards (HER compute_reward for hindsight relabeling)
-  ball_hit_wrapper_reward: 500.0
-  goal_score_wrapper_reward: 5000.0
+  ball_hit_wrapper_reward: 1.0
+  goal_score_wrapper_reward: 10.0
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # TRAINING
@@ -121,7 +121,7 @@ training:
 wandb:
   project: KLASK
   entity: null
-  name: sac-two-stage-her-goal-scoring
+  name: sac-her-goal-scoring
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # SIMULATION - Isaac Sim App Launcher

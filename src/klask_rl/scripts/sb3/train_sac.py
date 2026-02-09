@@ -67,6 +67,10 @@ print(f"Exact experiment name requested from command line: {run_info}")
 # This is the key for unified config handling - both standalone and Ray
 # use the same Hydra override mechanism
 
+# Apply her.* and two_stage.* overrides directly to CONFIG (they bypass Hydra)
+# This lets Ray Tune vary HER parameters like her.n_sampled_goal
+remaining_argv = CONFIG.apply_cli_overrides(remaining_argv)
+
 # Extract Ray Tune parameter keys from remaining_argv to avoid duplicates
 ray_tune_keys = set()
 for arg in remaining_argv:
