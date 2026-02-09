@@ -13,7 +13,7 @@ from .klask_rl_training_wrappers import (
     KlaskRlCollisionAvoidanceWrapper,
     ActionHistoryWrapper,
 )
-from .sb3_her_wrapper import Sb3HerWrapper, Sb3VecHerWrapper
+from .sb3_her_wrapper import Sb3VecHerWrapper
 from .sb3_two_stage_her_wrapper import Sb3TwoStageHerWrapper
 
 __all__ = [
@@ -26,7 +26,6 @@ __all__ = [
     "CurriculumWrapper",
     "KlaskRlCollisionAvoidanceWrapper",
     "ActionHistoryWrapper",
-    "Sb3HerWrapper",
     "Sb3VecHerWrapper",
     "Sb3TwoStageHerWrapper",
 ]

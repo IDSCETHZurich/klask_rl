@@ -150,17 +150,15 @@ class TwoStageHerMetricsCallback(BaseCallback):
     def _on_step(self) -> bool:
         if "infos" in self.locals:
             infos = self.locals["infos"]
-            dones = self.locals.get("dones", [])
 
             for i, info in enumerate(infos):
                 if info.get("ball_hit", False) or info.get("terminal_ball_hit", False):
                     self.envs_hit_ball.add(i)
 
-                if dones[i]:
-                    if info.get("ball_hit", False) and not info.get(
-                        "TimeLimit.truncated", False
-                    ):
-                        self.envs_scored_goal.add(i)
+                if info.get("goal_scored", False) or info.get(
+                    "terminal_goal_scored", False
+                ):
+                    self.envs_scored_goal.add(i)
 
         return True
 

@@ -106,7 +106,7 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
                 f"[Sb3TwoStageHerWrapper] Warning: Expected obs_dim={expected_dim}, got {self.obs_dim}"
             )
             print(
-                f"  Make sure to use TwoStageHerObservationsCfg which includes opponent_goal"
+                "Make sure to use TwoStageHerObservationsCfg which includes opponent_goal"
             )
 
         goal_dim = 2  # XY position
@@ -134,7 +134,7 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         self.ball_hit = np.zeros(self.num_envs, dtype=bool)
 
         # Print configuration for debugging
-        print(f"[Sb3TwoStageHerWrapper] Initialized with:")
+        print("[Sb3TwoStageHerWrapper] Initialized with:")
         print(f"  - obs_dim: {self.obs_dim}")
         print(f"  - player_pos_indices: {self.player_pos_indices}")
         print(f"  - ball_pos_indices: {self.ball_pos_indices}")
@@ -223,6 +223,21 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         distance = np.linalg.norm(player_pos - ball_pos, axis=-1)
         return distance < self.ball_hit_threshold
 
+    def _check_goal_scored(self, obs: np.ndarray) -> np.ndarray:
+        """Check if ball reached the opponent goal in each environment.
+
+        Args:
+            obs: Current observation
+
+        Returns:
+            Boolean array indicating goal scored this step
+        """
+        ball_pos = obs[..., self.ball_pos_indices[0] : self.ball_pos_indices[1]]
+        goal_pos = obs[..., self.goal_pos_indices[0] : self.goal_pos_indices[1]]
+
+        distance = np.linalg.norm(ball_pos - goal_pos, axis=-1)
+        return distance < self.goal_score_threshold
+
     def reset(self) -> dict[str, np.ndarray]:
         """Reset and return GoalEnv observation."""
         obs = self.venv.reset()
@@ -238,10 +253,6 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         self,
     ) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray, list[dict]]:
         """Wait for step and return GoalEnv observation.
-
-        IMPORTANT: This wrapper does NOT modify rewards or dones!
-        The env's reward manager and termination manager handle those.
-        This wrapper only restructures observations for HER.
 
         Returns:
             obs: Dict with observation, achieved_goal, desired_goal
@@ -266,11 +277,15 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         # Extract goal-based observations
         goal_obs = self._extract_goals(obs)
 
+        # Check goal scored (ball reached opponent goal)
+        goal_scored = self._check_goal_scored(obs)
+
         # Add goals and phase info to infos for HER
         for i, info in enumerate(infos):
             info["achieved_goal"] = goal_obs["achieved_goal"][i]
             info["desired_goal"] = goal_obs["desired_goal"][i]
             info["ball_hit"] = self.ball_hit[i]
+            info["goal_scored"] = bool(goal_scored[i])
             info["phase"] = "post_hit" if self.ball_hit[i] else "pre_hit"
 
             # Convert terminal_observation to dict format for HER
@@ -283,6 +298,7 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
                     terminal_obs, self.ball_hit[i]
                 )
                 info["terminal_ball_hit"] = self.ball_hit[i]
+                info["terminal_goal_scored"] = bool(goal_scored[i])
 
         # Reset ball_hit for environments that are done
         self.ball_hit[dones.astype(bool)] = False
