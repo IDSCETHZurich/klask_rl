@@ -1,25 +1,33 @@
-"""Two-Stage HER (Hindsight Experience Replay) wrapper for KLASK environment.
+"""Two-Stage Compound-Goal HER wrapper for KLASK environment.
 
-This wrapper implements a two-stage goal-conditioned learning approach:
+This wrapper implements a compound 4-dim goal approach for two-stage
+goal-conditioned learning with Hindsight Experience Replay (HER).
 
-Stage 1 (Pre-hit): Agent learns to hit the ball
-- achieved_goal: player XY position
-- desired_goal: ball XY position
-- HER relabels: "pretend you wanted to go where you ended up"
+Instead of switching goal semantics mid-episode (which breaks HER relabeling),
+both stages are encoded simultaneously in every transition:
 
-Stage 2 (Post-hit): Agent learns to score a goal
-- achieved_goal: ball XY position (where it ended up)
-- desired_goal: opponent goal center XY
-- HER relabels: "pretend the goal was where the ball ended up"
+    achieved_goal = [player_pos_xy, ball_pos_xy]   (4-dim)
+    desired_goal  = [ball_pos_xy, opponent_goal_xy] (4-dim)
 
-IMPORTANT: This wrapper does NOT modify observations or rewards!
-- Observations (including goal position) are provided by the env's observation manager
+Stage 1 (hit the ball):  achieved[0:2] vs desired[0:2]  →  player near ball?
+Stage 2 (score a goal):  achieved[2:4] vs desired[2:4]  →  ball near goal?
+
+compute_reward checks both halves independently:
+- Stage 1 success (player reached ball): ball_hit_reward
+- Stage 1 + Stage 2 success (ball also reached goal): ball_hit_reward + goal_score_reward
+
+With HER ``final`` strategy, relabeled desired_goal = final achieved_goal
+= [final_player_pos, final_ball_pos]. Both halves compare same-type
+quantities (player↔player, ball↔ball), so relabeling is always consistent.
+
+IMPORTANT: This wrapper does NOT modify observations or rewards from the env.
+- Observations are provided by the env's observation manager
 - Rewards (ball hit, goal scored) are provided by the env's reward manager
 - Terminations are provided by the env's termination manager
 
 This wrapper ONLY:
-1. Converts flat observations to GoalEnv dict format (observation, achieved_goal, desired_goal)
-2. Tracks ball_hit phase for goal extraction
+1. Converts flat observations to GoalEnv dict format with 4-dim compound goals
+2. Tracks ball_hit / goal_scored state for the info dict (metrics callback)
 3. Provides compute_reward for HER goal relabeling
 """
 
@@ -34,15 +42,16 @@ from stable_baselines3.common.vec_env import VecEnv, VecEnvWrapper
 
 
 class Sb3TwoStageHerWrapper(VecEnvWrapper):
-    """Vectorized two-stage HER wrapper for KLASK goal-scoring task.
+    """Vectorized compound-goal HER wrapper for KLASK two-stage task.
 
-    This wrapper converts the flat observation from the environment into
-    the GoalEnv dict format required by HER, implementing two-stage goal logic:
+    Uses a 4-dim compound goal that encodes both stages simultaneously,
+    avoiding the semantic inconsistency of switching goal meanings mid-episode.
 
-    1. Pre-hit phase: achieved=player_pos, desired=ball_pos
-    2. Post-hit phase: achieved=ball_pos, desired=opponent_goal
+    Compound goal layout:
+        achieved_goal = [player_pos_x, player_pos_y, ball_pos_x, ball_pos_y]
+        desired_goal  = [ball_pos_x,   ball_pos_y,   goal_x,     goal_y    ]
 
-    The observation space from the wrapped env should already include:
+    The observation space from the wrapped env should include:
     - player_pos (2): indices 0-1
     - player_vel (2): indices 2-3
     - opponent_pos (2): indices 4-5
@@ -51,9 +60,6 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
     - ball_vel (2): indices 10-11
     - opponent_goal (2): indices 12-13
     Total: 14 dimensions
-
-    This wrapper does NOT modify the observations or rewards - it only
-    restructures them for HER compatibility.
     """
 
     def __init__(
@@ -66,21 +72,21 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         # Thresholds for phase detection and HER reward computation
         ball_hit_threshold: float = 0.02,  # distance for ball hit detection
         goal_score_threshold: float = 0.025,  # distance for goal scoring
-        # Reward scales (must match environment reward weights)
+        # Reward scales for HER virtual transitions
         ball_hit_reward: float = 0.0,  # reward for hitting ball
         goal_score_reward: float = 0.0,  # reward for scoring goal
     ):
-        """Initialize the two-stage HER wrapper.
+        """Initialize the compound-goal two-stage HER wrapper.
 
         Args:
             venv: The Sb3VecEnvWrapper environment (a VecEnv)
             player_pos_indices: Start and end indices for player position in obs
             ball_pos_indices: Start and end indices for ball position in obs
             goal_pos_indices: Start and end indices for opponent goal position in obs
-            ball_hit_threshold: Distance threshold for ball hit detection
-            goal_score_threshold: Distance threshold for goal scoring
-            ball_hit_reward: Reward scale for ball hit (should match env reward weight)
-            goal_score_reward: Reward scale for goal scoring (should match env reward weight)
+            ball_hit_threshold: Distance threshold for stage 1 (player hit ball)
+            goal_score_threshold: Distance threshold for stage 2 (ball in goal)
+            ball_hit_reward: HER reward for stage 1 success
+            goal_score_reward: HER reward for stage 1 + stage 2 success (added on top)
         """
         self.player_pos_indices = player_pos_indices
         self.ball_pos_indices = ball_pos_indices
@@ -109,9 +115,10 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
                 "Make sure to use TwoStageHerObservationsCfg which includes opponent_goal"
             )
 
-        goal_dim = 2  # XY position
+        # Compound goal: [player_pos(2), ball_pos(2)] and [ball_pos(2), goal_pos(2)]
+        goal_dim = 4
 
-        # Create GoalEnv observation space (same obs, just restructured)
+        # Create GoalEnv observation space with 4-dim compound goals
         observation_space = spaces.Dict(
             {
                 "observation": spaces.Box(
@@ -129,25 +136,31 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         # Initialize parent VecEnvWrapper
         super().__init__(venv, observation_space=observation_space)
 
-        # Track ball hit state per environment
+        # Track ball hit state per environment (for info dict / metrics only)
         self.num_envs = venv.num_envs
         self.ball_hit = np.zeros(self.num_envs, dtype=bool)
 
         # Print configuration for debugging
-        print("[Sb3TwoStageHerWrapper] Initialized with:")
+        print("[Sb3TwoStageHerWrapper] Initialized with COMPOUND 4-dim goals:")
         print(f"  - obs_dim: {self.obs_dim}")
+        print(f"  - goal_dim: {goal_dim}")
         print(f"  - player_pos_indices: {self.player_pos_indices}")
         print(f"  - ball_pos_indices: {self.ball_pos_indices}")
         print(f"  - goal_pos_indices: {self.goal_pos_indices}")
         print(f"  - ball_hit_threshold: {self.ball_hit_threshold}")
         print(f"  - goal_score_threshold: {self.goal_score_threshold}")
+        print(f"  - ball_hit_reward: {self.ball_hit_reward}")
+        print(f"  - goal_score_reward: {self.goal_score_reward}")
+
+    # ------------------------------------------------------------------
+    # Goal extraction (no phase branching — always the same layout)
+    # ------------------------------------------------------------------
 
     def _extract_goals(self, obs: np.ndarray) -> dict[str, np.ndarray]:
-        """Extract achieved and desired goals based on current phase.
+        """Extract compound 4-dim achieved/desired goals from observations.
 
-        The goal extraction depends on whether the ball has been hit:
-        - Pre-hit: achieved=player_pos, desired=ball_pos
-        - Post-hit: achieved=ball_pos, desired=opponent_goal (from obs)
+        achieved_goal = [player_pos_xy, ball_pos_xy]
+        desired_goal  = [ball_pos_xy,   opponent_goal_xy]
 
         Args:
             obs: Observation array of shape (num_envs, obs_dim)
@@ -159,19 +172,8 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         ball_pos = obs[..., self.ball_pos_indices[0] : self.ball_pos_indices[1]]
         goal_pos = obs[..., self.goal_pos_indices[0] : self.goal_pos_indices[1]]
 
-        # Initialize goals arrays
-        achieved_goal = np.zeros((obs.shape[0], 2), dtype=np.float32)
-        desired_goal = np.zeros((obs.shape[0], 2), dtype=np.float32)
-
-        # Pre-hit envs: achieved=player, desired=ball
-        pre_hit_mask = ~self.ball_hit
-        achieved_goal[pre_hit_mask] = player_pos[pre_hit_mask]
-        desired_goal[pre_hit_mask] = ball_pos[pre_hit_mask]
-
-        # Post-hit envs: achieved=ball, desired=opponent_goal
-        post_hit_mask = self.ball_hit
-        achieved_goal[post_hit_mask] = ball_pos[post_hit_mask]
-        desired_goal[post_hit_mask] = goal_pos[post_hit_mask]
+        achieved_goal = np.concatenate([player_pos, ball_pos], axis=-1)
+        desired_goal = np.concatenate([ball_pos, goal_pos], axis=-1)
 
         return {
             "observation": obs.astype(np.float32),
@@ -179,14 +181,11 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
             "desired_goal": desired_goal.astype(np.float32),
         }
 
-    def _extract_goals_single(
-        self, obs: np.ndarray, ball_hit: bool
-    ) -> dict[str, np.ndarray]:
-        """Extract goals from a single observation (for terminal_observation).
+    def _extract_goals_single(self, obs: np.ndarray) -> dict[str, np.ndarray]:
+        """Extract compound goals from a single observation (for terminal_observation).
 
         Args:
             obs: Single observation (1D array)
-            ball_hit: Whether ball was hit in this env
 
         Returns:
             Dict with goal-env formatted observation
@@ -195,12 +194,8 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         ball_pos = obs[self.ball_pos_indices[0] : self.ball_pos_indices[1]]
         goal_pos = obs[self.goal_pos_indices[0] : self.goal_pos_indices[1]]
 
-        if ball_hit:
-            achieved_goal = ball_pos
-            desired_goal = goal_pos
-        else:
-            achieved_goal = player_pos
-            desired_goal = ball_pos
+        achieved_goal = np.concatenate([player_pos, ball_pos])
+        desired_goal = np.concatenate([ball_pos, goal_pos])
 
         return {
             "observation": obs.astype(np.float32),
@@ -208,35 +203,27 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
             "desired_goal": desired_goal.astype(np.float32),
         }
 
+    # ------------------------------------------------------------------
+    # Ball hit / goal scored detection (for info dict & metrics only)
+    # ------------------------------------------------------------------
+
     def _check_ball_hit(self, obs: np.ndarray) -> np.ndarray:
-        """Check if player hit the ball in each environment.
-
-        Args:
-            obs: Current observation
-
-        Returns:
-            Boolean array indicating ball hit this step
-        """
+        """Check if player hit the ball in each environment."""
         player_pos = obs[..., self.player_pos_indices[0] : self.player_pos_indices[1]]
         ball_pos = obs[..., self.ball_pos_indices[0] : self.ball_pos_indices[1]]
-
         distance = np.linalg.norm(player_pos - ball_pos, axis=-1)
         return distance < self.ball_hit_threshold
 
     def _check_goal_scored(self, obs: np.ndarray) -> np.ndarray:
-        """Check if ball reached the opponent goal in each environment.
-
-        Args:
-            obs: Current observation
-
-        Returns:
-            Boolean array indicating goal scored this step
-        """
+        """Check if ball reached the opponent goal in each environment."""
         ball_pos = obs[..., self.ball_pos_indices[0] : self.ball_pos_indices[1]]
         goal_pos = obs[..., self.goal_pos_indices[0] : self.goal_pos_indices[1]]
-
         distance = np.linalg.norm(ball_pos - goal_pos, axis=-1)
         return distance < self.goal_score_threshold
+
+    # ------------------------------------------------------------------
+    # VecEnv interface
+    # ------------------------------------------------------------------
 
     def reset(self) -> dict[str, np.ndarray]:
         """Reset and return GoalEnv observation."""
@@ -255,10 +242,10 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         """Wait for step and return GoalEnv observation.
 
         Returns:
-            obs: Dict with observation, achieved_goal, desired_goal
+            obs: Dict with observation, achieved_goal (4-dim), desired_goal (4-dim)
             rewards: Array of rewards (unchanged from env)
             dones: Array of done flags (unchanged from env)
-            infos: List of info dicts (with goal info added)
+            infos: List of info dicts (with goal info and ball_hit/goal_scored flags)
         """
         obs, rewards, dones, infos = self.venv.step_wait()
         if isinstance(obs, torch.Tensor):
@@ -268,23 +255,21 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         if isinstance(dones, torch.Tensor):
             dones = dones.cpu().numpy()
 
-        # Detect ball hit (new hits only, not already hit)
+        # Detect ball hit (new hits only, not already hit) — for info/metrics
         just_hit_ball = self._check_ball_hit(obs) & ~self.ball_hit
-
-        # Update ball hit state (sticky until reset)
         self.ball_hit = self.ball_hit | just_hit_ball
 
-        # Extract goal-based observations
-        goal_obs = self._extract_goals(obs)
-
-        # Check goal scored (ball reached opponent goal)
+        # Check goal scored — for info/metrics
         goal_scored = self._check_goal_scored(obs)
 
-        # Add goals and phase info to infos for HER
+        # Extract compound goal observations (no phase branching)
+        goal_obs = self._extract_goals(obs)
+
+        # Add goals and tracking info for HER and metrics callback
         for i, info in enumerate(infos):
             info["achieved_goal"] = goal_obs["achieved_goal"][i]
             info["desired_goal"] = goal_obs["desired_goal"][i]
-            info["ball_hit"] = self.ball_hit[i]
+            info["ball_hit"] = bool(self.ball_hit[i])
             info["goal_scored"] = bool(goal_scored[i])
             info["phase"] = "post_hit" if self.ball_hit[i] else "pre_hit"
 
@@ -293,11 +278,8 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
                 terminal_obs = info["terminal_observation"]
                 if isinstance(terminal_obs, torch.Tensor):
                     terminal_obs = terminal_obs.cpu().numpy()
-                # Use the ball_hit state at termination for goal extraction
-                info["terminal_observation"] = self._extract_goals_single(
-                    terminal_obs, self.ball_hit[i]
-                )
-                info["terminal_ball_hit"] = self.ball_hit[i]
+                info["terminal_observation"] = self._extract_goals_single(terminal_obs)
+                info["terminal_ball_hit"] = bool(self.ball_hit[i])
                 info["terminal_goal_scored"] = bool(goal_scored[i])
 
         # Reset ball_hit for environments that are done
@@ -305,52 +287,57 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
 
         return goal_obs, rewards, dones, infos
 
+    # ------------------------------------------------------------------
+    # HER compute_reward (compound 4-dim goals)
+    # ------------------------------------------------------------------
+
     def compute_reward(
         self,
         achieved_goal: np.ndarray,
         desired_goal: np.ndarray,
         info: dict[str, Any],
     ) -> np.ndarray:
-        """Compute sparse reward for HER goal relabeling.
+        """Compute sparse reward for HER goal relabeling with compound goals.
 
-        This method is called by HER to compute rewards for relabeled goals.
+        Both stages are checked independently from the 4-dim goals:
+            Stage 1: distance(achieved[0:2], desired[0:2]) — player near target ball pos
+            Stage 2: distance(achieved[2:4], desired[2:4]) — ball near target goal pos
 
-        IMPORTANT: Returns reward scales matching the environment to maintain
-        consistent value function learning. The reward scale depends on the phase:
-        - Pre-hit phase (player -> ball): ball_hit_reward (500.0)
-        - Post-hit phase (ball -> goal): goal_score_reward (5000.0)
+        Reward structure (hierarchical):
+            - Neither stage succeeded:  0
+            - Stage 1 only:             ball_hit_reward
+            - Stage 1 + Stage 2:        ball_hit_reward + goal_score_reward
 
-        For two-stage HER:
-        - Pre-hit phase: player reached ball position -> success
-        - Post-hit phase: ball reached goal position -> success
+        Stage 2 reward requires stage 1 success (must hit ball before scoring counts).
 
         Args:
-            achieved_goal: The goal that was actually achieved
-            desired_goal: The goal that was desired (possibly relabeled by HER)
-            info: Additional info (unused, but could contain phase info)
+            achieved_goal: shape (..., 4) = [player_pos_xy, ball_pos_xy]
+            desired_goal:  shape (..., 4) = [target_ball_xy, target_goal_xy]
+            info: Additional info (unused)
 
         Returns:
-            Sparse reward with proper scaling based on goal distance thresholds
+            Sparse reward array
         """
-        distance = np.linalg.norm(achieved_goal - desired_goal, axis=-1)
+        # Stage 1: player reached target ball position
+        stage1_dist = np.linalg.norm(
+            achieved_goal[..., :2] - desired_goal[..., :2], axis=-1
+        )
+        stage1_success = stage1_dist < self.ball_hit_threshold
 
-        # Determine reward scale based on distance threshold
-        # If within ball_hit_threshold -> pre-hit phase reward
-        # If within goal_score_threshold -> post-hit phase reward
-        # Use conservative approach: check both thresholds
-        ball_hit_success = distance < self.ball_hit_threshold
-        goal_score_success = distance < self.goal_score_threshold
+        # Stage 2: ball reached target goal position
+        stage2_dist = np.linalg.norm(
+            achieved_goal[..., 2:] - desired_goal[..., 2:], axis=-1
+        )
+        stage2_success = stage2_dist < self.goal_score_threshold
 
-        # Apply appropriate reward scale
-        # For simplicity, use goal_score_reward for very close distances (goal scoring)
-        # and ball_hit_reward for moderate distances (ball hitting)
+        # Hierarchical reward: stage 2 only counts if stage 1 also succeeded
         reward = np.where(
-            goal_score_success,
-            self.goal_score_reward,  # Very close -> goal reward
+            stage1_success & stage2_success,
+            self.ball_hit_reward + self.goal_score_reward,
             np.where(
-                ball_hit_success,
-                self.ball_hit_reward,  # Moderately close -> ball hit reward
-                0.0,  # Too far -> no reward
+                stage1_success,
+                self.ball_hit_reward,
+                0.0,
             ),
         )
 
