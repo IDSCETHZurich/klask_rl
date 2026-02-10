@@ -111,5 +111,6 @@ class TerminationsCfgTwoStageHer:
         params={
             "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
             "ball_cfg": SceneEntityCfg("ball"),
+            "timeout": 0.5,
         },
     )

@@ -496,7 +496,7 @@ class ExperimentConfig:
         # Termination overrides (for two-stage HER)
         if self.ball_hit_timeout is not None:
             overrides.append(
-                f"env.terminations.ball_hit_timeout.params.timeout={self.ball_hit_timeout}"
+                f"env.terminations.ball_hit_timeout_term.params.timeout={self.ball_hit_timeout}"
             )
 
         # Agent overrides - only fields that exist in base sb3_sac_cfg.yaml
