@@ -41,6 +41,8 @@ class ExperimentConfig:
     num_envs: int = 4096
     seed: int = 42
     max_velocity: float = 0.2
+    episode_length_s: float = 4.0
+    ball_hit_timeout: float = 0.5
 
     # Agent config (SAC hyperparameters) - stored as dict for flexibility
     agent_cfg: dict[str, Any] = field(default_factory=dict)
@@ -264,6 +266,8 @@ class ExperimentConfig:
         num_envs = env_cfg.get("num_envs", 4096)
         seed = env_cfg.get("seed", 42)
         max_velocity = env_cfg.get("max_velocity", 0.2)
+        episode_length_s = env_cfg.get("episode_length_s")
+        ball_hit_timeout = env_cfg.get("ball_hit_timeout")
 
         # Extract agent config (SAC hyperparameters)
         agent_cfg = dict(data.get("agent", {}))
@@ -302,6 +306,8 @@ class ExperimentConfig:
             num_envs=num_envs,
             seed=seed,
             max_velocity=max_velocity,
+            episode_length_s=episode_length_s,
+            ball_hit_timeout=ball_hit_timeout,
             agent_cfg=agent_cfg,
             her_cfg=her_cfg,
             two_stage_cfg=two_stage_cfg,
@@ -394,13 +400,15 @@ class ExperimentConfig:
             matched = False
             for prefix, cfg_attr in override_prefixes.items():
                 if key.startswith(prefix):
-                    param_name = key[len(prefix):]
+                    param_name = key[len(prefix) :]
                     cfg_dict = getattr(self, cfg_attr)
                     if cfg_dict is None:
                         cfg_dict = {}
                         setattr(self, cfg_attr, cfg_dict)
                     cfg_dict[param_name] = self._parse_cli_value(raw_value)
-                    print(f"[INFO] CLI override: {cfg_attr}.{param_name} = {cfg_dict[param_name]}")
+                    print(
+                        f"[INFO] CLI override: {cfg_attr}.{param_name} = {cfg_dict[param_name]}"
+                    )
                     matched = True
                     break
 
@@ -428,7 +436,9 @@ class ExperimentConfig:
             inner = raw[1:-1].strip()
             if not inner:
                 return []
-            items = [ExperimentConfig._parse_cli_value(v.strip()) for v in inner.split(",")]
+            items = [
+                ExperimentConfig._parse_cli_value(v.strip()) for v in inner.split(",")
+            ]
             return items
 
         # Int
@@ -476,9 +486,18 @@ class ExperimentConfig:
         if self.num_envs is not None:
             overrides.append(f"env.scene.num_envs={self.num_envs}")
 
+        if self.episode_length_s is not None:
+            overrides.append(f"env.episode_length_s={self.episode_length_s}")
+
         device = self.app_launcher.get("device")
         if device is not None:
             overrides.append(f"env.sim.device={device}")
+
+        # Termination overrides (for two-stage HER)
+        if self.ball_hit_timeout is not None:
+            overrides.append(
+                f"env.terminations.ball_hit_timeout.params.timeout={self.ball_hit_timeout}"
+            )
 
         # Agent overrides - only fields that exist in base sb3_sac_cfg.yaml
         # to avoid Hydra struct mode errors. Other fields are merged directly.
@@ -613,6 +632,8 @@ class ExperimentConfig:
                 "num_envs": self.num_envs,
                 "seed": self.seed,
                 "max_velocity": self.max_velocity,
+                "episode_length_s": self.episode_length_s,
+                "ball_hit_timeout": self.ball_hit_timeout,
             },
             "agent": self.agent_cfg,
             "her": self.her_cfg,

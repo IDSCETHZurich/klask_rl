@@ -11,6 +11,7 @@ from klask_rl.assets.robots.klask import KLASK_PARAMS
 from ..utils_manager_based import (
     reset_joints_by_offset,
     reset_ball_hit_tracking,
+    reset_ball_hit_timer,
 )
 
 
@@ -145,6 +146,12 @@ class EventCfg:
 
     reset_ball_hit_flag = EventTerm(
         func=reset_ball_hit_tracking,
+        mode="reset",
+        params={},
+    )
+
+    reset_ball_hit_timer_event = EventTerm(
+        func=reset_ball_hit_timer,
         mode="reset",
         params={},
     )

@@ -30,6 +30,82 @@ def reset_ball_hit_tracking(
     env.ball_hit_this_episode[env_ids] = False
 
 
+def reset_ball_hit_timer(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+):
+    """Reset the ball hit timer for specified environments.
+
+    This should be called on environment reset to clear the timer tracking,
+    allowing the timeout termination to work correctly in the new episode.
+
+    Args:
+        env: The environment instance
+        env_ids: The environment IDs to reset
+    """
+    # Initialize the timer buffer if it doesn't exist
+    if not hasattr(env, "ball_hit_timer"):
+        env.ball_hit_timer = torch.full(
+            (env.num_envs,), -1.0, dtype=torch.float32, device=env.device
+        )
+
+    # Reset the timer for the specified environments (-1.0 means not hit yet)
+    env.ball_hit_timer[env_ids] = -1.0
+
+
+def ball_hit_timeout(
+    env: ManagerBasedRLEnv,
+    player_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    timeout: float = 0.5,
+    eps: float = 0.017,
+    min_relative_vel: float = 0.08,
+    min_ball_speed: float = 0.01,
+) -> torch.Tensor:
+    """Terminate episode after specified timeout following ball hit.
+
+    This function tracks when the ball is hit and terminates the episode
+    after the specified timeout duration. The timer starts on first collision
+    and counts down using the simulation timestep.
+
+    Args:
+        env: The environment instance
+        player_cfg: Configuration for the player entity
+        ball_cfg: Configuration for the ball entity
+        timeout: Time in seconds after ball hit to terminate (default: 0.5)
+        eps: Distance threshold for collision detection (default: 0.017)
+        min_relative_vel: Minimum relative velocity to count as hit (default: 0.08 m/s)
+        min_ball_speed: Minimum ball speed to count as hit (default: 0.01 m/s)
+
+    Returns:
+        Boolean tensor indicating which environments should terminate
+    """
+    # Initialize the timer buffer if it doesn't exist
+    if not hasattr(env, "ball_hit_timer"):
+        env.ball_hit_timer = torch.full(
+            (env.num_envs,), -1.0, dtype=torch.float32, device=env.device
+        )
+
+    # Check for collision
+    collision_now = collision_player_ball_bool(
+        env, player_cfg, ball_cfg, eps, min_relative_vel, min_ball_speed
+    )
+
+    # Start timer on first collision (timer == -1.0 means not started)
+    not_started = env.ball_hit_timer < 0.0
+    env.ball_hit_timer[collision_now & not_started] = 0.0
+
+    # Update timer for environments where ball was hit
+    hit_envs = env.ball_hit_timer >= 0.0
+    if hit_envs.any():
+        env.ball_hit_timer[hit_envs] += env.step_dt
+
+    # Terminate if timeout reached
+    should_terminate = env.ball_hit_timer >= timeout
+
+    return should_terminate
+
+
 def reset_joints_by_offset(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,

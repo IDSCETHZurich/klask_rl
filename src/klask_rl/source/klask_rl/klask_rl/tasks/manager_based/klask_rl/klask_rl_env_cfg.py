@@ -87,7 +87,6 @@ class KlaskRlSacEnvCfg(KlaskRlEnvCfg):
     events = EventCfgSac()
     rewards = RewardsCfgDenseBallHit()
     terminations = TerminationsCfgSac()
-    episode_length_s = 4.0
 
     def __post_init__(self):
         """Post initialization."""
@@ -120,7 +119,6 @@ class KlaskRlHerSacEnvCfg(KlaskRlSacEnvCfg):
     events = EventCfgSac()
     rewards = RewardsCfgSparseHer()  # Sparse reward for HER
     terminations = TerminationsCfgSac()
-    episode_length_s = 4.0
 
     def __post_init__(self):
         """Post initialization."""
@@ -155,7 +153,6 @@ class KlaskRlTwoStageHerEnvCfg(KlaskRlEnvCfg):
     events = EventCfgSac()
     rewards = RewardsCfgTwoStageHer()
     terminations = TerminationsCfgTwoStageHer()
-    episode_length_s = 4.0
 
     def __post_init__(self):
         """Post initialization."""
