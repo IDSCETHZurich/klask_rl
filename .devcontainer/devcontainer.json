@@ -1,30 +1,29 @@
 {
-    "name": "isaac-lab-local",
-    "image": "nvcr.io/nvidia/isaac-lab:2.3.1",
+    "name": "isaac-lab-klask-rl:local",
+    "image": "isaac-lab-klask-rl:local",
     "runArgs": [
         "--rm",
         "--gpus=all",
         "--network=host",
-        "--name=isaac-lab-local",
+        "--name=isaac-lab-klask-rl-local",
         "--env-file=.devcontainer/devcontainer.env"
     ],
     "containerEnv": {
         "ACCEPT_EULA": "Y",
         "PRIVACY_CONSENT": "Y",
         "DISPLAY": "${localEnv:DISPLAY}",
-        "LIVESTREAM": "1",
-        "PUBLIC_IP": "100.121.89.49"
+        "LIVESTREAM": "1"
     },
     "mounts": [
         "source=${localEnv:HOME}/.Xauthority,target=/root/.Xauthority,type=bind",
-        "source=isaac-lab-local_cache_kit,target=/isaac-sim/kit/cache,type=volume",
-        "source=isaac-lab-local_cache_ov,target=/root/.cache/ov,type=volume",
-        "source=isaac-lab-local_cache_pip,target=/root/.cache/pip,type=volume",
-        "source=isaac-lab-local_cache_glcache,target=/root/.cache/nvidia/GLCache,type=volume",
-        "source=isaac-lab-local_cache_computecache,target=/root/.nv/ComputeCache,type=volume",
-        "source=isaac-lab-local_logs,target=/root/.nvidia-omniverse/logs,type=volume",
-        "source=isaac-lab-local_data,target=/root/.local/share/ov/data,type=volume",
-        "source=isaac-lab-local_documents,target=/root/Documents,type=volume",
+        "source=isaac-lab-klask-rl-local_cache_kit,target=/isaac-sim/kit/cache,type=volume",
+        "source=isaac-lab-klask-rl-local_cache_ov,target=/root/.cache/ov,type=volume",
+        "source=isaac-lab-klask-rl-local_cache_pip,target=/root/.cache/pip,type=volume",
+        "source=isaac-lab-klask-rl-local_cache_glcache,target=/root/.cache/nvidia/GLCache,type=volume",
+        "source=isaac-lab-klask-rl-local_cache_computecache,target=/root/.nv/ComputeCache,type=volume",
+        "source=isaac-lab-klask-rl-local_logs,target=/root/.nvidia-omniverse/logs,type=volume",
+        "source=isaac-lab-klask-rl-local_data,target=/root/.local/share/ov/data,type=volume",
+        "source=isaac-lab-klask-rl-local_documents,target=/root/Documents,type=volume",
         "source=${localWorkspaceFolder}/third_party/dreamerv3-torch,target=/workspace/dreamerv3-torch,type=bind"
     ],
     "workspaceFolder": "/workspace/klask_rl",
@@ -78,5 +77,6 @@
                 ]
             }
         }
-    }
+    },
+    "postStartCommand": "bash /entrypoint.sh"
 }
