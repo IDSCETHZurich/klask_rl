@@ -25,4 +25,5 @@ docker run -it --rm \
    --volume="${CONTAINER_NAME}_data:/root/.local/share/ov/data:rw" \
    --volume="${CONTAINER_NAME}_documents:/root/Documents:rw" \
    --volume="$SCRIPT_DIR/../src/klask_rl:/workspace/klask_rl:rw" \
+   --volume="$SCRIPT_DIR/../third_party/dreamerv3-torch:/workspace/dreamerv3-torch:rw" \
    nvcr.io/nvidia/isaac-lab:2.3.1

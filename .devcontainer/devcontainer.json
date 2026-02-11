@@ -24,7 +24,8 @@
         "source=isaac-lab-local_cache_computecache,target=/root/.nv/ComputeCache,type=volume",
         "source=isaac-lab-local_logs,target=/root/.nvidia-omniverse/logs,type=volume",
         "source=isaac-lab-local_data,target=/root/.local/share/ov/data,type=volume",
-        "source=isaac-lab-local_documents,target=/root/Documents,type=volume"
+        "source=isaac-lab-local_documents,target=/root/Documents,type=volume",
+        "source=${localWorkspaceFolder}/third_party/dreamerv3-torch,target=/workspace/dreamerv3-torch,type=bind"
     ],
     "workspaceFolder": "/workspace/klask_rl",
     "workspaceMount": "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",
