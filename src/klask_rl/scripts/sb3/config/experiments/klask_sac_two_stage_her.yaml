@@ -29,7 +29,7 @@ env:
   seed: 42
   max_velocity: 0.2 # [m/s] Maximum velocity for player movement
   episode_length_s: 4.0 # [s] Episode length in seconds
-  ball_hit_timeout: 0.5 # [s] Time after ball hit to terminate episode
+  ball_hit_timeout: 1.0 # [s] Time after ball hit to terminate episode
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # AGENT - SAC Hyperparameters
@@ -64,7 +64,7 @@ agent:
   normalize_input: false
 
   # Training duration
-  n_timesteps: 1_000_000_000
+  n_timesteps: 500_000_000
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # HER (Hindsight Experience Replay) - Two-Stage Configuration
@@ -85,7 +85,7 @@ agent:
 her:
   goal_selection_strategy: final
   n_sampled_goal: 4
-  distance_threshold: 0.02 # Used by HER buffer
+  distance_threshold: 0.017 # Used by HER buffer
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # TWO-STAGE HER SPECIFIC SETTINGS
@@ -123,7 +123,7 @@ training:
 wandb:
   project: KLASK
   entity: null
-  name: sac-her-goal-scoring
+  name: sac-her-goal-scoring-1s-hit-term
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # SIMULATION - Isaac Sim App Launcher
