@@ -278,9 +278,15 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
                 terminal_obs = info["terminal_observation"]
                 if isinstance(terminal_obs, torch.Tensor):
                     terminal_obs = terminal_obs.cpu().numpy()
+                # Compute terminal flags from terminal_observation (pre-reset),
+                # NOT from obs (which is post-reset for done envs)
+                info["terminal_ball_hit"] = bool(
+                    self._check_ball_hit(terminal_obs.reshape(1, -1))[0]
+                ) or bool(self.ball_hit[i])
+                info["terminal_goal_scored"] = bool(
+                    self._check_goal_scored(terminal_obs.reshape(1, -1))[0]
+                )
                 info["terminal_observation"] = self._extract_goals_single(terminal_obs)
-                info["terminal_ball_hit"] = bool(self.ball_hit[i])
-                info["terminal_goal_scored"] = bool(goal_scored[i])
 
         # Reset ball_hit for environments that are done
         self.ball_hit[dones.astype(bool)] = False
