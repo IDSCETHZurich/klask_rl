@@ -1,0 +1,3 @@
+[submodule "third_party/dreamerv3-torch"]
+	path = third_party/dreamerv3-torch
+	url = git@github.com:MeierTobias/dreamerv3-torch.git
