@@ -27,9 +27,9 @@ task: Klask-Rl-TwoStage-HER-v0
 env:
   num_envs: 4096
   seed: 42
-  max_velocity: 0.2 # [m/s] Maximum velocity for player movement
+  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
   episode_length_s: 4.0 # [s] Episode length in seconds
-  ball_hit_timeout: 1.0 # [s] Time after ball hit to terminate episode
+  ball_hit_timeout: 2.0 # [s] Time after ball hit to terminate episode
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # AGENT - SAC Hyperparameters
@@ -123,7 +123,7 @@ training:
 wandb:
   project: KLASK
   entity: null
-  name: sac-her-goal-scoring-1s-hit-term
+  name: sac-her-goal-scoring-2s-hit-term-0.4m/s
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # SIMULATION - Isaac Sim App Launcher
