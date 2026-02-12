@@ -52,7 +52,7 @@ cmd_run() {
 
     echo -e "${GREEN}Starting container..."
 
-    xhost +local:root
+    # xhost +local:root
     docker run -it -d --rm \
         --name="${CONTAINER_NAME}" \
         --gpus=${GPUS} \
