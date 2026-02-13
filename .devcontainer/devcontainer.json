@@ -5,7 +5,7 @@
         "--rm",
         "--gpus=\"device=1,2,3\"",
         "--network=host",
-        "--name=isaac-lab-klask-rl-local",
+        "--name=isaac-lab-klask-rl-devcontainer",
         "--env-file=.devcontainer/devcontainer.env"
     ],
     "containerEnv": {
@@ -16,18 +16,18 @@
     },
     "mounts": [
         "source=${localEnv:HOME}/.Xauthority,target=/root/.Xauthority,type=bind",
-        "source=isaac-lab-klask-rl-local_cache_kit,target=/isaac-sim/kit/cache,type=volume",
-        "source=isaac-lab-klask-rl-local_cache_ov,target=/root/.cache/ov,type=volume",
-        "source=isaac-lab-klask-rl-local_cache_pip,target=/root/.cache/pip,type=volume",
-        "source=isaac-lab-klask-rl-local_cache_glcache,target=/root/.cache/nvidia/GLCache,type=volume",
-        "source=isaac-lab-klask-rl-local_cache_computecache,target=/root/.nv/ComputeCache,type=volume",
-        "source=isaac-lab-klask-rl-local_logs,target=/root/.nvidia-omniverse/logs,type=volume",
-        "source=isaac-lab-klask-rl-local_data,target=/root/.local/share/ov/data,type=volume",
-        "source=isaac-lab-klask-rl-local_documents,target=/root/Documents,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_cache_kit,target=/isaac-sim/kit/cache,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_cache_ov,target=/root/.cache/ov,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_cache_pip,target=/root/.cache/pip,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_cache_glcache,target=/root/.cache/nvidia/GLCache,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_cache_computecache,target=/root/.nv/ComputeCache,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_logs,target=/root/.nvidia-omniverse/logs,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_data,target=/root/.local/share/ov/data,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_documents,target=/root/Documents,type=volume",
+        "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",
         "source=${localWorkspaceFolder}/third_party/dreamerv3-torch,target=/workspace/dreamerv3-torch,type=bind"
     ],
-    "workspaceFolder": "/workspace/klask_rl",
-    "workspaceMount": "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",
+    "workspaceFolder": "/workspace",
     "customizations": {
         "vscode": {
             "extensions": [
