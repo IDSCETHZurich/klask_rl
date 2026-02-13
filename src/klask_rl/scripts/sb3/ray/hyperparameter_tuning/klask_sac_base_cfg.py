@@ -13,12 +13,20 @@ For usage with Isaac Lab's tuner:
     cd /workspace/isaaclab
     ./isaaclab.sh -p scripts/reinforcement_learning/ray/tuner.py --run_mode local \\
         --cfg_file /workspace/klask_rl/scripts/sb3/ray/hyperparameter_tuning/klask_sac_base_cfg.py \\
-        --cfg_class KlaskSacHerTuneJobCfg \\
+        --cfg_class KlaskSacTwoStageHerJobCfg \\
         --num_samples 8 \\
         --workflow /workspace/klask_rl/scripts/sb3/train_sac.py \\
-        --metric rollout_ep_rew_mean
+        --metric two_stage_goal_scores_count
+    
+    Available metrics for two-stage HER (Ray Tune converts / to _):
+        - rollout_ep_rew_mean: Average episode reward (default)
+        - two_stage_goal_scores_count: Number of envs that scored goals per rollout
+        - two_stage_goal_score_rate: Fraction of envs that scored goals
+        - two_stage_ball_hits_count: Number of envs that hit the ball
+        - two_stage_ball_hit_rate: Fraction of envs that hit the ball
 """
 
+import numpy as np
 from ray import tune
 
 
@@ -106,11 +114,40 @@ class KlaskSacTwoStageHerJobCfg:
                 "--config": "experiments/klask_sac_two_stage_her.yaml",
             },
             "hydra_args": {
-                "agent.learning_rate": tune.loguniform(1e-5, 3e-4),
-                "agent.gamma": tune.uniform(0.95, 0.995),
-                "agent.tau": tune.loguniform(1e-3, 2e-2),
-                "agent.policy_kwargs.net_arch": tune.choice([[64, 64], [256, 128, 64]]),
+                "agent.learning_rate": tune.loguniform(1e-5, 3e-3),
+                "agent.buffer_size": tune.choice([500_000, 1_000_000, 10_000_000]),
+                "agent.batch_size": tune.choice([1024, 2048]),
+                "agent.train_freq": tune.choice([32, 64, 128]),
+                "agent.gradient_steps": tune.choice([32, 64, 128]),
+                "agent.policy_kwargs.net_arch": tune.choice(
+                    [
+                        [256, 128, 64],
+                        [256, 256, 128, 64],
+                        [512, 256, 128, 64],
+                        [256, 128, 64, 64],
+                    ]
+                ),
                 "her.n_sampled_goal": tune.choice([2, 4, 8]),
-                "her.goal_selection_strategy": tune.choice(["final", "future"]),
+                "two_stage.ball_hit_timeout": tune.choice([0.5, 1.0, 2.0]),
+                "two_stage.ball_hit_env_reward": tune.loguniform(1.0, 1000.0),
+                "two_stage.goal_score_env_reward": tune.sample_from(
+                    lambda spec: np.exp(
+                        np.random.uniform(
+                            np.log(spec["hydra_args"]["two_stage.ball_hit_env_reward"]),
+                            np.log(10000.0),
+                        )
+                    )
+                ),
+                "two_stage.ball_hit_wrapper_reward": tune.loguniform(1.0, 1000.0),
+                "two_stage.goal_score_wrapper_reward": tune.sample_from(
+                    lambda spec: np.exp(
+                        np.random.uniform(
+                            np.log(
+                                spec["hydra_args"]["two_stage.ball_hit_wrapper_reward"]
+                            ),
+                            np.log(10000.0),
+                        )
+                    )
+                ),
             },
         }

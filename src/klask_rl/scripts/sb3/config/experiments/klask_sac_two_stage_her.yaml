@@ -27,9 +27,8 @@ task: Klask-Rl-TwoStage-HER-v0
 env:
   num_envs: 4096
   seed: 42
-  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
+  max_velocity: 0.6 # [m/s] Maximum velocity for player movement
   episode_length_s: 4.0 # [s] Episode length in seconds
-  ball_hit_timeout: 2.0 # [s] Time after ball hit to terminate episode
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # AGENT - SAC Hyperparameters
@@ -64,7 +63,7 @@ agent:
   normalize_input: false
 
   # Training duration
-  n_timesteps: 500_000_000
+  n_timesteps: 200_000_000
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # HER (Hindsight Experience Replay) - Two-Stage Configuration
@@ -100,6 +99,9 @@ two_stage:
   ball_hit_threshold: 0.017 # Distance for ball hit detection
   goal_score_threshold: 0.025 # Distance for goal scoring
 
+  # Timeout after ball hit
+  ball_hit_timeout: 2.0 # [s] Time after ball hit to terminate episode
+
   # Reward scales - Environment rewards (RewardsCfgTwoStageHer weights)
   ball_hit_env_reward: 500.0 # collision_player_ball weight
   goal_score_env_reward: 1000.0 # goal_scored weight
@@ -123,7 +125,7 @@ training:
 wandb:
   project: KLASK
   entity: null
-  name: sac-her-goal-scoring-2s-hit-term-0.4m/s-nn256x128x64-easy
+  name: sac-her-goal-scoring-tuning
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # SIMULATION - Isaac Sim App Launcher
@@ -132,7 +134,7 @@ app_launcher:
   headless: true
   livestream: 1
   enable_cameras: false
-  device: cuda:3
+  device: cuda:0
   xr: false
   experience: ""
   rendering_mode: balanced

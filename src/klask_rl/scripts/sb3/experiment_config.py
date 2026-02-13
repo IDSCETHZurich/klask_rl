@@ -42,7 +42,6 @@ class ExperimentConfig:
     seed: int = 42
     max_velocity: float = 0.2
     episode_length_s: float = 4.0
-    ball_hit_timeout: float = 0.5
 
     # Agent config (SAC hyperparameters) - stored as dict for flexibility
     agent_cfg: dict[str, Any] = field(default_factory=dict)
@@ -195,6 +194,14 @@ class ExperimentConfig:
             else None
         )
 
+    @property
+    def two_stage_ball_hit_timeout(self) -> float | None:
+        return (
+            self.two_stage_cfg.get("ball_hit_timeout")
+            if self.two_stage_cfg
+            else None
+        )
+
     # Wandb property accessors
     @property
     def wandb_project(self) -> str | None:
@@ -267,7 +274,6 @@ class ExperimentConfig:
         seed = env_cfg.get("seed", 42)
         max_velocity = env_cfg.get("max_velocity", 0.2)
         episode_length_s = env_cfg.get("episode_length_s")
-        ball_hit_timeout = env_cfg.get("ball_hit_timeout")
 
         # Extract agent config (SAC hyperparameters)
         agent_cfg = dict(data.get("agent", {}))
@@ -307,7 +313,6 @@ class ExperimentConfig:
             seed=seed,
             max_velocity=max_velocity,
             episode_length_s=episode_length_s,
-            ball_hit_timeout=ball_hit_timeout,
             agent_cfg=agent_cfg,
             her_cfg=her_cfg,
             two_stage_cfg=two_stage_cfg,
@@ -494,9 +499,9 @@ class ExperimentConfig:
             overrides.append(f"env.sim.device={device}")
 
         # Termination overrides (for two-stage HER)
-        if self.ball_hit_timeout is not None:
+        if self.two_stage_ball_hit_timeout is not None:
             overrides.append(
-                f"env.terminations.ball_hit_timeout_term.params.timeout={self.ball_hit_timeout}"
+                f"env.terminations.ball_hit_timeout_term.params.timeout={self.two_stage_ball_hit_timeout}"
             )
 
         # Agent overrides - only fields that exist in base sb3_sac_cfg.yaml
@@ -633,7 +638,6 @@ class ExperimentConfig:
                 "seed": self.seed,
                 "max_velocity": self.max_velocity,
                 "episode_length_s": self.episode_length_s,
-                "ball_hit_timeout": self.ball_hit_timeout,
             },
             "agent": self.agent_cfg,
             "her": self.her_cfg,

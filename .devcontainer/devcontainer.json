@@ -3,7 +3,7 @@
     "image": "isaac-lab-klask-rl:local",
     "runArgs": [
         "--rm",
-        "--gpus=all",
+        "--gpus=\"device=1,2,3\"",
         "--network=host",
         "--name=isaac-lab-klask-rl-local",
         "--env-file=.devcontainer/devcontainer.env"

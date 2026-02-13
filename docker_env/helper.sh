@@ -11,7 +11,8 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 IMAGE_NAME="isaac-lab-klask-rl"
 DOCKERFILE="Dockerfile"
-GPUS="all" #GPUS='"device=2,3"'
+# GPUS="all"
+GPUS='"device=1,2,3"'
 
 TAG="local"
 CONTAINER_NAME="${IMAGE_NAME}_container_${TAG}"
