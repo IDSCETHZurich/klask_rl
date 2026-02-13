@@ -123,7 +123,7 @@ training:
 wandb:
   project: KLASK
   entity: null
-  name: sac-her-goal-scoring-2s-hit-term-0.4m/s-nn256x128x64
+  name: sac-her-goal-scoring-2s-hit-term-0.4m/s-nn256x128x64-easy
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # SIMULATION - Isaac Sim App Launcher
