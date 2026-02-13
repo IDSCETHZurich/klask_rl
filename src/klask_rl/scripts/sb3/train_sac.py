@@ -133,6 +133,40 @@ from env_utils import (
 )
 
 
+def build_wandb_config(
+    cfg: ExperimentConfig,
+    remaining_argv: list[str],
+    hydra_overrides: list[str],
+) -> dict:
+    """Build complete config dictionary for wandb logging.
+    
+    Captures the three sources of truth for full reproducibility:
+    1. Base YAML config (all fields from experiment config file)
+    2. CLI overrides (e.g., from Ray Tune or command line)
+    3. Hydra overrides (generated from experiment config)
+    
+    Everything else is derived from these three sources during training,
+    so this is sufficient to reproduce any experiment exactly.
+    
+    Returns a nested dictionary suitable for wandb.init(config=...).
+    """
+    # Start with the base experiment config from YAML (includes ALL fields)
+    wandb_config = cfg.to_dict()
+    
+    # Add metadata for easy filtering and identification
+    wandb_config['algorithm'] = 'SAC'
+    wandb_config['config_file'] = str(CONFIG_PATH)
+    wandb_config['command'] = ' '.join(sys.orig_argv)
+    
+    # Add overrides for full reproducibility
+    wandb_config['overrides'] = {
+        'cli': remaining_argv if remaining_argv else [],
+        'hydra': hydra_overrides if hydra_overrides else [],
+    }
+    
+    return wandb_config
+
+
 class TwoStageHerMetricsCallback(BaseCallback):
     """Callback to track and log two-stage HER goal achievements.
 
@@ -344,20 +378,21 @@ def main(
                 print(
                     "[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init."
                 )
+            
+            # Build complete config for wandb logging (automatically captures all fields)
+            wandb_config = build_wandb_config(
+                cfg=cfg,
+                remaining_argv=remaining_argv,
+                hydra_overrides=hydra_overrides,
+            )
+            
             # Initialize wandb
             wandb_run = wandb.init(
                 project=cfg.wandb_project,
                 entity=cfg.wandb_entity,
                 name=cfg.wandb_name or run_info,
                 sync_tensorboard=True,
-                config={
-                    "algorithm": "SAC",
-                    "task": cfg.task,
-                    "num_envs": env_cfg.scene.num_envs,
-                    "policy": policy_arch,
-                    "n_timesteps": n_timesteps,
-                    **agent_cfg,
-                },
+                config=wandb_config,
                 monitor_gym=True,
                 save_code=True,
             )
