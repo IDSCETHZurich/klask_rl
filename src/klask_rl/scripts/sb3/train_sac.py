@@ -61,12 +61,58 @@ print(f"Exact experiment name requested from command line: {run_info}")
 remaining_argv = CONFIG.apply_cli_overrides(remaining_argv)
 
 # Extract Ray Tune parameter keys from remaining_argv to avoid duplicates
+# and apply overrides to CONFIG so to_dict() reflects actual values
+# (needed for accurate wandb logging)
 ray_tune_keys = set()
+
+# Mapping from Hydra override keys to CONFIG attributes.
+# get_hydra_overrides() generates Hydra keys like "env.scene.num_envs" from
+# CONFIG attributes like "num_envs". When Ray Tune provides these as CLI
+# overrides, we need to map them back to update CONFIG for accurate logging.
+_HYDRA_KEY_TO_CONFIG_ATTR = {
+    # env overrides (Hydra key → CONFIG attribute name)
+    "env.scene.num_envs": "num_envs",
+    "env.episode_length_s": "episode_length_s",
+    "env.seed": "seed",
+    # env fields not in get_hydra_overrides but in the YAML
+    "env.max_velocity": "max_velocity",
+}
+
+
+def _apply_cli_override_to_config(key: str, raw_value: str) -> None:
+    """Apply a single CLI override to CONFIG so to_dict() is accurate.
+
+    Handles:
+    - env.* keys via _HYDRA_KEY_TO_CONFIG_ATTR (mapped to top-level CONFIG attrs)
+    - agent.* keys → CONFIG.agent_cfg (nested dict, e.g. policy_kwargs.net_arch)
+    - her.* and two_stage.* are already handled by apply_cli_overrides() upstream
+    """
+    parsed_value = ExperimentConfig._parse_cli_value(raw_value)
+
+    # Direct attribute mappings (Hydra key → CONFIG attribute)
+    if key in _HYDRA_KEY_TO_CONFIG_ATTR:
+        setattr(CONFIG, _HYDRA_KEY_TO_CONFIG_ATTR[key], parsed_value)
+        return
+
+    # agent.* → CONFIG.agent_cfg (nested dict)
+    if key.startswith("agent."):
+        agent_subkey = key[len("agent.") :]
+        parts = agent_subkey.split(".")
+        target = CONFIG.agent_cfg
+        for part in parts[:-1]:
+            if part not in target:
+                target[part] = {}
+            target = target[part]
+        target[parts[-1]] = parsed_value
+
+
 for arg in remaining_argv:
     # Parse Hydra overrides like "agent.policy_kwargs.net_arch=[256,128,64]"
     if "=" in arg:
-        key = arg.split("=")[0].strip("'\"")
+        key, raw_value = arg.split("=", 1)
+        key = key.strip("'\"")
         ray_tune_keys.add(key)
+        _apply_cli_override_to_config(key, raw_value)
 
 hydra_overrides = CONFIG.get_hydra_overrides(exclude_keys=ray_tune_keys)
 sys.argv = [sys.argv[0]] + hydra_overrides + remaining_argv
@@ -139,31 +185,32 @@ def build_wandb_config(
     hydra_overrides: list[str],
 ) -> dict:
     """Build complete config dictionary for wandb logging.
-    
+
     Captures the three sources of truth for full reproducibility:
-    1. Base YAML config (all fields from experiment config file)
-    2. CLI overrides (e.g., from Ray Tune or command line)
-    3. Hydra overrides (generated from experiment config)
-    
-    Everything else is derived from these three sources during training,
-    so this is sufficient to reproduce any experiment exactly.
-    
+    1. Effective config (YAML base + CLI overrides already merged into CONFIG)
+    2. CLI overrides (e.g., from Ray Tune or command line) for reference
+    3. Hydra overrides (generated from experiment config) for reference
+
+    Note: agent.* CLI overrides (e.g. from Ray Tune) are pre-merged into
+    CONFIG.agent_cfg before this function is called, so the top-level
+    config reflects the actual values used for training.
+
     Returns a nested dictionary suitable for wandb.init(config=...).
     """
     # Start with the base experiment config from YAML (includes ALL fields)
     wandb_config = cfg.to_dict()
-    
+
     # Add metadata for easy filtering and identification
-    wandb_config['algorithm'] = 'SAC'
-    wandb_config['config_file'] = str(CONFIG_PATH)
-    wandb_config['command'] = ' '.join(sys.orig_argv)
-    
+    wandb_config["algorithm"] = "SAC"
+    wandb_config["config_file"] = str(CONFIG_PATH)
+    wandb_config["command"] = " ".join(sys.orig_argv)
+
     # Add overrides for full reproducibility
-    wandb_config['overrides'] = {
-        'cli': remaining_argv if remaining_argv else [],
-        'hydra': hydra_overrides if hydra_overrides else [],
+    wandb_config["overrides"] = {
+        "cli": remaining_argv if remaining_argv else [],
+        "hydra": hydra_overrides if hydra_overrides else [],
     }
-    
+
     return wandb_config
 
 
@@ -378,14 +425,14 @@ def main(
                 print(
                     "[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init."
                 )
-            
+
             # Build complete config for wandb logging (automatically captures all fields)
             wandb_config = build_wandb_config(
                 cfg=cfg,
                 remaining_argv=remaining_argv,
                 hydra_overrides=hydra_overrides,
             )
-            
+
             # Initialize wandb
             wandb_run = wandb.init(
                 project=cfg.wandb_project,
