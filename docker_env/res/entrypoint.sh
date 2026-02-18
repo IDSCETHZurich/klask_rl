@@ -11,16 +11,6 @@ else
     echo "✗ Failed to install klask_rl package"
 fi
 
-echo "===================================="
-echo "Installing benchmark package..."
-echo "===================================="
-/workspace/isaaclab/_isaac_sim/python.sh -m pip install -e /workspace/klask_rl/source/benchmark
-if [ $? -eq 0 ]; then
-    echo "✓ benchmark package installed successfully"
-else
-    echo "✗ Failed to install benchmark package"
-fi
-
 # Start Ray server in the background
 echo "===================================="
 echo "Starting Ray server..."
