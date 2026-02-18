@@ -1,4 +1,4 @@
-from .klask_rl_scene_cfg import KlaskRlSceneCfg
+from .klask_rl_scene_cfg import KlaskRlSceneCfg, KlaskRlDreamerSceneCfg
 from .klask_rl_actions_cfg import ActionsCfg, ActionsCfgPlayerOnly
 from .klask_rl_observations_cfg import (
     ObservationsCfg,
@@ -20,6 +20,7 @@ from .klask_rl_terminations_cfg import (
 
 __all__ = [
     "KlaskRlSceneCfg",
+    "KlaskRlDreamerSceneCfg",
     "ActionsCfg",
     "ActionsCfgPlayerOnly",
     "ObservationsCfg",

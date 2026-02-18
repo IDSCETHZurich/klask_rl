@@ -5,7 +5,7 @@ from isaaclab.utils import configclass
 
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 
-from .env_cfg import KlaskRlSceneCfg
+from .env_cfg import KlaskRlSceneCfg, KlaskRlDreamerSceneCfg
 from .env_cfg import ActionsCfg, ActionsCfgPlayerOnly
 from .env_cfg import ObservationsCfg, GoalObservationsCfg, TwoStageHerObservationsCfg
 from .env_cfg import EventCfg, EventCfgSac
@@ -51,9 +51,7 @@ class KlaskRlEnvCfg(ManagerBasedRLEnvCfg):
 class KlaskRlSacEnvCfg(KlaskRlEnvCfg):
     """Configuration for SAC training with minimal observations and dense rewards."""
 
-    observations = (
-        ObservationsCfg()
-    )  # Minimal obs: direction_to_ball, player_pos, ball_pos
+    observations = ObservationsCfg()  # Minimal obs: direction_to_ball, player_pos, ball_pos
     actions = ActionsCfgPlayerOnly()
     events = EventCfgSac()
     rewards = RewardsCfgDenseBallHit()
@@ -64,9 +62,7 @@ class KlaskRlSacEnvCfg(KlaskRlEnvCfg):
         super().__post_init__()
         self.decimation = KLASK_PARAMS["decimation"]
         self.sim.dt = KLASK_PARAMS["physics_dt"]
-        self.max_episode_length = int(
-            self.episode_length_s / (self.decimation * self.sim.dt)
-        )
+        self.max_episode_length = int(self.episode_length_s / (self.decimation * self.sim.dt))
 
 
 @configclass
@@ -130,6 +126,33 @@ class KlaskRlTwoStageHerEnvCfg(KlaskRlEnvCfg):
         super().__post_init__()
         self.decimation = KLASK_PARAMS["decimation"]
         self.sim.dt = KLASK_PARAMS["physics_dt"]
-        self.max_episode_length = int(
-            self.episode_length_s / (self.decimation * self.sim.dt)
-        )
+        self.max_episode_length = int(self.episode_length_s / (self.decimation * self.sim.dt))
+
+
+@configclass
+class KlaskRlDreamerEnvCfg(ManagerBasedRLEnvCfg):
+    """Configuration for the Klask Dreamer environment."""
+
+    sim = SimulationCfg(
+        physx=PhysxCfg(bounce_threshold_velocity=0.0),
+        render_interval=KLASK_PARAMS["decimation"],
+    )
+    # Scene settings
+    scene = KlaskRlDreamerSceneCfg(num_envs=1, env_spacing=1.0)
+    # Basic settings
+    observations = TwoStageHerObservationsCfg()
+    actions = ActionsCfgPlayerOnly()
+    events = EventCfg()
+    rewards = RewardsCfg()
+    terminations = TerminationsCfg()
+    episode_length_s = KLASK_PARAMS["timeout"]
+
+    def __post_init__(self):
+        """Post initialization."""
+        # viewer settings
+        self.viewer.eye = (0.0, 0.0, 1.0)
+        self.viewer.lookat = (0.0, 0.0, 0.0)
+        # step settings
+        self.decimation = KLASK_PARAMS["decimation"]
+        # simulation settings
+        self.sim.dt = KLASK_PARAMS["physics_dt"]
