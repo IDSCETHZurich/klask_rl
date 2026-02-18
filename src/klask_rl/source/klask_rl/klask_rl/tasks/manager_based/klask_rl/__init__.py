@@ -10,7 +10,6 @@ from .klask_rl_env_cfg import (
     ActionsCfgPlayerOnly,
     EventCfgSac,
     KlaskRlEnvCfg,
-    KlaskRlGoalEnvCfg,
     KlaskRlHerSacEnvCfg,
     KlaskRlSacEnvCfg,
     KlaskRlTwoStageHerEnvCfg,

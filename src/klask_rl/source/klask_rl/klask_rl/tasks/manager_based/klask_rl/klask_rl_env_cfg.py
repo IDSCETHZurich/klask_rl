@@ -48,35 +48,6 @@ class KlaskRlEnvCfg(ManagerBasedRLEnvCfg):
 
 
 @configclass
-class KlaskRlGoalEnvCfg(ManagerBasedRLEnvCfg):
-    """Configuration for the cartpole environment."""
-
-    sim = SimulationCfg(
-        physx=PhysxCfg(bounce_threshold_velocity=0.0),
-        render_interval=KLASK_PARAMS["decimation"],
-    )
-    # Scene settings
-    scene = KlaskRlSceneCfg(num_envs=1, env_spacing=1.0)
-    # Basic settings
-    observations = GoalObservationsCfg()
-    actions = ActionsCfg()
-    events = EventCfg()
-    rewards = RewardsCfg()
-    terminations = TerminationsCfg()
-    episode_length_s = KLASK_PARAMS["timeout"]
-
-    def __post_init__(self):
-        """Post initialization."""
-        # viewer settings
-        self.viewer.eye = (0.0, 0.0, 6.0)
-        self.viewer.lookat = (0.0, 0.0, 0.0)
-        # step settings
-        self.decimation = KLASK_PARAMS["decimation"]
-        # simulation settings
-        self.sim.dt = KLASK_PARAMS["physics_dt"]
-
-
-@configclass
 class KlaskRlSacEnvCfg(KlaskRlEnvCfg):
     """Configuration for SAC training with minimal observations and dense rewards."""
 
