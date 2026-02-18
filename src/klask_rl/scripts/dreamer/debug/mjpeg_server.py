@@ -96,11 +96,34 @@ class MJPEGServer:
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
-    def update_frame(self, img: np.ndarray, resize: tuple[int, int] | None = (320, 420)):
+    def update_frame(
+        self,
+        img: np.ndarray,
+        h_channel: np.ndarray | None = None,
+        v_channel: np.ndarray | None = None,
+        resize: tuple[int, int] | None = (320, 420),
+    ):
         """Push a new RGB frame (H, W, 3) uint8."""
         if resize is not None:
             img = cv2.resize(img, resize, interpolation=cv2.INTER_NEAREST)
-        _, buf = cv2.imencode(".jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+            h_channel = (
+                cv2.resize(h_channel, resize, interpolation=cv2.INTER_NEAREST) if h_channel is not None else None
+            )
+            v_channel = (
+                cv2.resize(v_channel, resize, interpolation=cv2.INTER_NEAREST) if v_channel is not None else None
+            )
+
+        # Stack: color | h_channel (gray -> RGB) | v_channel (gray -> RGB)
+        panels = [img]
+        for ch in (h_channel, v_channel):
+            if ch is not None:
+                gray_rgb = np.stack([ch] * 3, axis=-1) if ch.ndim == 2 else ch
+                panels.append(gray_rgb)
+        combined = np.concatenate(panels, axis=1)
+
+        _, buf = cv2.imencode(
+            ".jpg", cv2.cvtColor(combined, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, self.quality]
+        )
         with self._lock:
             self._jpeg = buf.tobytes()
 

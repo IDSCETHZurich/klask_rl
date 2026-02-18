@@ -130,8 +130,8 @@ class KlaskRlDreamerSceneCfg(InteractiveSceneCfg):
             horizontal_aperture=20.955,
             clipping_range=(0.01, 100.0),
         ),
-        width=320,  # 48,
-        height=420,  # 63,
+        width=48,
+        height=63,
         data_types=["rgb"],
         update_period=0.0,
         offset=CameraCfg.OffsetCfg(

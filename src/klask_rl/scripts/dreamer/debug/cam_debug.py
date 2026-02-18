@@ -11,6 +11,7 @@ Usage:
 
 """Launch Isaac Sim first."""
 import os
+import cv2
 
 from isaaclab.app import AppLauncher
 
@@ -66,7 +67,8 @@ def main():
             if count % 10 == 0:
                 rgb = camera.data.output["rgb"]  # (N, H, W, 4) RGBA uint8
                 frame = rgb[ENV_INDEX, :, :, :3].cpu().numpy()
-                server.update_frame(frame)
+                hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+                server.update_frame(frame, h_channel=hsv[:, :, 0], v_channel=hsv[:, :, 2])
     except KeyboardInterrupt:
         print("Exiting.")
 
