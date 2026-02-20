@@ -27,7 +27,7 @@
         "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",
         "source=${localWorkspaceFolder}/third_party/dreamerv3-torch,target=/workspace/klask_rl/scripts/dreamer/dreamerv3-torch,type=bind"
     ],
-    "workspaceFolder": "/workspace",
+    "workspaceFolder": "/workspace/klask_rl",
     "customizations": {
         "vscode": {
             "extensions": [
