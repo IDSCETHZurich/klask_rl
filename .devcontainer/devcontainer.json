@@ -3,7 +3,7 @@
     "image": "isaac-lab-klask-rl:local",
     "runArgs": [
         "--rm",
-        "--gpus=\"device=1,2,3\"",
+        "--gpus=\"device=3\"",
         "--network=host",
         "--name=isaac-lab-klask-rl-devcontainer",
         "--env-file=.devcontainer/devcontainer.env"
@@ -25,7 +25,7 @@
         "source=isaac-lab-klask-rl-devcontainer_data,target=/root/.local/share/ov/data,type=volume",
         "source=isaac-lab-klask-rl-devcontainer_documents,target=/root/Documents,type=volume",
         "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",
-        "source=${localWorkspaceFolder}/third_party/dreamerv3-torch,target=/workspace/dreamerv3-torch,type=bind"
+        "source=${localWorkspaceFolder}/third_party/dreamerv3-torch,target=/workspace/klask_rl/scripts/dreamer/dreamerv3-torch,type=bind"
     ],
     "workspaceFolder": "/workspace",
     "customizations": {

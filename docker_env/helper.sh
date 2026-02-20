@@ -12,7 +12,7 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 IMAGE_NAME="isaac-lab-klask-rl"
 DOCKERFILE="Dockerfile"
 # GPUS="all"
-GPUS='"device=1,2,3"'
+GPUS='"device=1,2"'
 # UI="LIVESTREAM=1"
 UI="HEADLESS=1"
 
@@ -75,7 +75,7 @@ cmd_run() {
         --volume="${CONTAINER_NAME}_data:/root/.local/share/ov/data:rw" \
         --volume="${CONTAINER_NAME}_documents:/root/Documents:rw" \
         --volume="$SCRIPT_DIR/../src/klask_rl:/workspace/klask_rl:rw" \
-        --volume="$SCRIPT_DIR/../third_party/dreamerv3-torch:/workspace/dreamerv3-torch:rw" \
+        --volume="$SCRIPT_DIR/../third_party/dreamerv3-torch:/workspace/klask_rl/scripts/dreamer/dreamerv3-torch:rw" \
         "${IMAGE_NAME}:${TAG}"
 
     echo -e "${GREEN}${MODE_DISPLAY} container started! Use '$0 ${MODE_FLAG}connect' to attach.${NC}"
