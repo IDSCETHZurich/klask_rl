@@ -210,61 +210,64 @@ class KlaskSacTwoStageHerJobCfg:
                 "--config": "experiments/klask_sac_two_stage_her.yaml",
             },
             "hydra_args": {
-                "agent.learning_rate": tune.loguniform(1e-5, 3e-3),
-                "agent.buffer_size": tune.choice([500_000, 1_000_000, 10_000_000]),
-                "agent.batch_size": tune.choice([1024, 2048]),
-                "agent.train_freq": tune.choice([32, 64, 128]),
-                "agent.gradient_steps": tune.choice([32, 64, 128]),
+                # "agent.learning_rate": tune.loguniform(1e-5, 3e-3),
+                # "agent.buffer_size": tune.choice([500_000, 1_000_000, 10_000_000]),
+                # "agent.batch_size": tune.choice([1024, 2048]),
+                # "agent.train_freq": tune.choice([32, 64, 128]),
+                # "agent.gradient_steps": tune.choice([32, 64, 128]),
                 "agent.policy_kwargs.net_arch": tune.choice(
                     [
-                        [256, 128, 64],
-                        [256, 256, 128, 64],
-                        [512, 256, 128, 64],
-                        [256, 128, 64, 64],
+                        [512, 256, 256, 128, 64],
+                        [512, 512, 256, 128, 64],
+                        [1024, 512, 256, 128, 64],
+                        [512, 256, 128, 64, 32],
+                        [256, 128, 64, 32],
+                        [1024, 512, 256, 128, 64, 32],
+                        [1024, 512, 512, 256, 128, 64],
                     ]
                 ),
-                "her.n_sampled_goal": tune.choice([2, 4, 8]),
-                "two_stage.ball_hit_timeout": tune.choice([0.5, 1.0, 2.0]),
-                "two_stage.ball_hit_env_reward": tune.loguniform(1.0, 1000.0),
-                "two_stage.goal_score_env_reward": tune.sample_from(
-                    lambda spec: np.exp(
-                        np.random.uniform(
-                            np.log(spec["hydra_args"]["two_stage.ball_hit_env_reward"]),
-                            np.log(10000.0),
-                        )
-                    )
-                ),
-                "two_stage.ball_hit_wrapper_reward": tune.loguniform(1.0, 1000.0),
-                "two_stage.goal_score_wrapper_reward": tune.sample_from(
-                    lambda spec: np.exp(
-                        np.random.uniform(
-                            np.log(
-                                spec["hydra_args"]["two_stage.ball_hit_wrapper_reward"]
-                            ),
-                            np.log(10000.0),
-                        )
-                    )
-                ),
+                # "her.n_sampled_goal": tune.choice([2, 4, 8]),
+                # "two_stage.ball_hit_timeout": tune.choice([0.5, 1.0, 2.0]),
+                # "two_stage.ball_hit_env_reward": tune.loguniform(1.0, 1000.0),
+                # "two_stage.goal_score_env_reward": tune.sample_from(
+                #     lambda spec: np.exp(
+                #         np.random.uniform(
+                #             np.log(spec["hydra_args"]["two_stage.ball_hit_env_reward"]),
+                #             np.log(10000.0),
+                #         )
+                #     )
+                # ),
+                # "two_stage.ball_hit_wrapper_reward": tune.loguniform(1.0, 1000.0),
+                # "two_stage.goal_score_wrapper_reward": tune.sample_from(
+                #     lambda spec: np.exp(
+                #         np.random.uniform(
+                #             np.log(
+                #                 spec["hydra_args"]["two_stage.ball_hit_wrapper_reward"]
+                #             ),
+                #             np.log(10000.0),
+                #         )
+                #     )
+                # ),
             },
         }
 
         # Inject early stopping: stop trial if ball_hit_rate < 0.5 after 100M steps
-        _inject_stopper(BallHitRateStopper(min_rate=0.5, min_timesteps=100_000_000))
+        # _inject_stopper(BallHitRateStopper(min_rate=0.5, min_timesteps=100_000_000))
 
         # Initial seed points for OptunaSearch.
-        _inject_points_to_evaluate(
-            [
-                {
-                    "hydra_args/agent.learning_rate": 3e-4,
-                    "hydra_args/agent.buffer_size": 1_000_000,
-                    "hydra_args/agent.batch_size": 1024,
-                    "hydra_args/agent.train_freq": 64,
-                    "hydra_args/agent.gradient_steps": 32,
-                    "hydra_args/agent.policy_kwargs.net_arch": [256, 128, 64],
-                    "hydra_args/her.n_sampled_goal": 4,
-                    "hydra_args/two_stage.ball_hit_timeout": 2.0,
-                    "hydra_args/two_stage.ball_hit_env_reward": 500.0,
-                    "hydra_args/two_stage.ball_hit_wrapper_reward": 1.0,
-                },
-            ]
-        )
+        # _inject_points_to_evaluate(
+        #     [
+        #         {
+        #             "hydra_args/agent.learning_rate": 3e-4,
+        #             "hydra_args/agent.buffer_size": 1_000_000,
+        #             "hydra_args/agent.batch_size": 1024,
+        #             "hydra_args/agent.train_freq": 64,
+        #             "hydra_args/agent.gradient_steps": 32,
+        #             "hydra_args/agent.policy_kwargs.net_arch": [256, 128, 64],
+        #             "hydra_args/her.n_sampled_goal": 4,
+        #             "hydra_args/two_stage.ball_hit_timeout": 2.0,
+        #             "hydra_args/two_stage.ball_hit_env_reward": 500.0,
+        #             "hydra_args/two_stage.ball_hit_wrapper_reward": 1.0,
+        #         },
+        #     ]
+        # )

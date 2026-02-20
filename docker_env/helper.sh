@@ -61,7 +61,7 @@ cmd_run() {
         --env="ACCEPT_EULA=Y" \
         --env="PRIVACY_CONSENT=Y" \
         --env="DISPLAY" \
-        --env="LIVESTREAM=1" \
+        --env="HEADLESS=1" \
         --env-file="${SCRIPT_DIR}/../.devcontainer/devcontainer.env" \
         --volume="$HOME/.Xauthority:/root/.Xauthority" \
         --volume="${CONTAINER_NAME}_cache_kit:/isaac-sim/kit/cache:rw" \
