@@ -125,7 +125,7 @@ training:
 wandb:
   project: KLASK
   entity: null
-  name: sac-her-goal-scoring-tuning
+  name: sac-her-goal-scoring-reward-tuning
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # SIMULATION - Isaac Sim App Launcher
@@ -136,9 +136,9 @@ app_launcher:
   enable_cameras: false
   device: cuda:0
   xr: false
-  experience: ""
+  experience: ''
   rendering_mode: balanced
-  kit_args: ""
+  kit_args: ''
   anim_recording_enabled: false
   anim_recording_start_time: 0
   anim_recording_stop_time: 10

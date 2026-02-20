@@ -48,18 +48,10 @@ class BallHitRateStopper(tune.Stopper):
 
     def __call__(self, trial_id: str, result: dict) -> bool:
         # Handle both "/" and "_" metric key formats (depends on Isaac Lab version)
-        timesteps = result.get(
-            "time/total_timesteps", result.get("time_total_timesteps", 0)
-        )
-        ball_hit_rate = result.get(
-            "two_stage/ball_hit_rate", result.get("two_stage_ball_hit_rate", None)
-        )
+        timesteps = result.get("time/total_timesteps", result.get("time_total_timesteps", 0))
+        ball_hit_rate = result.get("two_stage/ball_hit_rate", result.get("two_stage_ball_hit_rate", None))
 
-        if (
-            timesteps >= self._min_timesteps
-            and ball_hit_rate is not None
-            and ball_hit_rate < self._min_rate
-        ):
+        if timesteps >= self._min_timesteps and ball_hit_rate is not None and ball_hit_rate < self._min_rate:
             print(
                 f"[STOPPER] Trial {trial_id}: ball_hit_rate={ball_hit_rate:.3f} < "
                 f"{self._min_rate} after {timesteps / 1e6:.0f}M steps. Stopping early."
@@ -217,18 +209,23 @@ class KlaskSacTwoStageHerJobCfg:
                 # "agent.gradient_steps": tune.choice([32, 64, 128]),
                 "agent.policy_kwargs.net_arch": tune.choice(
                     [
+                        # best
                         [512, 256, 256, 128, 64],
-                        [512, 512, 256, 128, 64],
-                        [1024, 512, 256, 128, 64],
-                        [512, 256, 128, 64, 32],
-                        [256, 128, 64, 32],
-                        [1024, 512, 256, 128, 64, 32],
-                        [1024, 512, 512, 256, 128, 64],
+                        # [512, 512, 256, 128, 64],
+                        # [1024, 512, 256, 128, 64],
+                        # [1024, 512, 256, 128, 64, 32],
+                        # done
+                        # [256, 128, 64, 128, 256],
+                        # [512, 256, 128, 64, 128, 256, 512],
+                        # [256, 128, 64, 32],
+                        # [512, 256, 128, 64, 32],
+                        # [1024, 512, 512, 256, 128, 64],
                     ]
                 ),
                 # "her.n_sampled_goal": tune.choice([2, 4, 8]),
                 # "two_stage.ball_hit_timeout": tune.choice([0.5, 1.0, 2.0]),
                 # "two_stage.ball_hit_env_reward": tune.loguniform(1.0, 1000.0),
+                "two_stage.goal_score_env_reward": tune.choice([500.0, 1000.0, 2000.0, 5000.0]),
                 # "two_stage.goal_score_env_reward": tune.sample_from(
                 #     lambda spec: np.exp(
                 #         np.random.uniform(
@@ -238,6 +235,7 @@ class KlaskSacTwoStageHerJobCfg:
                 #     )
                 # ),
                 # "two_stage.ball_hit_wrapper_reward": tune.loguniform(1.0, 1000.0),
+                "two_stage.goal_score_wrapper_reward": tune.choice([2.0, 5.0, 10.0, 50.0, 100.0]),
                 # "two_stage.goal_score_wrapper_reward": tune.sample_from(
                 #     lambda spec: np.exp(
                 #         np.random.uniform(
