@@ -13,6 +13,8 @@ IMAGE_NAME="isaac-lab-klask-rl"
 DOCKERFILE="Dockerfile"
 # GPUS="all"
 GPUS='"device=1,2,3"'
+# UI="LIVESTREAM=1"
+UI="HEADLESS=1"
 
 TAG="local"
 CONTAINER_NAME="${IMAGE_NAME}_container_${TAG}"
@@ -61,7 +63,7 @@ cmd_run() {
         --env="ACCEPT_EULA=Y" \
         --env="PRIVACY_CONSENT=Y" \
         --env="DISPLAY" \
-        --env="HEADLESS=1" \
+        --env=${UI} \
         --env-file="${SCRIPT_DIR}/../.devcontainer/devcontainer.env" \
         --volume="$HOME/.Xauthority:/root/.Xauthority" \
         --volume="${CONTAINER_NAME}_cache_kit:/isaac-sim/kit/cache:rw" \
