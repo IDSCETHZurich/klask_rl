@@ -29,7 +29,6 @@ import klask_rl.tasks  # noqa: F401
 
 from klask_rl.tasks.manager_based.klask_rl.klask_rl_env_cfg import KlaskRlDreamerEnvCfg
 from mjpeg_server import MJPEGServer
-from isaaclab.sim import RenderCfg
 
 # ---- Configuration ----
 ENV_INDEX = 0  # which env's camera to display
@@ -44,7 +43,6 @@ def main():
 
     env_cfg = KlaskRlDreamerEnvCfg()
     env_cfg.scene.num_envs = NUM_ENVS
-    env_cfg.sim.render = RenderCfg(antialiasing_mode="Off")
 
     env = gym.make("Klask-Rl-Dreamer-v0", cfg=env_cfg)
     env.reset()
@@ -65,8 +63,8 @@ def main():
 
             count += 1
             if count % 10 == 0:
-                rgb = camera.data.output["rgb"]  # (N, H, W, 4) RGBA uint8
-                frame = rgb[ENV_INDEX, :, :, :3].cpu().numpy()
+                rgb = camera.data.output["rgb"]  # (N, H, W, 3) RGB uint8
+                frame = rgb[ENV_INDEX].cpu().numpy()
                 hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
                 server.update_frame(frame, h_channel=hsv[:, :, 0], v_channel=hsv[:, :, 2])
     except KeyboardInterrupt:

@@ -3,7 +3,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.actuators import DelayedPDActuatorCfg
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
-from isaaclab.sensors import CameraCfg
+from isaaclab.sensors import TiledCameraCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 
@@ -123,7 +123,7 @@ class KlaskRlDreamerSceneCfg(InteractiveSceneCfg):
         },
     )
 
-    camera = CameraCfg(
+    camera = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Camera",
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0,
@@ -134,7 +134,7 @@ class KlaskRlDreamerSceneCfg(InteractiveSceneCfg):
         height=63,
         data_types=["rgb"],
         update_period=0.0,
-        offset=CameraCfg.OffsetCfg(
+        offset=TiledCameraCfg.OffsetCfg(
             pos=(0.0, 0.0, 0.392),  # Tuned to exactly fit the board from the top view
             rot=(0.5, -0.5, 0.5, 0.5),
             convention="world",
