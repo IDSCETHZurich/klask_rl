@@ -13,7 +13,6 @@ from ..utils_manager_based import (
     ball_speed,
     ball_stationary,
     collision_player_ball,
-    collision_player_ball_bool,
     collision_player_ball_time_decay,
     distance_ball_goal,
     distance_player_ball_own_half,
@@ -130,9 +129,7 @@ class RewardsCfg:
         weight=0.0,
     )
 
-    ball_in_own_half = RewTerm(
-        func=ball_in_own_half, params={"ball_cfg": SceneEntityCfg("ball")}, weight=0.0
-    )
+    ball_in_own_half = RewTerm(func=ball_in_own_half, params={"ball_cfg": SceneEntityCfg("ball")}, weight=0.0)
 
     close_to_boundaries = RewTerm(
         func=distance_to_wall,
