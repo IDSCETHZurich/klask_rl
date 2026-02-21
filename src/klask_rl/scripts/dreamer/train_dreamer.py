@@ -6,7 +6,6 @@ import pathlib
 
 from isaaclab.app import AppLauncher
 from datetime import datetime
-from tqdm import tqdm
 
 import numpy as np
 
@@ -140,7 +139,7 @@ def main(config):
     # step in logger is environmental step
     logger = tools.Logger(config.logdir, step, config)
 
-    print("Create envs.")
+    logger.print("Create envs.")
     if config.offline_traindir:
         directory = config.offline_traindir.format(**vars(config))
     else:
@@ -154,14 +153,19 @@ def main(config):
 
     isaac_env = make_isaac_env(config)
 
+    # In IsaacLab, action_repeat is just physics decimation handled inside
+    # env.step(). There is no agent-level action repeat, so set to 1 to
+    # prevent the Dreamer class from scaling step counts.
+    config.action_repeat = 1
+
     acts = isaac_env.action_space
-    print("Action Space", acts)
+    logger.print("Action Space", acts)
     config.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
 
     state = None
     if not config.offline_traindir:
         prefill = max(0, config.prefill - count_steps(config.traindir))
-        print(f"Prefill dataset ({prefill} steps).")
+        logger.print(f"Prefill dataset ({prefill} steps).")
         random_actor = torchd.independent.Independent(
             torchd.uniform.Uniform(
                 torch.tensor(acts.low).repeat(config.envs, 1).to(config.device),
@@ -185,9 +189,9 @@ def main(config):
             steps=prefill,
         )
         logger.step += prefill
-        print(f"Logger: ({logger.step} steps).")
+        logger.print(f"Logger: ({logger.step} steps).")
 
-    print("Simulate agent.")
+    logger.print("Simulate agent.")
     train_dataset = make_dataset(train_eps, config)
     eval_dataset = make_dataset(eval_eps, config)
     agent = Dreamer(
@@ -204,14 +208,13 @@ def main(config):
         tools.recursively_load_optim_state_dict(agent, checkpoint["optims_state_dict"])
         agent._should_pretrain._once = False
 
-    pbar = tqdm(total=config.steps + config.eval_every, initial=agent._step)
     exit_code = 0
     try:
         # make sure eval will be executed once after config.steps
         while agent._step < config.steps + config.eval_every:
             logger.write()
             if config.eval_episode_num > 0:
-                print("Start evaluation.")
+                logger.print("Start evaluation.")
                 eval_policy = functools.partial(agent, training=False)
                 tools.simulate_vec(
                     eval_policy,
@@ -226,7 +229,7 @@ def main(config):
                     video_pred = agent._wm.video_pred(next(eval_dataset))
                     logger.video("eval_openl", tools.to_np(video_pred))
                 state = None
-            print("Start training.")
+            logger.print("Start training.")
             state = tools.simulate_vec(
                 agent,
                 isaac_env,
@@ -242,12 +245,10 @@ def main(config):
                 "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
             }
             torch.save(items_to_save, config.logdir / "latest.pt")
-            pbar.update(config.eval_every)
     except KeyboardInterrupt:
-        print("\nTraining interrupted by user.")
+        logger.print("\nTraining interrupted by user.")
         exit_code = 1
     finally:
-        pbar.close()
         isaac_env.close()
         logger.close(exit_code=exit_code)
 
