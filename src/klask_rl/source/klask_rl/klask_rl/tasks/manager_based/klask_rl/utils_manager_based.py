@@ -1,10 +1,38 @@
 import torch
+import torch.nn.functional as F
 
 from isaaclab.assets import RigidObject, Articulation
 import isaaclab.utils.math as math_utils
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.envs import ManagerBasedRLEnv
+from isaaclab.sensors import TiledCamera, Camera, RayCasterCamera
 from klask_rl.assets.robots.klask import KLASK_PARAMS
+
+
+def padded_image(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("camera"),
+    data_type: str = "rgb",
+    target_h: int = 64,
+    target_w: int = 64,
+) -> torch.Tensor:
+    """Return a raw (unnormalized) camera image zero-padded to (target_h, target_w).
+
+    Padding is applied to the right and bottom so that the original image
+    occupies the top-left corner.  The result has shape (N, target_h, target_w, C)
+    with the same dtype as the sensor output (typically uint8 for RGB).
+    """
+    sensor: TiledCamera | Camera | RayCasterCamera = env.scene.sensors[sensor_cfg.name]
+    images = sensor.data.output[data_type]  # (N, H, W, C)
+    _, h, w, _ = images.shape
+    pad_bottom = target_h - h
+    pad_right = target_w - w
+    if pad_bottom > 0 or pad_right > 0:
+        # F.pad expects (last_dim_left, last_dim_right, ..., first_dim_left, first_dim_right)
+        # For (N, H, W, C) we want to pad W (dim 2) and H (dim 1):
+        #   C: (0, 0), W: (0, pad_right), H: (0, pad_bottom)
+        images = F.pad(images, (0, 0, 0, pad_right, 0, pad_bottom), value=0)
+    return images
 
 
 def reset_ball_hit_tracking(
@@ -22,9 +50,7 @@ def reset_ball_hit_tracking(
     """
     # Initialize the tracking buffer if it doesn't exist
     if not hasattr(env, "ball_hit_this_episode"):
-        env.ball_hit_this_episode = torch.zeros(
-            env.num_envs, dtype=torch.bool, device=env.device
-        )
+        env.ball_hit_this_episode = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
     # Reset the flag for the specified environments
     env.ball_hit_this_episode[env_ids] = False
@@ -45,9 +71,7 @@ def reset_ball_hit_timer(
     """
     # Initialize the timer buffer if it doesn't exist
     if not hasattr(env, "ball_hit_timer"):
-        env.ball_hit_timer = torch.full(
-            (env.num_envs,), -1.0, dtype=torch.float32, device=env.device
-        )
+        env.ball_hit_timer = torch.full((env.num_envs,), -1.0, dtype=torch.float32, device=env.device)
 
     # Reset the timer for the specified environments (-1.0 means not hit yet)
     env.ball_hit_timer[env_ids] = -1.0
@@ -82,14 +106,10 @@ def ball_hit_timeout(
     """
     # Initialize the timer buffer if it doesn't exist
     if not hasattr(env, "ball_hit_timer"):
-        env.ball_hit_timer = torch.full(
-            (env.num_envs,), -1.0, dtype=torch.float32, device=env.device
-        )
+        env.ball_hit_timer = torch.full((env.num_envs,), -1.0, dtype=torch.float32, device=env.device)
 
     # Check for collision
-    collision_now = collision_player_ball_bool(
-        env, player_cfg, ball_cfg, eps, min_relative_vel, min_ball_speed
-    )
+    collision_now = collision_player_ball_bool(env, player_cfg, ball_cfg, eps, min_relative_vel, min_ball_speed)
 
     # Start timer on first collision (timer == -1.0 means not started)
     not_started = env.ball_hit_timer < 0.0
@@ -126,26 +146,18 @@ def reset_joints_by_offset(
     joint_vel = asset.data.default_joint_vel[env_ids].clone()[:, asset_cfg.joint_ids]
 
     # bias these values randomly
-    joint_pos += math_utils.sample_uniform(
-        *position_range, joint_pos.shape, joint_pos.device
-    )
-    joint_vel += math_utils.sample_uniform(
-        *velocity_range, joint_vel.shape, joint_vel.device
-    )
+    joint_pos += math_utils.sample_uniform(*position_range, joint_pos.shape, joint_pos.device)
+    joint_vel += math_utils.sample_uniform(*velocity_range, joint_vel.shape, joint_vel.device)
 
     # clamp joint pos to limits
-    joint_pos_limits = asset.data.soft_joint_pos_limits[env_ids][
-        :, asset_cfg.joint_ids, :
-    ]
+    joint_pos_limits = asset.data.soft_joint_pos_limits[env_ids][:, asset_cfg.joint_ids, :]
     joint_pos = joint_pos.clamp_(joint_pos_limits[..., 0], joint_pos_limits[..., 1])
     # clamp joint vel to limits
     joint_vel_limits = asset.data.soft_joint_vel_limits[env_ids][:, asset_cfg.joint_ids]
     joint_vel = joint_vel.clamp_(-joint_vel_limits, joint_vel_limits)
 
     # set into the physics simulation
-    asset.write_joint_state_to_sim(
-        joint_pos, joint_vel, env_ids=env_ids, joint_ids=asset_cfg.joint_ids
-    )
+    asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids, joint_ids=asset_cfg.joint_ids)
 
 
 def in_goal(
@@ -163,13 +175,8 @@ def in_goal(
 
     # Check if asset located in circle
     cx, cy, r = goal
-    asset_pos_rel = (
-        asset.data.body_pos_w[:, asset_cfg.body_ids, :].squeeze()
-        - env.scene.env_origins
-    )
-    bodies_in_goal = (asset_pos_rel[:, 0] - cx) ** 2 + (
-        asset_pos_rel[:, 1] - cy
-    ) ** 2 <= r**2
+    asset_pos_rel = asset.data.body_pos_w[:, asset_cfg.body_ids, :].squeeze() - env.scene.env_origins
+    bodies_in_goal = (asset_pos_rel[:, 0] - cx) ** 2 + (asset_pos_rel[:, 1] - cy) ** 2 <= r**2
 
     if weight is not None:
         bodies_in_goal *= weight
@@ -194,15 +201,10 @@ def ball_in_goal(
     # Check if ball located inside goal
     cx, cy, r = goal
     ball_pos_rel = asset.data.root_pos_w - env.scene.env_origins
-    ball_in_goal = (ball_pos_rel[:, 0] - cx) ** 2 + (
-        ball_pos_rel[:, 1] - cy
-    ) ** 2 <= r**2
+    ball_in_goal = (ball_pos_rel[:, 0] - cx) ** 2 + (ball_pos_rel[:, 1] - cy) ** 2 <= r**2
 
     # Check if ball is slower than max_vel_ball
-    ball_slow = (
-        asset.data.root_lin_vel_w[:, 0] ** 2 + asset.data.root_lin_vel_w[:, 1] ** 2
-        <= max_ball_vel**2
-    )
+    ball_slow = asset.data.root_lin_vel_w[:, 0] ** 2 + asset.data.root_lin_vel_w[:, 1] ** 2 <= max_ball_vel**2
 
     if weight is None:
         ball_in_goal = ball_in_goal * ball_slow
@@ -237,19 +239,11 @@ def peg_in_defense_line_with_rebounds(
 
     mirror_opponents = [opponent_pos]
     # Reflect across x walls
-    mirror_opponents.append(
-        torch.stack([-0.32 - opponent_pos[:, 0], opponent_pos[:, 1]], dim=1)
-    )  # left wall
-    mirror_opponents.append(
-        torch.stack([0.32 - opponent_pos[:, 0], opponent_pos[:, 1]], dim=1)
-    )  # right wall
+    mirror_opponents.append(torch.stack([-0.32 - opponent_pos[:, 0], opponent_pos[:, 1]], dim=1))  # left wall
+    mirror_opponents.append(torch.stack([0.32 - opponent_pos[:, 0], opponent_pos[:, 1]], dim=1))  # right wall
 
-    mirror_balls.append(
-        torch.stack([-0.32 - ball_pos[:, 0], ball_pos[:, 1]], dim=1)
-    )  # left wall
-    mirror_balls.append(
-        torch.stack([0.32 - ball_pos[:, 0], ball_pos[:, 1]], dim=1)
-    )  # right wall
+    mirror_balls.append(torch.stack([-0.32 - ball_pos[:, 0], ball_pos[:, 1]], dim=1))  # left wall
+    mirror_balls.append(torch.stack([0.32 - ball_pos[:, 0], ball_pos[:, 1]], dim=1))  # right wall
     # Reflect across y walls ( this is unlikely )
     # mirror_balls.append(torch.stack([ball_pos[:, 0], -0.44 - ball_pos[:, 1]], dim=1))  # bottom wall
     # mirror_balls.append(torch.stack([ball_pos[:, 0], 0.44 - ball_pos[:, 1]], dim=1))   # top wall
@@ -267,9 +261,7 @@ def peg_in_defense_line_with_rebounds(
 
         # Angle (in radians)
         cos_theta = dot / (norm_ob * norm_op + 1e-6)
-        angle = torch.acos(
-            torch.clamp(cos_theta, -1.0, 1.0)
-        )  # Clamp for numerical stability
+        angle = torch.acos(torch.clamp(cos_theta, -1.0, 1.0))  # Clamp for numerical stability
 
         # Smaller angle = better blocking → higher reward
         reward = torch.exp(-1.0 * angle)  # Adjust 5.0 as needed
@@ -294,9 +286,7 @@ def root_xy_pos_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Te
     return asset.data.root_pos_w[:, :2] - env.scene.env_origins[:, :2]
 
 
-def root_lin_xy_vel_w(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg
-) -> torch.Tensor:
+def root_lin_xy_vel_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     """Asset root linear velocity in the environment frame."""
     asset: RigidObject = env.scene[asset_cfg.name]
     return asset.data.root_lin_vel_w[:, :2]
@@ -305,15 +295,10 @@ def root_lin_xy_vel_w(
 def body_xy_pos_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     """Asset body position in the environment frame"""
     asset: Articulation = env.scene[asset_cfg.name]
-    return (
-        asset.data.body_pos_w[:, asset_cfg.body_ids, :2].squeeze(dim=1)
-        - env.scene.env_origins[:, :2]
-    )
+    return asset.data.body_pos_w[:, asset_cfg.body_ids, :2].squeeze(dim=1) - env.scene.env_origins[:, :2]
 
 
-def shot_over_middle(
-    env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, weight: float | None = None
-) -> torch.Tensor:
+def shot_over_middle(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, weight: float | None = None) -> torch.Tensor:
     ball_pos = root_xy_pos_w(env, ball_cfg)  # shape: (num_envs, 2)
     ball_vel = root_lin_xy_vel_w(env, ball_cfg)  # shape: (num_envs, 2)
 
@@ -321,31 +306,20 @@ def shot_over_middle(
     is_near_center = (ball_pos[:, 1] >= 0.002) & (ball_pos[:, 1] <= 0.005)
     is_moving_forward = ball_vel[:, 1] > 0.0
     if weight is None:
-        return (
-            torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward
-        ).float()
-    return (
-        weight
-        * (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
-    )
+        return (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
+    return weight * (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
 
 
-def body_lin_xy_vel_w(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg
-) -> torch.Tensor:
+def body_lin_xy_vel_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     return asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2].squeeze(dim=1)
 
 
-def opponent_goal_obs(
-    env: ManagerBasedRLEnv, goal: tuple[float, float]
-) -> torch.Tensor:
+def opponent_goal_obs(env: ManagerBasedRLEnv, goal: tuple[float, float]) -> torch.Tensor:
     return torch.Tensor([*goal, 0.0, 0.0]).repeat(env.num_envs, 1)
 
 
-def goal_position_obs(
-    env: ManagerBasedRLEnv, goal: tuple[float, float]
-) -> torch.Tensor:
+def goal_position_obs(env: ManagerBasedRLEnv, goal: tuple[float, float]) -> torch.Tensor:
     """Returns the goal XY position as observation (constant for all envs).
 
     Args:
@@ -355,16 +329,10 @@ def goal_position_obs(
     Returns:
         Tensor of shape (num_envs, 2) with goal XY position
     """
-    return (
-        torch.tensor([goal[0], goal[1]], dtype=torch.float32, device=env.device)
-        .unsqueeze(0)
-        .repeat(env.num_envs, 1)
-    )
+    return torch.tensor([goal[0], goal[1]], dtype=torch.float32, device=env.device).unsqueeze(0).repeat(env.num_envs, 1)
 
 
-def direction_to_ball(
-    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg
-) -> torch.Tensor:
+def direction_to_ball(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg) -> torch.Tensor:
     """Returns the direction vector from player to ball (2D).
 
     This is the key observation for learning to move towards the ball.
@@ -378,19 +346,11 @@ def direction_to_ball(
     return ball_pos - player_pos
 
 
-def distance_player_ball(
-    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg
-) -> torch.Tensor:
-    return torch.sqrt(
-        torch.sum(
-            (root_xy_pos_w(env, ball_cfg) - body_xy_pos_w(env, player_cfg)) ** 2, dim=1
-        )
-    )
+def distance_player_ball(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg) -> torch.Tensor:
+    return torch.sqrt(torch.sum((root_xy_pos_w(env, ball_cfg) - body_xy_pos_w(env, player_cfg)) ** 2, dim=1))
 
 
-def proximity_player_ball(
-    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg
-) -> torch.Tensor:
+def proximity_player_ball(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg) -> torch.Tensor:
     """Proximity reward that incentivizes moving towards the ball.
 
     Uses exponential decay so the gradient is stronger at all distances.
@@ -414,9 +374,7 @@ def player_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torch.Te
     return speed(vel)
 
 
-def difference_speed(
-    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg
-):
+def difference_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg):
     vel_ball = root_lin_xy_vel_w(env, ball_cfg)
     vel_player = body_lin_xy_vel_w(env, player_cfg)
     diff = vel_player - vel_ball
@@ -443,9 +401,7 @@ def distance_player_ball_own_half(
     )  # factor 5 because distances are really small
 
 
-def ball_stationary(
-    env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, eps=5e-3
-) -> torch.Tensor:
+def ball_stationary(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, eps=5e-3) -> torch.Tensor:
     return ball_speed(env, ball_cfg) < eps
 
 
@@ -538,14 +494,10 @@ def collision_player_ball_time_decay(
     """
     # Initialize the tracking buffer if it doesn't exist
     if not hasattr(env, "ball_hit_this_episode"):
-        env.ball_hit_this_episode = torch.zeros(
-            env.num_envs, dtype=torch.bool, device=env.device
-        )
+        env.ball_hit_this_episode = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
     # Check if collision occurred (with improved detection)
-    collision_now = collision_player_ball_bool(
-        env, player_cfg, ball_cfg, eps, min_relative_vel, min_ball_speed
-    )
+    collision_now = collision_player_ball_bool(env, player_cfg, ball_cfg, eps, min_relative_vel, min_ball_speed)
 
     # Only reward if collision AND not yet rewarded this episode
     should_reward = collision_now & (~env.ball_hit_this_episode)
@@ -561,9 +513,7 @@ def collision_player_ball_time_decay(
         # Exponential decay: maintains higher rewards early, then drops quickly
         time_multiplier = torch.exp(-decay_rate * progress)
     else:
-        raise ValueError(
-            f"Invalid decay_type '{decay_type}'. Must be 'linear' or 'exponential'."
-        )
+        raise ValueError(f"Invalid decay_type '{decay_type}'. Must be 'linear' or 'exponential'.")
 
     # Mark environments that had collision (for future timesteps)
     env.ball_hit_this_episode |= collision_now
@@ -614,10 +564,7 @@ def termination_reward_time_decay(
 
     if termination_term not in term_manager.active_terms:
         available_terms = term_manager.active_terms
-        raise ValueError(
-            f"Termination term '{termination_term}' not found. "
-            f"Available terms: {available_terms}"
-        )
+        raise ValueError(f"Termination term '{termination_term}' not found. " f"Available terms: {available_terms}")
 
     # Get the boolean termination signal for this specific term using the proper API
     terminated = term_manager.get_term(termination_term)
@@ -631,9 +578,7 @@ def termination_reward_time_decay(
     elif decay_type == "exponential":
         time_multiplier = torch.exp(-decay_rate * progress)
     else:
-        raise ValueError(
-            f"Invalid decay_type '{decay_type}'. Must be 'linear' or 'exponential'."
-        )
+        raise ValueError(f"Invalid decay_type '{decay_type}'. Must be 'linear' or 'exponential'.")
 
     return terminated.float() * time_multiplier
 
@@ -643,9 +588,7 @@ def ball_in_own_half(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg):
     return 1.0 * (ball_pos[:, 1] < 0.0)
 
 
-def distance_to_wall(
-    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg
-) -> torch.Tensor:
+def distance_to_wall(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torch.Tensor:
     player_pos = body_xy_pos_w(env, player_cfg)
     device = player_pos.device
     cost = torch.zeros(player_pos.shape[0], device=device)
@@ -727,9 +670,7 @@ def angle_ball_opp(
     return angle_rad.unsqueeze(-1)
 
 
-def distance_to_goal(
-    env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, goal: tuple
-) -> torch.Tensor:
+def distance_to_goal(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, goal: tuple) -> torch.Tensor:
     """
     Compute Euclidean distance from ball to goal center.
 

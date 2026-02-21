@@ -136,6 +136,7 @@ class KlaskRlDreamerSceneCfg(InteractiveSceneCfg):
         update_period=0.0,
         offset=TiledCameraCfg.OffsetCfg(
             pos=(0.0, 0.0, 0.392),  # Tuned to exactly fit the board from the top view
+            # pos=(0.0, 0.0, 0.505),  # Adjusted offset for 64x64 cam resolution
             rot=(0.5, -0.5, 0.5, 0.5),
             convention="world",
         ),

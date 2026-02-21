@@ -15,6 +15,7 @@ from ..utils_manager_based import (
     distance_ball_to_player,
     distance_to_goal,
     goal_position_obs,
+    padded_image,
     root_lin_xy_vel_w,
     root_xy_pos_w,
 )
@@ -186,51 +187,83 @@ def _peg_obs_group_with_goal(base: type, goal: tuple) -> type:
 # Concrete ObsGroup classes (instantiated from factories)
 # ---------------------------------------------------------------------------
 
-_PlayerPolicyCfg = _peg_obs_group(
-    own_body="Peg_1",
-    own_x_joint="slider_to_peg_1",
-    own_y_joint="ground_to_slider_1",
-    other_body="Peg_2",
-    other_x_joint="slider_to_peg_2",
-    other_y_joint="ground_to_slider_2",
-    own_goal=KLASK_PARAMS["player_goal"],
-    other_goal=KLASK_PARAMS["opponent_goal"],
+
+def _fix_pickle(cls: type, name: str) -> type:
+    """Make a factory-generated class picklable by fixing its qualname/name."""
+    cls.__qualname__ = name
+    cls.__name__ = name
+    return cls
+
+
+_PlayerPolicyCfg = _fix_pickle(
+    _peg_obs_group(
+        own_body="Peg_1",
+        own_x_joint="slider_to_peg_1",
+        own_y_joint="ground_to_slider_1",
+        other_body="Peg_2",
+        other_x_joint="slider_to_peg_2",
+        other_y_joint="ground_to_slider_2",
+        own_goal=KLASK_PARAMS["player_goal"],
+        other_goal=KLASK_PARAMS["opponent_goal"],
+    ),
+    "_PlayerPolicyCfg",
 )
-_OpponentPolicyCfg = _peg_obs_group(
-    own_body="Peg_2",
-    own_x_joint="slider_to_peg_2",
-    own_y_joint="ground_to_slider_2",
-    other_body="Peg_1",
-    other_x_joint="slider_to_peg_1",
-    other_y_joint="ground_to_slider_1",
-    own_goal=KLASK_PARAMS["opponent_goal"],
-    other_goal=KLASK_PARAMS["player_goal"],
+_OpponentPolicyCfg = _fix_pickle(
+    _peg_obs_group(
+        own_body="Peg_2",
+        own_x_joint="slider_to_peg_2",
+        own_y_joint="ground_to_slider_2",
+        other_body="Peg_1",
+        other_x_joint="slider_to_peg_1",
+        other_y_joint="ground_to_slider_1",
+        own_goal=KLASK_PARAMS["opponent_goal"],
+        other_goal=KLASK_PARAMS["player_goal"],
+    ),
+    "_OpponentPolicyCfg",
 )
 
-_PlayerPolicyExtendedCfg = _peg_obs_group_extended(
-    base=_PlayerPolicyCfg,
-    own_body="Peg_1",
-    other_body="Peg_2",
-    own_goal=KLASK_PARAMS["player_goal"],
-    other_goal=KLASK_PARAMS["opponent_goal"],
+_PlayerPolicyExtendedCfg = _fix_pickle(
+    _peg_obs_group_extended(
+        base=_PlayerPolicyCfg,
+        own_body="Peg_1",
+        other_body="Peg_2",
+        own_goal=KLASK_PARAMS["player_goal"],
+        other_goal=KLASK_PARAMS["opponent_goal"],
+    ),
+    "_PlayerPolicyExtendedCfg",
 )
-_OpponentPolicyExtendedCfg = _peg_obs_group_extended(
-    base=_OpponentPolicyCfg,
-    own_body="Peg_2",
-    other_body="Peg_1",
-    own_goal=KLASK_PARAMS["opponent_goal"],
-    other_goal=KLASK_PARAMS["player_goal"],
+_OpponentPolicyExtendedCfg = _fix_pickle(
+    _peg_obs_group_extended(
+        base=_OpponentPolicyCfg,
+        own_body="Peg_2",
+        other_body="Peg_1",
+        own_goal=KLASK_PARAMS["opponent_goal"],
+        other_goal=KLASK_PARAMS["player_goal"],
+    ),
+    "_OpponentPolicyExtendedCfg",
 )
 
-_PlayerPolicyActionHistoryCfg = _action_history_obs_group(
-    base=_PlayerPolicyCfg, action_name="player", history_length=KLASK_PARAMS["action_history"]
+_PlayerPolicyActionHistoryCfg = _fix_pickle(
+    _action_history_obs_group(
+        base=_PlayerPolicyCfg, action_name="player", history_length=KLASK_PARAMS["action_history"]
+    ),
+    "_PlayerPolicyActionHistoryCfg",
 )
-_OpponentPolicyActionHistoryCfg = _action_history_obs_group(
-    base=_OpponentPolicyCfg, action_name="opponent", history_length=KLASK_PARAMS["action_history"]
+_OpponentPolicyActionHistoryCfg = _fix_pickle(
+    _action_history_obs_group(
+        base=_OpponentPolicyCfg, action_name="opponent", history_length=KLASK_PARAMS["action_history"]
+    ),
+    "_OpponentPolicyActionHistoryCfg",
 )
 
-_TwoStageHerPlayerPolicyCfg = _peg_obs_group_with_goal(_PlayerPolicyCfg, KLASK_PARAMS["opponent_goal"])
-_TwoStageHerOpponentPolicyCfg = _peg_obs_group_with_goal(_OpponentPolicyCfg, KLASK_PARAMS["player_goal"])
+_TwoStageHerPlayerPolicyCfg = _fix_pickle(
+    _peg_obs_group_with_goal(_PlayerPolicyCfg, KLASK_PARAMS["opponent_goal"]),
+    "_TwoStageHerPlayerPolicyCfg",
+)
+_TwoStageHerOpponentPolicyCfg = _fix_pickle(
+    _peg_obs_group_with_goal(_OpponentPolicyCfg, KLASK_PARAMS["player_goal"]),
+    "_TwoStageHerOpponentPolicyCfg",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -276,8 +309,8 @@ class DreamerObservationsCfg:
     @configclass
     class ImageObsGroup(ObsGroup):
         image = ObsTerm(
-            func=mdp.image,
-            params={"sensor_cfg": SceneEntityCfg("camera"), "data_type": "rgb"},
+            func=padded_image,
+            params={"sensor_cfg": SceneEntityCfg("camera"), "data_type": "rgb", "target_h": 64, "target_w": 64},
         )
 
         def __post_init__(self) -> None:
@@ -287,4 +320,4 @@ class DreamerObservationsCfg:
     # observation groups
     policy: ObsGroup = _PlayerPolicyExtendedCfg()
     opponent: ObsGroup = _OpponentPolicyExtendedCfg()
-    visual: ObsGroup = ImageObsGroup()
+    image: ObsGroup = ImageObsGroup()

@@ -148,7 +148,7 @@ klask_vision_rgb:
   episode_length_s: 4.0 # [s] Episode length in seconds
 
   # Model
-  size: [48, 63]
+  size: [64, 64] # has to be 2^n and quare due to the CNN architecture
   encoder: { mlp_keys: '$^', cnn_keys: 'image' }
   decoder: { mlp_keys: '$^', cnn_keys: 'image' }
 
