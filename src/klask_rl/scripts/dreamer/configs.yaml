@@ -146,6 +146,7 @@ klask_vision_rgb:
   action_repeat: 20
   max_velocity: 0.6 # [m/s] Maximum velocity for player movement
   episode_length_s: 4.0 # [s] Episode length in seconds
+  actuator_model: true
 
   # Model
   size: [64, 64] # has to be 2^n and quare due to the CNN architecture
@@ -156,6 +157,31 @@ klask_vision_rgb:
   steps: 5e5
   train_ratio: 512
   video_pred_log: true
+
+  rewards:
+    time_punishment: 0.0
+    time_out_punishment: 0.0
+    shot_over_middle_line: 0.0
+    player_in_goal: -3.0
+    opponent_in_goal: 0.0
+    goal_scored: 5.0
+    goal_conceded: -3.0
+    distance_player_ball_own_half: 0.0
+    distance_ball_opponent_goal: 10.1
+    distance_ball_own_goal: -10.1
+    ball_speed: 0.0
+    ball_stationary: -0.01
+    collision_player_ball: 0.5
+    ball_in_own_half: 0.0
+    close_to_boundaries: -0.01
+    player_strategically_positioned: 0.0
+
+  terminations:
+    time_out: true
+    goal_scored: true
+    goal_conceded: true
+    player_in_goal: true
+    opponent_in_goal: true
 
   # Logging
   logdir: null # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory

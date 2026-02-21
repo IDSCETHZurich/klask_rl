@@ -50,6 +50,13 @@ from isaaclab.sim import RenderCfg
 import isaaclab_tasks  # noqa: F401
 import klask_rl.tasks  # noqa: F401
 
+from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
+from klask_rl.tasks.manager_based.klask_rl.wrappers import (
+    CurriculumWrapper,
+    KlaskRlRandomOpponentWrapper,
+)
+from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
+
 
 def make_isaac_env(config):
     """Create a vectorized IsaacLab environment wrapped for DreamerV3."""
@@ -90,7 +97,25 @@ def make_isaac_env(config):
         isaac_env.unwrapped.single_action_space, isaac_env.unwrapped.num_envs
     )
 
-    vec_env = IsaacLabVecEnv(isaac_env.unwrapped)
+    # Apply actuator model wrapper
+    if getattr(config, "actuator_model", False):
+        isaac_env = ActuatorModelWrapper(isaac_env)
+
+    # Configure reward weights
+    rewards_cfg = getattr(config, "rewards", None)
+    if rewards_cfg:
+        num_steps = config.steps / config.envs
+        isaac_env = CurriculumWrapper(isaac_env, rewards_cfg, num_steps=num_steps, dynamic=True)
+
+    # Configure terminations
+    terminations_cfg = getattr(config, "terminations", None)
+    if terminations_cfg:
+        set_terminations(isaac_env, terminations_cfg)
+
+    # Random opponent (single-agent training)
+    isaac_env = KlaskRlRandomOpponentWrapper(isaac_env)
+
+    vec_env = IsaacLabVecEnv(isaac_env)
 
     return vec_env
 
