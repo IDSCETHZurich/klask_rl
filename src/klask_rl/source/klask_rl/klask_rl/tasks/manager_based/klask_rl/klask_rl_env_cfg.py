@@ -1,4 +1,4 @@
-from isaaclab.sim import SimulationCfg, PhysxCfg
+from isaaclab.sim import SimulationCfg, PhysxCfg, RenderCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.utils import configclass
 
@@ -7,7 +7,7 @@ from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 from .env_cfg import KlaskRlSceneCfg, KlaskRlDreamerSceneCfg
 from .env_cfg import ActionsCfg, ActionsCfgPlayerOnly
-from .env_cfg import ObservationsCfg, GoalObservationsCfg, TwoStageHerObservationsCfg
+from .env_cfg import ObservationsCfg, ObservationsExtendedCfg, TwoStageHerObservationsCfg, DreamerObservationsCfg
 from .env_cfg import EventCfg, EventCfgSac
 from .env_cfg import (
     RewardsCfg,
@@ -29,7 +29,7 @@ class KlaskRlEnvCfg(ManagerBasedRLEnvCfg):
     # Scene settings
     scene = KlaskRlSceneCfg(num_envs=1, env_spacing=1.0)
     # Basic settings
-    observations = ObservationsCfg()
+    observations = ObservationsExtendedCfg()
     actions = ActionsCfg()
     events = EventCfg()
     rewards = RewardsCfg()
@@ -51,7 +51,7 @@ class KlaskRlEnvCfg(ManagerBasedRLEnvCfg):
 class KlaskRlSacEnvCfg(KlaskRlEnvCfg):
     """Configuration for SAC training with minimal observations and dense rewards."""
 
-    observations = ObservationsCfg()  # Minimal obs: direction_to_ball, player_pos, ball_pos
+    observations = ObservationsCfg()
     actions = ActionsCfgPlayerOnly()
     events = EventCfgSac()
     rewards = RewardsCfgDenseBallHit()
@@ -81,7 +81,7 @@ class KlaskRlHerSacEnvCfg(KlaskRlSacEnvCfg):
     trajectories from failures.
     """
 
-    observations = ObservationsCfg()  # Same observations as dense SAC
+    observations = ObservationsCfg()
     actions = ActionsCfgPlayerOnly()
     events = EventCfgSac()
     rewards = RewardsCfgSparseHer()  # Sparse reward for HER
@@ -136,12 +136,13 @@ class KlaskRlDreamerEnvCfg(ManagerBasedRLEnvCfg):
     sim = SimulationCfg(
         physx=PhysxCfg(bounce_threshold_velocity=0.0),
         render_interval=KLASK_PARAMS["decimation"],
+        render=RenderCfg(antialiasing_mode="Off"),
     )
     # Scene settings
     scene = KlaskRlDreamerSceneCfg(num_envs=1, env_spacing=1.0)
     # Basic settings
-    observations = TwoStageHerObservationsCfg()
-    actions = ActionsCfgPlayerOnly()
+    observations = DreamerObservationsCfg()
+    actions = ActionsCfg()
     events = EventCfg()
     rewards = RewardsCfg()
     terminations = TerminationsCfg()
