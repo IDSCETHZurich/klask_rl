@@ -225,7 +225,7 @@ class KlaskSacTwoStageHerJobCfg:
                 # "her.n_sampled_goal": tune.choice([2, 4, 8]),
                 # "two_stage.ball_hit_timeout": tune.choice([0.5, 1.0, 2.0]),
                 # "two_stage.ball_hit_env_reward": tune.loguniform(1.0, 1000.0),
-                "two_stage.goal_score_env_reward": tune.choice([500.0, 1000.0, 2000.0, 5000.0]),
+                "two_stage.goal_score_env_reward": tune.choice([500.0, 5000.0]),
                 # "two_stage.goal_score_env_reward": tune.sample_from(
                 #     lambda spec: np.exp(
                 #         np.random.uniform(
@@ -235,7 +235,7 @@ class KlaskSacTwoStageHerJobCfg:
                 #     )
                 # ),
                 # "two_stage.ball_hit_wrapper_reward": tune.loguniform(1.0, 1000.0),
-                "two_stage.goal_score_wrapper_reward": tune.choice([2.0, 5.0, 10.0, 50.0, 100.0]),
+                # "two_stage.goal_score_wrapper_reward": tune.choice([2.0, 5.0, 10.0, 50.0, 100.0]),
                 # "two_stage.goal_score_wrapper_reward": tune.sample_from(
                 #     lambda spec: np.exp(
                 #         np.random.uniform(
@@ -246,6 +246,12 @@ class KlaskSacTwoStageHerJobCfg:
                 #         )
                 #     )
                 # ),
+                #      500, 1000, 2000, 5000
+                #   2         x     x
+                #   5   x
+                #  10               x     x
+                #  50   x     x     x
+                # 100               x     x
             },
         }
 
