@@ -5,6 +5,9 @@
 
 """Script to train RL agent with RL-Games."""
 
+# Note: it is likly that the following command produced teh best agent (Tobias)
+# python scripts/rl_games/train_klask.py --config /workspace/klask_rl/scripts/rl_games/config/klask_config_3.yaml --device cuda:0 --headless --num_envs 4096 --wandb-project-name KLASK --training_curriculum --mode 0 --checkpoint /workspace/klask_rl/logs/rl_games/klask/pretrained_agent_action_1.0/nn/last_klask_ep_35_rew_3.9405801.pth --project_folder /workspace/klask_rl/logs/rl_games/klask/pool_of_players/
+
 """Launch Isaac Sim Simulator first."""
 
 import argparse
