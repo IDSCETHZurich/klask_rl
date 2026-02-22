@@ -249,9 +249,9 @@ class KlaskSacTwoStageHerJobCfg:
                 #      500, 1000, 2000, 5000
                 #   2   x     x     x     x
                 #   5   x     x     x     x
-                #  10               x     x
-                #  50   x     x     x
-                # 100               x     x
+                #  10   x     x     x     x
+                #  50   x     x     x     x
+                # 100   x     x     x     x
             },
         }
 
