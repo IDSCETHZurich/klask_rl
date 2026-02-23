@@ -279,7 +279,8 @@ def main():
         opp_runner = Runner()
         opp_runner.load(opponent_config)
         opponent = opp_runner.create_player()
-        opponent.restore(args_cli.opponent_checkpoint)
+        opp_checkpoint = torch.load(args_cli.opponent_checkpoint, map_location=args_cli.device, weights_only=False)
+        opponent.set_weights(opp_checkpoint)
         opponent.reset()
         opponent.device = torch.device(args_cli.device)
         opponent.model.to(args_cli.device)
@@ -309,13 +310,14 @@ def main():
     }
     total_games = 0
 
-    TERM_KEY_MAP = {
-        "Episode_Termination/goal_scored": "player_scored",
-        "Episode_Termination/goal_conceded": "opponent_scored",
-        "Episode_Termination/player_in_goal": "player_in_goal",
-        "Episode_Termination/opponent_in_goal": "opponent_in_goal",
-        "Episode_Termination/time_out": "time_expired",
+    TERM_NAME_MAP = {
+        "goal_scored": "player_scored",
+        "goal_conceded": "opponent_scored",
+        "player_in_goal": "player_in_goal",
+        "opponent_in_goal": "opponent_in_goal",
+        "time_out": "time_expired",
     }
+    term_manager = env.unwrapped.termination_manager
 
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
@@ -342,12 +344,14 @@ def main():
             if len(dones) > 0:
                 # --- accumulate termination stats ---
                 num_done = int(dones.sum().item()) if isinstance(dones, torch.Tensor) else int(sum(dones))
-                if num_done > 0 and isinstance(info, dict) and "episode" in info:
+                if num_done > 0:
                     total_games += num_done
-                    for info_key, count_key in TERM_KEY_MAP.items():
-                        if info_key in info["episode"]:
-                            val = info["episode"][info_key]
-                            term_counts[count_key] += int(val.item()) if isinstance(val, torch.Tensor) else int(val)
+                    # Use per-env termination data, counting only envs that terminated this step
+                    done_mask = dones.bool().to(term_manager._term_dones.device)
+                    for i, term_name in enumerate(term_manager._term_names):
+                        if term_name in TERM_NAME_MAP:
+                            count_key = TERM_NAME_MAP[term_name]
+                            term_counts[count_key] += int(term_manager._term_dones[done_mask, i].sum().item())
                     # update progress bar with live stats
                     if pbar is not None:
                         pbar.update(min(num_done, args_cli.num_games - pbar.n))
