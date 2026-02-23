@@ -247,11 +247,12 @@ class KlaskSacTwoStageHerJobCfg:
                 #     )
                 # ),
                 #      500, 1000, 2000, 5000
-                #   2   x     x     x     x
-                #   5   x     x     x     x
-                #  10   x     x     x     x
-                #  50   x     x     x     x
-                # 100   x     x     x     x
+                #   2   g   base    g/c   b
+                #   5   g     g     b     b/c
+                #  10   a     a     g/c   b
+                #  50   b     b     b     b
+                # 100   b     b     b     b
+                # b = bad, a = average, g = good
             },
         }
 
