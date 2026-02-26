@@ -307,17 +307,24 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         """Compute phase-aware sparse reward for HER goal relabeling.
 
         Uses the 5th dimension (phase flag) to decide which stage to evaluate:
-            Pre-hit  (achieved[4] == 0): Stage 1 — player near desired[0:2]
-            Post-hit (achieved[4] == 1): Stage 2 — ball near desired[2:4]
+            Pre-hit  (achieved[4] == 0): Stage 1 only — player near desired[0:2]
+            Post-hit (achieved[4] == 1): ball_hit_reward (base) + Stage 2 bonus
 
         After HER ``final`` relabeling, desired = final achieved:
             Pre-hit desired[0:2]  = final_player_pos → "pretend you wanted to go there"
             Post-hit desired[2:4] = final_ball_pos   → "pretend you wanted to shoot there"
 
-        Reward structure:
+        Reward structure (additive for post-hit):
             Pre-hit  + stage 1 success:  ball_hit_reward
-            Post-hit + stage 2 success:  goal_score_reward
+            Post-hit (always):           ball_hit_reward (ball was hit → base credit)
+            Post-hit + stage 2 success:  ball_hit_reward + goal_score_reward
             Otherwise:                   0
+
+        The base ball_hit_reward for all post-hit transitions is critical: it
+        provides the Q-value bridge between pre-hit navigation and post-hit
+        outcomes. Without it, the hit-moment transition gets 0 HER reward
+        (ball just started moving, far from final position), severing the
+        gradient path from navigation → hitting → scoring.
 
         Args:
             achieved_goal: shape (..., 5) = [player_xy, ball_xy, hit_flag]
@@ -338,10 +345,12 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         stage2_dist = np.linalg.norm(achieved_goal[..., 2:4] - desired_goal[..., 2:4], axis=-1)
         stage2_success = stage2_dist < self.goal_score_threshold
 
-        # Phase-aware reward: only evaluate the relevant stage
+        # Phase-aware reward:
+        #   Pre-hit:  stage 1 only (no spurious stage 2 from stationary ball)
+        #   Post-hit: ball_hit_reward always (base) + goal_score_reward if stage 2
         reward = np.where(
             is_post_hit,
-            np.where(stage2_success, self.goal_score_reward, 0.0),
+            self.ball_hit_reward + np.where(stage2_success, self.goal_score_reward, 0.0),
             np.where(stage1_success, self.ball_hit_reward, 0.0),
         )
 
