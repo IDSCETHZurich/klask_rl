@@ -36,20 +36,24 @@ class KlaskRlAlgoObserver(AlgoObserver):
                 if isinstance(v, float) or isinstance(v, int) or (isinstance(v, torch.Tensor) and len(v.shape) == 0):
                     self.direct_info[k] = v
                 if k == "episode":
-
+                    # Values are fractions (mean over all envs), convert to counts
+                    # by multiplying by num_envs so we push the right number of
+                    # entries into the rolling score buffer.
+                    num_envs = self.algo.num_actors
                     for key, val in v.items():
-                        if isinstance(val, torch.Tensor) and len(val.shape) != 0:
-                            val = int(val.item())
+                        if isinstance(val, torch.Tensor):
+                            val = val.item()
+                        count = max(1, round(float(val) * num_envs))
                         if key == "Episode_Termination/goal_scored":
-                            self.mean_scores.update(torch.ones(int(val), dtype=torch.float).to(self.algo.ppo_device))
+                            self.mean_scores.update(torch.ones(count, dtype=torch.float).to(self.algo.ppo_device))
                         elif key == "Episode_Termination/goal_conceded":
-                            self.mean_scores.update(-torch.ones(int(val), dtype=torch.float).to(self.algo.ppo_device))
+                            self.mean_scores.update(-torch.ones(count, dtype=torch.float).to(self.algo.ppo_device))
                         elif key == "Episode_Termination/player_in_goal":
-                            self.mean_scores.update(-torch.ones(int(val), dtype=torch.float).to(self.algo.ppo_device))
+                            self.mean_scores.update(-torch.ones(count, dtype=torch.float).to(self.algo.ppo_device))
                         elif key == "Episode_Termination/opponent_in_goal":
-                            self.mean_scores.update(torch.ones(int(val), dtype=torch.float).to(self.algo.ppo_device))
+                            self.mean_scores.update(torch.ones(count, dtype=torch.float).to(self.algo.ppo_device))
                         elif key == "Episode_Termination/time_out":
-                            self.mean_scores.update(torch.zeros(int(val), dtype=torch.float).to(self.algo.ppo_device))
+                            self.mean_scores.update(torch.zeros(count, dtype=torch.float).to(self.algo.ppo_device))
 
     def after_clear_stats(self):
         # clear stored buffers
