@@ -60,7 +60,7 @@ parser.add_argument(
 parser.add_argument(
     "--num_games",
     type=int,
-    default=1000,
+    default=10000,
     help="Number of games to play in head-to-head evaluation mode.",
 )
 
@@ -326,7 +326,7 @@ def main():
     pbar = tqdm(total=args_cli.num_games, desc="Games", disable=not head_to_head) if head_to_head else None
 
     start_time = time.time()
-    while simulation_app.is_running() and time.time() - start_time < 1000.0:
+    while simulation_app.is_running() and (head_to_head or time.time() - start_time < 1000.0):
         # In head-to-head mode, stop after the requested number of games
         if head_to_head and total_games >= args_cli.num_games:
             break
