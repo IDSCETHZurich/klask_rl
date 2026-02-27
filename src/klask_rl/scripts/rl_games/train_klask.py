@@ -62,6 +62,7 @@ import math
 import os
 import pickle
 import random
+import signal
 import yaml
 from datetime import datetime
 import time
@@ -258,7 +259,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         agent_cfg["env"] = KLASK_PARAMS
 
-    if args_cli.wandb_project_name is not None:
+    use_wandb = args_cli.wandb_project_name is not None
+    if use_wandb:
         import wandb
 
         config = {"agent": agent_cfg, "env": env_cfg.to_dict()}
@@ -274,22 +276,37 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # reset the agent and env
     runner.reset()
     start_time = time.time()
-    # train the agent
-    if args_cli.checkpoint is not None:
-        runner.run({"train": True, "play": False, "sigma": train_sigma, "checkpoint": resume_path})
-    else:
-        runner.run({"train": True, "play": False, "sigma": train_sigma})
-    print(f"Total training time: {time.time() - start_time}")
+    interrupted = False
+    try:
+        # train the agent
+        if args_cli.checkpoint is not None:
+            runner.run({"train": True, "play": False, "sigma": train_sigma, "checkpoint": resume_path})
+        else:
+            runner.run({"train": True, "play": False, "sigma": train_sigma})
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\n[INFO] Training interrupted by user (Ctrl+C).")
+    finally:
+        print(f"Total training time: {time.time() - start_time}")
 
-    # log model checkpoint to wandb:
-    if args_cli.wandb_project_name is not None:
-        model = wandb.Artifact("model", type="model")
-        model.add_file(os.path.join(log_root_path, log_dir, "nn", f"{agent_cfg['params']['config']['name']}.pth"))
-        wandb.log_artifact(model)
-        wandb.finish()
+        # log model checkpoint to wandb and finish the run:
+        if use_wandb:
+            if interrupted:
+                wandb.finish(exit_code=1)
+            else:
+                model = wandb.Artifact("model", type="model")
+                model.add_file(
+                    os.path.join(log_root_path, log_dir, "nn", f"{agent_cfg['params']['config']['name']}.pth")
+                )
+                wandb.log_artifact(model)
+                wandb.finish()
 
-    # close the simulator
-    env.close()
+        # close the simulator
+        env.close()
+
+    # re-raise so the process exits cleanly after cleanup
+    if interrupted:
+        signal.raise_signal(signal.SIGINT)
 
 
 if __name__ == "__main__":
