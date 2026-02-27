@@ -26,9 +26,7 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("ball"),
-                "mass_distribution_params": KLASK_PARAMS["domain_randomization"][
-                    "ball_mass_range"
-                ],
+                "mass_distribution_params": KLASK_PARAMS["domain_randomization"]["ball_mass_range"],
                 "operation": "abs",
             },
         )
@@ -38,15 +36,9 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("ball"),
-                "static_friction_range": KLASK_PARAMS["domain_randomization"][
-                    "static_friction_range"
-                ],
-                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"][
-                    "dynamic_friction_range"
-                ],
-                "restitution_range": KLASK_PARAMS["domain_randomization"][
-                    "restitution_range"
-                ],
+                "static_friction_range": KLASK_PARAMS["domain_randomization"]["static_friction_range"],
+                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"]["dynamic_friction_range"],
+                "restitution_range": KLASK_PARAMS["domain_randomization"]["restitution_range"],
                 "num_buckets": 100,
                 "make_consistent": True,
             },
@@ -57,15 +49,9 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("klask"),
-                "static_friction_range": KLASK_PARAMS["domain_randomization"][
-                    "static_friction_range"
-                ],
-                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"][
-                    "dynamic_friction_range"
-                ],
-                "restitution_range": KLASK_PARAMS["domain_randomization"][
-                    "restitution_range"
-                ],
+                "static_friction_range": KLASK_PARAMS["domain_randomization"]["static_friction_range"],
+                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"]["dynamic_friction_range"],
+                "restitution_range": KLASK_PARAMS["domain_randomization"]["restitution_range"],
                 "num_buckets": 100,
                 "make_consistent": True,
             },
@@ -76,12 +62,8 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("klask"),
-                "stiffness_distribution_params": KLASK_PARAMS["domain_randomization"][
-                    "stiffness_range"
-                ],
-                "damping_distribution_params": KLASK_PARAMS["domain_randomization"][
-                    "damping_range"
-                ],
+                "stiffness_distribution_params": KLASK_PARAMS["domain_randomization"]["stiffness_range"],
+                "damping_distribution_params": KLASK_PARAMS["domain_randomization"]["damping_range"],
                 "operation": "abs",
             },
         )
@@ -113,7 +95,7 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("klask", joint_names=["ground_to_slider_1"]),
-            "position_range": (-0.025, 0.085),
+            "position_range": (-0.14, -0.03),
             # "position_range": (-0.1103, -0.1103),
             # "velocity_range": (-0.0043, -0.0043)
             "velocity_range": (0.0, 0.0),
@@ -125,7 +107,7 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("klask", joint_names=["ground_to_slider_2"]),
-            "position_range": (-0.085, 0.025),
+            "position_range": (0.03, 0.14),
             "velocity_range": (0.0, 0.0),
         },
     )
@@ -174,7 +156,7 @@ class EventCfgSac(EventCfg):
             "asset_cfg": SceneEntityCfg("ball"),
             "pose_range": {
                 "x": KLASK_PARAMS["ball_reset_position_x"],  # Full x range
-                "y": (-0.10, -0.02), # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
+                "y": (-0.10, -0.02),  # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
                 "z": (0.032, 0.032),
             },
             "velocity_range": {

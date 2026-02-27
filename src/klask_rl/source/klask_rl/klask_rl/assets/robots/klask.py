@@ -12,11 +12,11 @@ KLASK_PARAMS = {
     "decimation": 20,  # system is running at 50Hz (night shift with 100Hz)
     "physics_dt": 0.001,
     "actuator_delay": (0.0, 0.0),
-    "player_goal": (0.0, -0.17, 0.01905),
-    "opponent_goal": (0.0, 0.17, 0.01905),
+    "player_goal": (0.0, -0.176215, 0.01905),
+    "opponent_goal": (0.0, 0.176215, 0.01905),
     "ball_mass_initial": 0.002,
     "ball_reset_position_x": (-0.15, 0.15),
-    "ball_reset_position_y": (-0.21, 0.21),
+    "ball_reset_position_y": (-0.12, 0.12),
 }
 
 if s2r:
@@ -42,14 +42,13 @@ if s2r:
 else:
     KLASK_PARAMS.update(
         {
-            "timeout": 5.0,
+            "timeout": 10.0,
             "action_history": 0,
-            "ball_restitution": 0.8,
+            "ball_restitution": 0.3,
             "ball_static_friction": 0.03,
-            "ball_dynamic_friction": 0.03,
+            "ball_dynamic_friction": 0.01,
             "max_ball_vel": 100.0,  # maximum speed the ball may have for a goal to be counted
             "edge": (-0.16, 0.16, -0.21, -0.02),
-            "additional_observations": False,
             "domain_randomization": {
                 "use_domain_randomization": False,
                 "static_friction_range": (0.2, 0.5),
