@@ -37,8 +37,8 @@ params:
     full_experiment_name: training_curriculum/agent_3
     name: klask
     env_name: rlgpu
-    device: cuda:2
-    device_name: cuda:2
+    device: cuda:0
+    device_name: cuda:0
     multi_gpu: false
     ppo: true
     mixed_precision: true
@@ -72,7 +72,7 @@ params:
     games_to_track: 4096
     self_play_config:
       check_scores: true
-      update_score: 0.7
+      update_score: 0.3
       games_to_check: 1
       env_update_num: 4096
     train_dir: /home/student/klask_rl/IsaacLab/logs/rl_games/klask
