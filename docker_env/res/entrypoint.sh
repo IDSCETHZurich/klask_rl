@@ -4,7 +4,7 @@
 echo "===================================="
 echo "Installing klask_rl package..."
 echo "===================================="
-/workspace/isaaclab/_isaac_sim/python.sh -m pip install --root-user-action -e /workspace/klask_rl/source/klask_rl
+/workspace/isaaclab/_isaac_sim/python.sh -m pip install --root-user-action=ignore -e /workspace/klask_rl/source/klask_rl
 if [ $? -eq 0 ]; then
     echo "✓ klask_rl package installed successfully"
 else
