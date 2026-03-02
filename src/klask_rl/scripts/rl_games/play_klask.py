@@ -85,6 +85,7 @@ import os
 import torch
 import yaml
 import time
+from datetime import datetime
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
@@ -384,28 +385,46 @@ def main():
 
     # -- Print summary --
     if head_to_head:
-        print("\n" + "=" * 50)
-        print("  HEAD-TO-HEAD EVALUATION RESULTS")
-        print("=" * 50)
-        print(f"  Player checkpoint : {resume_path}")
-        print(f"  Opponent checkpoint: {args_cli.opponent_checkpoint}")
-        print(f"  Total games played : {total_games}")
-        print("-" * 50)
-        print(f"  Player scored (goal_scored)      : {term_counts['player_scored']}")
-        print(f"  Opponent scored (goal_conceded)   : {term_counts['opponent_scored']}")
-        print(f"  Player fell in goal (player_in)   : {term_counts['player_in_goal']}")
-        print(f"  Opponent fell in goal (opp_in)    : {term_counts['opponent_in_goal']}")
-        print(f"  Time expired (time_out)           : {term_counts['time_expired']}")
-        print("-" * 50)
         player_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
         opponent_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
         draws = term_counts["time_expired"]
-        print(f"  Player wins  : {player_wins}")
-        print(f"  Opponent wins: {opponent_wins}")
-        print(f"  Draws        : {draws}")
+        
+        # Create summary text
+        summary_lines = [
+            "\n" + "=" * 50,
+            "  HEAD-TO-HEAD EVALUATION RESULTS",
+            "=" * 50,
+            f"  Player checkpoint : {resume_path}",
+            f"  Opponent checkpoint: {args_cli.opponent_checkpoint}",
+            f"  Total games played : {total_games}",
+            "-" * 50,
+            f"  Player scored (goal_scored)      : {term_counts['player_scored']}",
+            f"  Opponent scored (goal_conceded)   : {term_counts['opponent_scored']}",
+            f"  Player fell in goal (player_in)   : {term_counts['player_in_goal']}",
+            f"  Opponent fell in goal (opp_in)    : {term_counts['opponent_in_goal']}",
+            f"  Time expired (time_out)           : {term_counts['time_expired']}",
+            "-" * 50,
+            f"  Player wins  : {player_wins}",
+            f"  Opponent wins: {opponent_wins}",
+            f"  Draws        : {draws}",
+        ]
         if total_games > 0:
-            print(f"  Player win rate: {player_wins / total_games * 100:.1f}%")
-        print("=" * 50 + "\n")
+            summary_lines.append(f"  Player win rate: {player_wins / total_games * 100:.1f}%")
+        summary_lines.append("=" * 50 + "\n")
+        
+        summary_text = "\n".join(summary_lines)
+        
+        # Print to console
+        print(summary_text)
+        
+        # Write to file
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_dir = os.path.join(log_root_path, "head_to_head_results")
+        os.makedirs(results_dir, exist_ok=True)
+        results_file = os.path.join(results_dir, f"h2h_results_{timestamp}.txt")
+        with open(results_file, "w") as f:
+            f.write(summary_text)
+        print(f"[INFO] Head-to-head results saved to: {results_file}")
     else:
         plt.plot(rewards, label="Reward")
         plt.legend()
