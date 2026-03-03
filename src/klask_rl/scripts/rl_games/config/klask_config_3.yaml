@@ -2,7 +2,7 @@ params:
   seed: 3
   env:
     clip_observations: 10.0
-    clip_actions: 0.2
+    clip_actions: 0.6
   algo:
     name: a2c_continuous
   model:
