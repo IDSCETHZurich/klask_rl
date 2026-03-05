@@ -232,3 +232,5 @@ wandb/
 
 # Streamer data dir
 ${data}
+
+logdir/

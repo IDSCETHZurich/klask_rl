@@ -1,280 +1,324 @@
-# Launch Isaac Sim Simulator first.
+# =============================================================================
+# Phase 1: AppLauncher must run before any IsaacLab / USD / warp imports.
+# =============================================================================
 
 import argparse
-import sys
 import pathlib
+import sys
+
+# Auto-detect vision env from CLI and enable cameras before AppLauncher
+# parses argv, so the user doesn't have to pass --enable_cameras manually.
+_vision = False
+for _arg in sys.argv[1:]:
+    if _arg.startswith("env=") and "vision" in _arg.split("=", 1)[1]:
+        _vision = True
+        break
+
+# The KLASK Dreamer env always uses cameras (cnn_keys: "image"), so we
+# unconditionally enable them.  This avoids having to pass --enable_cameras
+# on every invocation.
+if "--enable_cameras" not in sys.argv:
+    sys.argv.insert(1, "--enable_cameras")
 
 from isaaclab.app import AppLauncher
-from datetime import datetime
 
-import numpy as np
-
-# parse dreamer + isaaclab args in two stages
-parser = argparse.ArgumentParser(description="Train DreamerV3 for KLASK.")
-parser.add_argument("--config", nargs="+")
+parser = argparse.ArgumentParser(description="Train r2dreamer with IsaacLab.")
 AppLauncher.add_app_launcher_args(parser)
-args_cli, remaining = parser.parse_known_args()
-
-# DreamerV3 always needs cameras for visual observations
-args_cli.enable_cameras = True
+# Capture only the args AppLauncher understands; pass the rest to Hydra.
+args_cli, hydra_args = parser.parse_known_args()
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-"""Rest everything follows."""
+# =============================================================================
+# Phase 2: Everything else — safe to import now that the sim is running.
+# =============================================================================
 
-import functools
+import atexit
 import signal
+import warnings
 
-import gymnasium as gym
-import ruamel.yaml as yaml
+import hydra
 import torch
-from torch import distributions as torchd
+from omegaconf import OmegaConf
 
-# Isaac Sim may override the default SIGINT handler, preventing
-# Python's KeyboardInterrupt from firing on Ctrl+C. Restore it
-# so that try/finally cleanup (wandb.finish, etc.) works properly.
+# Isaac Sim may override SIGINT; restore Python's default so Ctrl-C works.
 signal.signal(signal.SIGINT, signal.default_int_handler)
 
-sys.path.append(str(pathlib.Path(__file__).parent))
+# Absolute path to this script's directory — used by Hydra searchpath via
+# the ${script_dir:} OmegaConf resolver so configs resolve regardless of cwd.
+_SCRIPT_DIR = str(pathlib.Path(__file__).resolve().parent)
 
-from dreamerv3torch import tools
-from dreamerv3torch.envs.isaaclab import IsaacLabVecEnv
-from dreamerv3torch.dreamer import Dreamer, count_steps, make_dataset
+# Register a resolver so config.yaml can write ${script_dir:} to get an
+# absolute path that is independent of the current working directory.
+OmegaConf.register_new_resolver("script_dir", lambda: _SCRIPT_DIR, use_cache=True)
 
-from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
-from isaaclab.sim import RenderCfg
+sys.path.append(str(pathlib.Path(_SCRIPT_DIR) / "r2dreamer"))
+sys.path.append(_SCRIPT_DIR)
+warnings.filterwarnings("ignore")
+torch.set_float32_matmul_precision("high")
 
-# import isaaclab tasks to trigger gym.register calls
+# Register IsaacLab task environments (triggers gymnasium gym.register calls).
 import isaaclab_tasks  # noqa: F401
 import klask_rl.tasks  # noqa: F401
+import tools
+from buffer import Buffer
+from dreamer import Dreamer
 
+# Self-play wrapper (lives outside the r2dreamer submodule)
+from dreamer_self_play import DreamerSelfPlayWrapper
+from envs import make_envs
+from envs.isaaclab import IsaacLabVecEnv
+from isaaclab.sim import RenderCfg
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
+from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     CurriculumWrapper,
     KlaskRlRandomOpponentWrapper,
 )
-from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
+from trainer import OnlineTrainer
+
+# =============================================================================
+# Task registry — all task-specific knowledge lives here, not in envs/__init__.py
+# =============================================================================
 
 
-def make_isaac_env(config):
-    """Create a vectorized IsaacLab environment wrapped for DreamerV3."""
-    gym_id = config.task
+# Global reference to the self-play wrapper (set during env construction,
+# used later to initialise / update the opponent from the training agent).
+_self_play_wrapper = None
 
-    env_cfg_class = gym.spec(gym_id).kwargs["env_cfg_entry_point"]
-    # resolve string to class
-    if isinstance(env_cfg_class, str):
-        module_name, class_name = env_cfg_class.rsplit(":", 1)
-        import importlib
 
-        mod = importlib.import_module(module_name)
-        env_cfg_class = getattr(mod, class_name)
+def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=False, self_play_config=None):
+    """Construct a GPU-resident IsaacLab env with KLASK-specific wrappers.
+
+    Applies (in order):
+      1. Bounded action space (max_velocity)
+      2. ActuatorModelWrapper (if config.actuator_model)
+      3. CurriculumWrapper (if config.rewards)
+      4. Termination filtering (if config.terminations)
+      5. Opponent wrapper:
+         - DreamerSelfPlayWrapper if self_play=True
+         - KlaskRlRandomOpponentWrapper otherwise
+    """
+    global _self_play_wrapper
+    import importlib
+
+    import gymnasium as gym
+    import numpy as np
+
+    env_cfg_entry = gym.spec(gym_id).kwargs["env_cfg_entry_point"]
+    if isinstance(env_cfg_entry, str):
+        module_name, class_name = env_cfg_entry.rsplit(":", 1)
+        env_cfg_class = getattr(importlib.import_module(module_name), class_name)
+    else:
+        env_cfg_class = env_cfg_entry
 
     env_cfg = env_cfg_class()
-    env_cfg.scene.num_envs = config.envs
-    env_cfg.decimation = config.action_repeat
-    env_cfg.seed = config.seed
+
+    sim_dt = getattr(config, "sim_dt", None)
+    if sim_dt is not None:
+        env_cfg.sim.dt = float(sim_dt)
+
+    env_cfg.scene.num_envs = int(config.env_num)
+    env_cfg.decimation = int(config.action_repeat)
+    env_cfg.seed = int(config.seed)
     env_cfg.episode_length_s = config.episode_length_s
 
     # IsaacLab defaults to DLSS which smooths the image significantly
     # so we disable the antialiasing for a more pixelated (and hence more realistic) image.
     env_cfg.sim.render = RenderCfg(antialiasing_mode="Off")
 
-    # Create the environment
-    isaac_env = gym.make(gym_id, cfg=env_cfg, render_mode="rgb_array")
+    # --- Create the base gymnasium env ---
+    isaac_env = gym.make(gym_id, cfg=env_cfg, render_mode=render_mode)
 
-    # Convert to single-agent instance if required
-    if isinstance(isaac_env.unwrapped, DirectMARLEnv):
-        isaac_env = multi_agent_to_single_agent(isaac_env)
+    # --- 1. Set bounded action space ---
+    max_velocity = getattr(config, "max_velocity", None)
+    if max_velocity is not None:
+        action_dim = isaac_env.unwrapped.single_action_space.shape[-1]
+        isaac_env.unwrapped.single_action_space = gym.spaces.Box(
+            low=-float(max_velocity),
+            high=float(max_velocity),
+            shape=(action_dim,),
+            dtype=np.float32,
+        )
+        isaac_env.unwrapped.action_space = gym.vector.utils.batch_space(
+            isaac_env.unwrapped.single_action_space, isaac_env.unwrapped.num_envs
+        )
 
-    # Set bounded action space
-    action_dim = isaac_env.unwrapped.single_action_space.shape[-1]
-    isaac_env.unwrapped.single_action_space = gym.spaces.Box(
-        low=-config.max_velocity, high=config.max_velocity, shape=(action_dim,), dtype=np.float32
-    )
-    isaac_env.unwrapped.action_space = gym.vector.utils.batch_space(
-        isaac_env.unwrapped.single_action_space, isaac_env.unwrapped.num_envs
-    )
-
-    # Apply actuator model wrapper
+    # --- 2. Actuator model wrapper ---
     if getattr(config, "actuator_model", False):
         isaac_env = ActuatorModelWrapper(isaac_env)
 
-    # Configure reward weights
+    # --- 3. Reward curriculum wrapper ---
     rewards_cfg = getattr(config, "rewards", None)
-    if rewards_cfg:
-        num_steps = config.steps / config.envs
-        isaac_env = CurriculumWrapper(isaac_env, rewards_cfg, num_steps=num_steps, dynamic=True)
+    if rewards_cfg is not None:
+        if OmegaConf.is_config(rewards_cfg):
+            rewards_dict = OmegaConf.to_container(rewards_cfg, resolve=True)
+        else:
+            rewards_dict = dict(rewards_cfg)
+        num_steps = (float(trainer_steps) / int(config.env_num)) if trainer_steps else 1e6
+        isaac_env = CurriculumWrapper(isaac_env, rewards_dict, num_steps=num_steps, dynamic=True)
 
-    # Configure terminations
+    # --- 4. Termination filtering ---
     terminations_cfg = getattr(config, "terminations", None)
-    if terminations_cfg:
-        set_terminations(isaac_env, terminations_cfg)
+    if terminations_cfg is not None:
+        if OmegaConf.is_config(terminations_cfg):
+            term_dict = OmegaConf.to_container(terminations_cfg, resolve=True)
+        else:
+            term_dict = dict(terminations_cfg)
+        set_terminations(isaac_env, term_dict)
 
-    # Random opponent (single-agent training)
-    isaac_env = KlaskRlRandomOpponentWrapper(isaac_env)
+    # --- 5. Opponent wrapper ---
+    if self_play:
+        sp_cfg = self_play_config or {}
+        _self_play_wrapper = DreamerSelfPlayWrapper(
+            isaac_env,
+            update_score=float(sp_cfg.get("update_score", 0.7)),
+            games_to_track=int(sp_cfg.get("games_to_track", 4096)),
+        )
+        isaac_env = _self_play_wrapper
+    else:
+        isaac_env = KlaskRlRandomOpponentWrapper(isaac_env)
 
-    vec_env = IsaacLabVecEnv(isaac_env)
+    # Wrap in the r2dreamer IsaacLabVecEnv adapter
+    return IsaacLabVecEnv(isaac_env, simulation_app=simulation_app)
 
-    return vec_env
+
+# =============================================================================
+# Main
+# =============================================================================
 
 
+@hydra.main(version_base=None, config_path=".", config_name="config")
 def main(config):
+    # env.task follows the codebase convention: "isaaclab_<task_name>"
+    # e.g. "isaaclab_cartpole_balance"
+    full_task = config.env.task  # e.g. "isaaclab_cartpole_balance"
+    _, task_name = full_task.split("_", 1)  # e.g. "cartpole_balance"
+
+    render_mode = "rgb_array" if _vision else None
+    trainer_steps = getattr(config.trainer, "steps", None)
+    self_play = getattr(config, "self_play", False)
+
+    # Attach self_play_config to env config so _make_env can read it.
+    sp_cfg = (
+        OmegaConf.to_container(config.get("self_play_config", OmegaConf.create({})), resolve=True) if self_play else {}
+    )
+
+    vec_env = _make_env(
+        config.env,
+        task_name,
+        render_mode,
+        trainer_steps=trainer_steps,
+        self_play=self_play,
+        self_play_config=sp_cfg,
+    )
+
     tools.set_seed_everywhere(config.seed)
     if config.deterministic_run:
         tools.enable_deterministic_run()
-    if config.logdir is None:
-        config.logdir = (
-            pathlib.Path().cwd() / "logs" / "dreamer" / config.task / datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        )
-    config.logdir = pathlib.Path(config.logdir).expanduser()
-    config.traindir = config.traindir or config.logdir / "train_eps"
-    config.evaldir = config.evaldir or config.logdir / "eval_eps"
 
-    print("Logdir", config.logdir)
-    config.logdir.mkdir(parents=True, exist_ok=True)
-    config.traindir.mkdir(parents=True, exist_ok=True)
-    config.evaldir.mkdir(parents=True, exist_ok=True)
-    step = count_steps(config.traindir)
-    # step in logger is environmental step
-    logger = tools.Logger(config.logdir, step, config)
+    logdir = pathlib.Path(config.logdir).expanduser()
+    logdir.mkdir(parents=True, exist_ok=True)
 
-    logger.print("Create envs.")
-    if config.offline_traindir:
-        directory = config.offline_traindir.format(**vars(config))
-    else:
-        directory = config.traindir
-    train_eps = tools.load_episodes(directory, limit=config.dataset_size)
-    if config.offline_evaldir:
-        directory = config.offline_evaldir.format(**vars(config))
-    else:
-        directory = config.evaldir
-    eval_eps = tools.load_episodes(directory, limit=1)
+    console_f = tools.setup_console_log(logdir, filename="console.log")
+    atexit.register(lambda: console_f.close())
 
-    isaac_env = make_isaac_env(config)
+    print("Logdir", logdir)
 
-    # In IsaacLab, action_repeat is just physics decimation handled inside
-    # env.step(). There is no agent-level action repeat, so set to 1 to
-    # prevent the Dreamer class from scaling step counts.
-    config.action_repeat = 1
+    wandb_cfg = {
+        "project": getattr(config, "wandb_project", "r2dreamer-isaaclab"),
+        "name": getattr(config, "wandb_name", f"dreamer_{task_name}"),
+        "dir": str(logdir),
+    }
+    logger = tools.Logger(
+        logdir,
+        backends=[
+            tools.JSONLBackend(logdir),
+            # tools.TensorBoardBackend(logdir),
+            tools.WandbBackend(wandb_cfg),
+        ],
+    )
+    logger.log_hydra_config(config)
 
-    acts = isaac_env.action_space
-    logger.print("Action Space", acts)
-    config.num_actions = acts.n if hasattr(acts, "n") else acts.shape[0]
+    replay_buffer = Buffer(config.buffer)
 
-    state = None
-    if not config.offline_traindir:
-        prefill = max(0, config.prefill - count_steps(config.traindir))
-        logger.print(f"Prefill dataset ({prefill} steps).")
-        random_actor = torchd.independent.Independent(
-            torchd.uniform.Uniform(
-                torch.tensor(acts.low).repeat(config.envs, 1).to(config.device),
-                torch.tensor(acts.high).repeat(config.envs, 1).to(config.device),
-            ),
-            1,
-        )
+    print("Create env.")
+    # OmegaConf configs are read-only; use a plain object to pass the env through.
+    env_config = OmegaConf.to_container(config.env, resolve=True)
+    env_config = type("EnvConfig", (), env_config)()
+    env_config.isaac_vec_env = vec_env
+    train_envs, eval_envs, obs_space, act_space = make_envs(env_config)
 
-        def random_agent(o, d, s):
-            action = random_actor.sample()
-            logprob = random_actor.log_prob(action)
-            return {"action": action, "logprob": logprob}, None
-
-        state = tools.simulate_vec(
-            random_agent,
-            isaac_env,
-            train_eps,
-            config.traindir,
-            logger,
-            limit=config.dataset_size,
-            steps=prefill,
-        )
-        logger.step += prefill
-        logger.print(f"Logger: ({logger.step} steps).")
-
-    logger.print("Simulate agent.")
-    train_dataset = make_dataset(train_eps, config)
-    eval_dataset = make_dataset(eval_eps, config)
+    print("Simulate agent.")
     agent = Dreamer(
-        isaac_env.observation_space,
-        isaac_env.action_space,
-        config,
-        logger,
-        train_dataset,
+        config.model,
+        obs_space,
+        act_space,
     ).to(config.device)
-    agent.requires_grad_(requires_grad=False)
-    if (config.logdir / "latest.pt").exists():
-        checkpoint = torch.load(config.logdir / "latest.pt")
-        agent.load_state_dict(checkpoint["agent_state_dict"])
-        tools.recursively_load_optim_state_dict(agent, checkpoint["optims_state_dict"])
-        agent._should_pretrain._once = False
+
+    # Initialise self-play opponent from the (randomly initialised) agent.
+    if _self_play_wrapper is not None:
+        _self_play_wrapper.set_opponent(agent)
+        print("Self-play enabled: opponent initialised from current agent.")
+
+    # Subclass OnlineTrainer to hook score-gated opponent updates.
+    class SelfPlayTrainer(OnlineTrainer):
+        """OnlineTrainer that conditionally updates the self-play opponent.
+
+        At each eval boundary the wrapper's rolling mean score is checked.
+        The opponent weights are copied from the training agent only when
+        the score exceeds the configured threshold — matching the
+        ``SelfPlayManager`` behaviour in rl_games.
+        """
+
+        def eval(self, agent, train_step):
+            if _self_play_wrapper is not None:
+                _self_play_wrapper.maybe_update_opponent(
+                    agent,
+                    logger=self.logger,
+                    train_step=train_step,
+                )
+            return super().eval(agent, train_step)
+
+    TrainerClass = SelfPlayTrainer if _self_play_wrapper is not None else OnlineTrainer
+    policy_trainer = TrainerClass(
+        config.trainer,
+        replay_buffer,
+        logger,
+        logdir,
+        train_stepper=train_envs,
+        eval_stepper=eval_envs,
+    )
 
     exit_code = 0
     try:
-        # make sure eval will be executed once after config.steps
-        while agent._step < config.steps + config.eval_every:
-            logger.write()
-            if config.eval_episode_num > 0:
-                logger.print("Start evaluation.")
-                eval_policy = functools.partial(agent, training=False)
-                tools.simulate_vec(
-                    eval_policy,
-                    isaac_env,
-                    eval_eps,
-                    config.evaldir,
-                    logger,
-                    is_eval=True,
-                    episodes=config.eval_episode_num,
-                )
-                if config.video_pred_log:
-                    video_pred = agent._wm.video_pred(next(eval_dataset))
-                    logger.video("eval_openl", tools.to_np(video_pred))
-                state = None
-            logger.print("Start training.")
-            state = tools.simulate_vec(
-                agent,
-                isaac_env,
-                train_eps,
-                config.traindir,
-                logger,
-                limit=config.dataset_size,
-                steps=config.eval_every,
-                state=state,
-            )
-            items_to_save = {
-                "agent_state_dict": agent.state_dict(),
-                "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
-            }
-            torch.save(items_to_save, config.logdir / "latest.pt")
+        policy_trainer.begin(agent)
     except KeyboardInterrupt:
-        logger.print("\nTraining interrupted by user.")
+        print("\nTraining interrupted by user (Ctrl+C).")
+        exit_code = 1
+    except Exception as e:
+        print(f"\n{'='*60}")
+        print(f"TRAINING CRASHED: {type(e).__name__}: {e}")
+        print(f"{'='*60}")
+        import traceback
+
+        traceback.print_exc()
         exit_code = 1
     finally:
-        isaac_env.close()
+        items_to_save = {
+            "agent_state_dict": agent.state_dict(),
+            "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
+        }
+        torch.save(items_to_save, logdir / "latest.pt")
+        print(f"Checkpoint saved to {logdir / 'latest.pt'}")
+
         logger.close(exit_code=exit_code)
+        vec_env._env.close()
+        simulation_app.close()
 
 
 if __name__ == "__main__":
-
-    _yaml = yaml.YAML(typ="safe", pure=True)
-    configs = _yaml.load((pathlib.Path(__file__).parent / "configs.yaml").read_text())
-
-    def recursive_update(base, update):
-        for key, value in update.items():
-            if isinstance(value, dict) and key in base:
-                recursive_update(base[key], value)
-            else:
-                base[key] = value
-
-    name_list = ["defaults", *args_cli.config] if args_cli.config else ["defaults"]
-    defaults = {}
-    for name in name_list:
-        recursive_update(defaults, configs[name])
-
-    parser2 = argparse.ArgumentParser()
-    for key, value in sorted(defaults.items(), key=lambda x: x[0]):
-        arg_type = tools.args_type(value)
-        parser2.add_argument(f"--{key}", type=arg_type, default=arg_type(value))
-    config = parser2.parse_args(remaining)
-
-    main(config)
-    simulation_app.close()
+    # Forward only the Hydra-style args (everything after AppLauncher args).
+    sys.argv = [sys.argv[0]] + hydra_args
+    main()

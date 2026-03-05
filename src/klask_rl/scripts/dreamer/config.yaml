@@ -1,0 +1,95 @@
+defaults:
+  - model: size12M
+  # Disable Hydra's Python logging-to-file (train.log)
+  - override hydra/job_logging: disabled
+  - _self_
+
+# Logging
+logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
+wandb_project: KLASK_Dreamer
+wandb_entity: null
+wandb_name: dreamer_vision_rgb
+
+seed: 0
+deterministic_run: False
+device: "cuda:0"
+
+hydra:
+  run:
+    dir: ${logdir}
+  searchpath:
+    - file://${script_dir:}/r2dreamer/configs
+
+batch_size: 16
+batch_length: 64
+
+# ---- Environment (all klask-specific, inlined here) ----
+env:
+  task: "isaaclab_Klask-Rl-Dreamer-v0"
+  steps: 1.01e6
+  env_num: 16
+  eval_episode_num: 10
+  action_repeat: 20
+  train_ratio: 512
+  time_limit: 1000
+  sim_dt: 0.001
+  seed: ${seed}
+  device: ${device}
+  max_velocity: 0.6 # [m/s] Maximum velocity for player movement
+  episode_length_s: 10.0 # [s] Episode length in seconds
+  actuator_model: true
+  size: [64, 64]
+  encoder:
+    mlp_keys: "policy"
+    cnn_keys: "image"
+  decoder:
+    mlp_keys: "policy"
+    cnn_keys: "image"
+  rewards:
+    time_punishment: 0.0
+    time_out_punishment: 0.0
+    shot_over_middle_line: 0.0
+    player_in_goal: -3.0
+    opponent_in_goal: 0.0
+    goal_scored: 5.0
+    goal_conceded: -3.0
+    distance_player_ball_own_half: 0.0
+    distance_ball_opponent_goal: 0.1
+    distance_ball_own_goal: -0.1
+    ball_speed: 0.0
+    ball_stationary: -0.01
+    collision_player_ball: 0.5
+    ball_in_own_half: 0.0
+    close_to_boundaries: -0.01
+    player_strategically_positioned: 0.0
+  terminations:
+    time_out: true
+    goal_scored: true
+    goal_conceded: true
+    player_in_goal: true
+    opponent_in_goal: true
+
+buffer:
+  batch_size: ${batch_size}
+  batch_length: ${batch_length}
+  max_size: 5e5
+  device: ${device}
+  storage_device: "cuda:0"
+
+trainer:
+  steps: ${env.steps}
+  pretrain: 0
+  eval_every: 1e4
+  eval_episode_num: ${env.eval_episode_num}
+  batch_size: ${batch_size}
+  batch_length: ${batch_length}
+  train_ratio: ${env.train_ratio}
+  video_pred_log: True
+  params_hist_log: False
+  update_log_every: 5e3
+  action_repeat: ${env.action_repeat}
+
+self_play: false
+self_play_config:
+  update_score: 0.3 # opponent updated only when rolling mean score > this
+  games_to_track: 4096 # rolling window size for score averaging
