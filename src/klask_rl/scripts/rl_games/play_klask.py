@@ -92,6 +92,7 @@ from tqdm import tqdm
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.player import BasePlayer
 from rl_games.torch_runner import Runner
+from rl_games.algos_torch import torch_ext
 
 from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
 from isaaclab.utils.assets import retrieve_file_path
@@ -247,6 +248,14 @@ def main():
     runner.load(agent_cfg)
     # obtain the agent from the runner
     agent: BasePlayer = runner.create_player()
+
+    # Monkey-patch safe_load to use map_location so checkpoints saved on
+    # multi-GPU machines can be loaded on a single-GPU machine.
+    _original_safe_load = torch_ext.safe_load
+    def _safe_load_mapped(filename):
+        return torch_ext.safe_filesystem_op(torch.load, filename, map_location=args_cli.device, weights_only=False)
+    torch_ext.safe_load = _safe_load_mapped
+
     agent.restore(resume_path)
     agent.reset()
 
