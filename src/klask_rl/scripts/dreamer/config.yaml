@@ -1,15 +1,18 @@
 defaults:
-  - model: size12M
+  - model: size50M
   # Disable Hydra's Python logging-to-file (train.log)
   - override hydra/job_logging: disabled
   - _self_
+
+model:
+  rep_loss: "dreamer"
+  memory_peak_tracking: True # Log per-section GPU peak memory as scalars
 
 # Logging
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_vision_rgb
-
+wandb_name: dreamer_vision_rgb_50M
 seed: 0
 deterministic_run: False
 device: "cuda:0"
@@ -26,11 +29,11 @@ batch_length: 64
 # ---- Environment (all klask-specific, inlined here) ----
 env:
   task: "isaaclab_Klask-Rl-Dreamer-v0"
-  steps: 1.01e6
-  env_num: 16
+  steps: 5e6
+  env_num: 1
   eval_episode_num: 10
   action_repeat: 20
-  train_ratio: 512
+  train_ratio: 128
   time_limit: 1000
   sim_dt: 0.001
   seed: ${seed}
@@ -74,7 +77,7 @@ buffer:
   batch_length: ${batch_length}
   max_size: 5e5
   device: ${device}
-  storage_device: "cuda:0"
+  storage_device: "cpu"
 
 trainer:
   steps: ${env.steps}
@@ -88,6 +91,8 @@ trainer:
   params_hist_log: False
   update_log_every: 5e3
   action_repeat: ${env.action_repeat}
+  memory_history_snapshot: False # Record full allocation trace for PyTorch Memory Visualizer
+  memory_history_steps: 100     # Number of training steps to record before saving the snapshot
 
 self_play: false
 self_play_config:
