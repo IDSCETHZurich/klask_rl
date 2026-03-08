@@ -1,8 +1,8 @@
-from rl_games.algos_torch import torch_ext
-from rl_games.common.algo_observer import AlgoObserver
-from rl_games.algos_torch.self_play_manager import SelfPlayManager
-from rl_games.torch_runner import Runner, _restore, _override_sigma
 import torch
+from rl_games.algos_torch import torch_ext
+from rl_games.algos_torch.self_play_manager import SelfPlayManager
+from rl_games.common.algo_observer import AlgoObserver
+from rl_games.torch_runner import Runner, _override_sigma, _restore
 
 
 class KlaskRlAlgoObserver(AlgoObserver):
@@ -75,19 +75,20 @@ class KlaskRlAlgoObserver(AlgoObserver):
                         ep_info[key] = ep_info[key].unsqueeze(0)
                     info_tensor = torch.cat((info_tensor, ep_info[key].to(self.algo.device)))
                 value = torch.mean(info_tensor)
-                self.writer.add_scalar("Episode/" + key, value, epoch_num)
+                self.writer.add_scalar(key.replace("_", "/", 1), value, epoch_num)
             self.ep_infos.clear()
         # log scalars from env information
         for k, v in self.direct_info.items():
-            self.writer.add_scalar(f"{k}/frame", v, frame)
-            self.writer.add_scalar(f"{k}/iter", v, epoch_num)
-            self.writer.add_scalar(f"{k}/time", v, total_time)
+            self.writer.add_scalar(f"{k}", v, frame)
         # log mean reward/score from the env
         if self.mean_scores.current_size > 0:
             mean_scores = self.mean_scores.get_mean()
             self.writer.add_scalar("scores/mean", mean_scores, frame)
-            self.writer.add_scalar("scores/iter", mean_scores, epoch_num)
-            self.writer.add_scalar("scores/time", mean_scores, total_time)
+
+        # log step counters as explicit metrics so any can be used as x-axis
+        self.writer.add_scalar("step/env_frames", frame, frame)
+        self.writer.add_scalar("step/training_iteration", epoch_num, frame)
+        self.writer.add_scalar("step/wall_time", total_time, frame)
 
 
 class KlaskRlSelfPlayManager(SelfPlayManager):
@@ -128,6 +129,7 @@ class KlaskRlRunner(Runner):
         agent = self.algo_factory.create(self.algo_name, base_name="run", params=self.params)
         _restore(agent, args)
         _override_sigma(agent, args)
+
         if agent.has_self_play_config:
             agent.self_play_manager = KlaskRlSelfPlayManager(agent.self_play_config, agent.writer)
         agent.train()
