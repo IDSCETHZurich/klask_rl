@@ -72,7 +72,7 @@ params:
     games_to_track: 4096
     self_play_config:
       check_scores: true
-      update_score: 0.7
+      update_score: 0.3
       games_to_check: 1
       env_update_num: 4096
     train_dir: /home/student/klask_rl/IsaacLab/logs/rl_games/klask
