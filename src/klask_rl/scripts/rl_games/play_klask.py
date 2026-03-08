@@ -103,7 +103,7 @@ from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWr
 from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     ActionHistoryWrapper,
-    CurriculumWrapper,
+    RewardWeightWrapper,
     KlaskRlAgentOpponentWrapper,
     KlaskRlCollisionAvoidanceWrapper,
     KlaskRlRandomOpponentWrapper,
@@ -205,7 +205,7 @@ def main():
     else:
         env = KlaskRlRandomOpponentWrapper(env)
     if "rewards" in agent_cfg.keys():
-        env = CurriculumWrapper(env, agent_cfg["rewards"], mode="test")
+        env = RewardWeightWrapper(env, agent_cfg["rewards"])
 
     # wrap around environment for rl-games
     env = RlGamesVecEnvWrapper(env, rl_device, clip_obs=clip_obs, clip_actions=clip_actions)

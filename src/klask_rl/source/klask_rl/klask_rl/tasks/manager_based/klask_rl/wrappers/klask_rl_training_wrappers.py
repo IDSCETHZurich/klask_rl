@@ -3,14 +3,10 @@ from gymnasium import Wrapper
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 
-class CurriculumWrapper(Wrapper):
-    def __init__(self, env, cfg, num_steps=None, mode="train", dynamic=False):
+class RewardWeightWrapper(Wrapper):
+    def __init__(self, env, cfg):
         super().__init__(env)
-        self.dynamic = dynamic
-        self.cfg = cfg
-        self.num_steps = num_steps
-        self.mode = mode
-        self._step = 0
+
         for term, weight in cfg.items():
             term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
             if type(weight) is dict:
@@ -24,40 +20,48 @@ class CurriculumWrapper(Wrapper):
                 _weight = weight / (KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"])
             self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = _weight
 
-    def step(self, actions):
-        if self.mode == "train":
-            self._step += self.env.unwrapped.num_envs
-            for term, weight in self.cfg.items():
-                if type(weight) is dict and type(weight["weight"]) is list:
-                    term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
-                    weight_step = (weight["weight"][1] - weight["weight"][0]) / self.num_steps
-                    if not weight.get("per_second", False):
-                        weight_step /= KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"]
-                    self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight += weight_step
 
-                if self.dynamic and not (
-                    term == "ball_stationary"
-                    or term == "time_out_punishment"
-                    or term == "time_punishment"
-                    or term == "goal_scored"
-                    or term == "goal_conceded"
-                    or term == "opponent_in_goal"
-                    or term == "player_in_goal"
-                ):
-                    term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
-                    self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = weight * (
-                        torch.exp(
-                            -torch.tensor(
-                                self._step / 10000000,
-                                device=self.env.unwrapped.device,
-                                dtype=torch.float32,
-                            )
+class CurriculumWrapper(Wrapper):
+    def __init__(self, env, cfg, num_steps=None, dynamic=False):
+        super().__init__(env)
+        self.dynamic = dynamic
+        self.cfg = cfg
+        self.num_steps = num_steps
+        self._step = 0
+
+    def step(self, actions):
+        self._step += self.env.unwrapped.num_envs
+        for term, weight in self.cfg.items():
+            if type(weight) is dict and type(weight["weight"]) is list:
+                term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
+                weight_step = (weight["weight"][1] - weight["weight"][0]) / self.num_steps
+                if not weight.get("per_second", False):
+                    weight_step /= KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"]
+                self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight += weight_step
+
+            if self.dynamic and not (
+                term == "ball_stationary"
+                or term == "time_out_punishment"
+                or term == "time_punishment"
+                or term == "goal_scored"
+                or term == "goal_conceded"
+                or term == "opponent_in_goal"
+                or term == "player_in_goal"
+            ):
+                term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
+                self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = weight * (
+                    torch.exp(
+                        -torch.tensor(
+                            self._step / 10000000,
+                            device=self.env.unwrapped.device,
+                            dtype=torch.float32,
                         )
-                    )  # coeff chosen sucht that half the max reward at 20 mio steps
-                    if self._step > 20_000_000:
-                        self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = torch.tensor(
-                            0.0, device=self.env.unwrapped.device, dtype=torch.float32
-                        )
+                    )
+                )  # coeff chosen sucht that half the max reward at 20 mio steps
+                if self._step > 20_000_000:
+                    self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = torch.tensor(
+                        0.0, device=self.env.unwrapped.device, dtype=torch.float32
+                    )
 
         return self.env.step(actions)
 

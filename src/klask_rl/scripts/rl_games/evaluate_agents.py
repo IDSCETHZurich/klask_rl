@@ -48,32 +48,29 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-import gymnasium as gym
+import itertools
 import math
 import os
-import torch
-import yaml
-import itertools
-import numpy as np
 import shutil
 from pathlib import Path
 
-from rl_games.common import env_configurations, vecenv
-from rl_games.torch_runner import Runner
-
-
+import gymnasium as gym
 import isaaclab_tasks  # noqa: F401
-from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg
+import numpy as np
+import torch
+import yaml
 from isaaclab_rl.rl_games import RlGamesVecEnvWrapper
-
+from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg
+from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
-    OpponentObservationWrapper,
-    CurriculumWrapper,
-    RlGamesGpuEnvSelfPlay,
     ObservationNoiseWrapper,
+    OpponentObservationWrapper,
+    RewardWeightWrapper,
+    RlGamesGpuEnvSelfPlay,
     find_wrapper,
 )
-from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
+from rl_games.common import env_configurations, vecenv
+from rl_games.torch_runner import Runner
 
 
 def update_elo(p1, p2, score_1, score_2, k=10.0):
@@ -143,7 +140,7 @@ def main():
     env = ObservationNoiseWrapper(env, obs_noise)
     env = OpponentObservationWrapper(env)
     if "rewards" in agent_cfg.keys():
-        env = CurriculumWrapper(env, agent_cfg["rewards"], mode="test")
+        env = RewardWeightWrapper(env, agent_cfg["rewards"])
 
     # wrap around environment for rl-games
     env = RlGamesVecEnvWrapper(env, rl_device, clip_obs=clip_obs, clip_actions=clip_actions, evaluation_mode=True)
