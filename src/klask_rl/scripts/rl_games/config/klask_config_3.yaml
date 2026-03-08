@@ -2,7 +2,7 @@ params:
   seed: 3
   env:
     clip_observations: 10.0
-    clip_actions: 0.6
+    clip_actions: 0.4
   algo:
     name: a2c_continuous
   model:
@@ -34,7 +34,7 @@ params:
   load_checkpoint: true
   load_path: /workspace/klask_rl/logs/rl_games/klask/pretrained_agent_action_1.0/nn/last_klask_ep_35_rew_3.9405801.pth
   config:
-    full_experiment_name: new_agent_from_pretrained/v_0.6/
+    full_experiment_name: new_agent_from_pretrained/v_0.4/
     name: klask
     env_name: rlgpu
     device: cuda:0
@@ -89,8 +89,8 @@ rewards:
   goal_scored: 5.0
   goal_conceded: -3.0
   distance_player_ball_own_half: 0.0
-  distance_ball_opponent_goal: 10.1
-  distance_ball_own_goal: -10.1
+  distance_ball_opponent_goal: 0.1
+  distance_ball_own_goal: -0.1
   ball_speed: 0.0
   ball_stationary: -0.01
   collision_player_ball: 0.5
