@@ -1,11 +1,9 @@
+# from . import mdp
+import isaaclab.envs.mdp as mdp
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
-
-# from . import mdp
-import isaaclab.envs.mdp as mdp
-
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 from ..utils_manager_based import (
@@ -30,41 +28,55 @@ def _peg_obs_group(
     other_y_joint: str,
     own_goal: tuple,
     other_goal: tuple,
+    rotate: bool = False,
 ) -> type:
     """Factory: returns a @configclass ObsGroup for one player's full policy observations.
 
     The observation order is always: own peg (pos+vel) → other peg (pos+vel) → ball (pos+vel).
     This ensures both players receive structurally identical observations from their own frame.
+
+    When ``rotate=True`` a 180° rotation is applied (all positions and velocities are negated)
+    so that the observations appear as if the player were on the other side of the board.
     """
+
+    # scale factor: -1 for 180° rotation, None (no scaling) otherwise
+    s2 = (-1.0, -1.0) if rotate else None  # for 2-component terms (pos, vel xy)
+    s1 = -1.0 if rotate else None  # for 1-component terms (single joint vel)
 
     @configclass
     class _PegObsGroup(ObsGroup):
         own_pos = ObsTerm(
             func=body_xy_pos_w,
             params={"asset_cfg": SceneEntityCfg(name="klask", body_names=[own_body])},
+            scale=s2,
         )
         own_x_vel = ObsTerm(
             func=mdp.joint_vel_rel,
             params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[own_x_joint])},
+            scale=s1,
         )
         own_y_vel = ObsTerm(
             func=mdp.joint_vel_rel,
             params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[own_y_joint])},
+            scale=s1,
         )
         other_pos = ObsTerm(
             func=body_xy_pos_w,
             params={"asset_cfg": SceneEntityCfg(name="klask", body_names=[other_body])},
+            scale=s2,
         )
         other_x_vel = ObsTerm(
             func=mdp.joint_vel_rel,
             params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[other_x_joint])},
+            scale=s1,
         )
         other_y_vel = ObsTerm(
             func=mdp.joint_vel_rel,
             params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[other_y_joint])},
+            scale=s1,
         )
-        ball_pos_rel = ObsTerm(func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
-        ball_vel_rel = ObsTerm(func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")})
+        ball_pos_rel = ObsTerm(func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")}, scale=s2)
+        ball_vel_rel = ObsTerm(func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")}, scale=s2)
 
         def __post_init__(self) -> None:
             self.enable_corruption = False
@@ -173,12 +185,14 @@ def _action_history_obs_group(base: type, action_name: str, history_length: int)
     return _ActionHistoryObsGroup
 
 
-def _peg_obs_group_with_goal(base: type, goal: tuple) -> type:
+def _peg_obs_group_with_goal(base: type, goal: tuple, rotate: bool = False) -> type:
     """Factory: extends a peg obs group with a fixed goal position term."""
+
+    s2 = (-1.0, -1.0) if rotate else None
 
     @configclass
     class _PegObsGroupWithGoal(base):
-        opponent_goal = ObsTerm(func=goal_position_obs, params={"goal": goal[:2]})
+        opponent_goal = ObsTerm(func=goal_position_obs, params={"goal": goal[:2]}, scale=s2)
 
     return _PegObsGroupWithGoal
 
@@ -218,6 +232,7 @@ _OpponentPolicyCfg = _fix_pickle(
         other_y_joint="ground_to_slider_1",
         own_goal=KLASK_PARAMS["opponent_goal"],
         other_goal=KLASK_PARAMS["player_goal"],
+        rotate=True,
     ),
     "_OpponentPolicyCfg",
 )
@@ -261,7 +276,7 @@ _TwoStageHerPlayerPolicyCfg = _fix_pickle(
     "_TwoStageHerPlayerPolicyCfg",
 )
 _TwoStageHerOpponentPolicyCfg = _fix_pickle(
-    _peg_obs_group_with_goal(_OpponentPolicyCfg, KLASK_PARAMS["player_goal"]),
+    _peg_obs_group_with_goal(_OpponentPolicyCfg, KLASK_PARAMS["player_goal"], rotate=True),
     "_TwoStageHerOpponentPolicyCfg",
 )
 

@@ -127,15 +127,13 @@ class DreamerSelfPlayWrapper(Wrapper):
             for _ in range(self._games_to_track):
                 self._score_buffer.append(0.0)
             print(
-                f"[step {train_step}] Self-play opponent updated "
-                f"(mean_score={mean_score:.3f} > {self._update_score})"
+                f"[step {train_step}] Self-play opponent updated (mean_score={mean_score:.3f} > {self._update_score})"
             )
             if logger is not None and train_step is not None:
                 logger.scalar("selfplay/opponent_updated", 1.0)
             return True
         print(
-            f"[step {train_step}] Self-play opponent NOT updated "
-            f"(mean_score={mean_score:.3f} <= {self._update_score})"
+            f"[step {train_step}] Self-play opponent NOT updated (mean_score={mean_score:.3f} <= {self._update_score})"
         )
         if logger is not None and train_step is not None:
             logger.scalar("selfplay/opponent_updated", 0.0)
@@ -171,10 +169,8 @@ class DreamerSelfPlayWrapper(Wrapper):
         else:
             opponent_actions = self._get_opponent_action()
 
-        full_action = torch.cat([action, -opponent_actions], dim=1)
-        obs, reward, terminated, truncated, info = self.env.step(
-            full_action, *args, **kwargs
-        )
+        full_action = torch.cat([action, opponent_actions], dim=1)
+        obs, reward, terminated, truncated, info = self.env.step(full_action, *args, **kwargs)
 
         # Update opponent RSSM state with the new opponent observation.
         done = terminated | truncated
@@ -250,9 +246,7 @@ class DreamerSelfPlayWrapper(Wrapper):
         self._opp_stoch = stoch
         self._opp_deter = deter
         # The opponent action dimension is 2 (same as player).
-        self._opp_prev_action = torch.zeros(
-            num_envs, 2, dtype=torch.float32, device=self._device
-        )
+        self._opp_prev_action = torch.zeros(num_envs, 2, dtype=torch.float32, device=self._device)
 
     @torch.no_grad()
     def _get_opponent_action(self):
@@ -267,9 +261,8 @@ class DreamerSelfPlayWrapper(Wrapper):
     def _encode_opponent_obs(self, obs, is_first):
         """Advance opponent RSSM state using the latest opponent observation.
 
-        The opponent sees the mirrored (negated) version of the ``"opponent"``
-        observation key, matching how ``OpponentObservationWrapper`` works in
-        the rl_games self-play setup.
+        The opponent observations are already rotated to player frame by the
+        ObservationsCfg, so no additional negation is needed here.
 
         Parameters
         ----------
@@ -279,9 +272,7 @@ class DreamerSelfPlayWrapper(Wrapper):
             Float tensor of shape ``(num_envs, 1)`` — ``1.0`` for envs that
             just reset, ``0.0`` otherwise.
         """
-        # Mirror the opponent observation (negate spatial coordinates).
-        opp_obs_raw = obs["opponent"].detach().clone()
-        opp_obs_raw[:, :12] = -opp_obs_raw[:, :12]
+        opp_obs_raw = obs["opponent"]
 
         # Build an obs dict compatible with the encoder.
         opp_obs_dict = {}

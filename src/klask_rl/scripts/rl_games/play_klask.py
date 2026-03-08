@@ -79,46 +79,44 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-import gymnasium as gym
 import math
 import os
-import torch
-import yaml
 import time
 from datetime import datetime
+
+import gymnasium as gym
+import isaaclab_tasks  # noqa: F401
 import matplotlib.pyplot as plt
-from tqdm import tqdm
-
-from rl_games.common import env_configurations, vecenv
-from rl_games.common.player import BasePlayer
-from rl_games.torch_runner import Runner
-from rl_games.algos_torch import torch_ext
-
+import torch
+import yaml
 from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
-
-import isaaclab_tasks  # noqa: F401
+from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 from isaaclab_tasks.utils import (
     get_checkpoint_path,
     load_cfg_from_registry,
     parse_env_cfg,
 )
-from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
-
+from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
+from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
-    KlaskRlRandomOpponentWrapper,
-    CurriculumWrapper,
-    RlGamesGpuEnvSelfPlay,
-    KlaskRlAgentOpponentWrapper,
-    ObservationNoiseWrapper,
-    KlaskRlCollisionAvoidanceWrapper,
     ActionHistoryWrapper,
+    CurriculumWrapper,
+    KlaskRlAgentOpponentWrapper,
+    KlaskRlCollisionAvoidanceWrapper,
+    KlaskRlRandomOpponentWrapper,
+    ObservationNoiseWrapper,
+    OpponentActionWrapper,
+    RlGamesGpuEnvSelfPlay,
     find_wrapper,
 )
-from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
-from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from rl_games.algos_torch import torch_ext
+from rl_games.common import env_configurations, vecenv
+from rl_games.common.player import BasePlayer
+from rl_games.torch_runner import Runner
+from tqdm import tqdm
 
 
 def main():
@@ -183,6 +181,10 @@ def main():
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
+
+    # Negate opponent actions to convert from player frame back to world frame.
+    # Must be innermost wrapper so the actuator model sees player-frame data.
+    env = OpponentActionWrapper(env)
 
     if agent_cfg["env"].get("actuator_model", False):
         env = ActuatorModelWrapper(env, device=args_cli.device)
@@ -252,8 +254,10 @@ def main():
     # Monkey-patch safe_load to use map_location so checkpoints saved on
     # multi-GPU machines can be loaded on a single-GPU machine.
     _original_safe_load = torch_ext.safe_load
+
     def _safe_load_mapped(filename):
         return torch_ext.safe_filesystem_op(torch.load, filename, map_location=args_cli.device, weights_only=False)
+
     torch_ext.safe_load = _safe_load_mapped
 
     agent.restore(resume_path)
@@ -397,7 +401,7 @@ def main():
         player_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
         opponent_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
         draws = term_counts["time_expired"]
-        
+
         # Create summary text
         summary_lines = [
             "\n" + "=" * 50,
@@ -420,12 +424,12 @@ def main():
         if total_games > 0:
             summary_lines.append(f"  Player win rate: {player_wins / total_games * 100:.1f}%")
         summary_lines.append("=" * 50 + "\n")
-        
+
         summary_text = "\n".join(summary_lines)
-        
+
         # Print to console
         print(summary_text)
-        
+
         # Write to file
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_dir = os.path.join(log_root_path, "head_to_head_results")

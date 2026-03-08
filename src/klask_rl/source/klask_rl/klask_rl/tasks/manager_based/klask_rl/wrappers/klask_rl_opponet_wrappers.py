@@ -1,17 +1,18 @@
+import random
+import re
+import shutil
+from pathlib import Path
+
+import gymnasium as gym
 import numpy as np
 import torch
-import gymnasium as gym
-from gymnasium import Wrapper
-from rl_games.torch_runner import Runner
-from isaaclab_rl.rl_games import RlGamesGpuEnv
-from pathlib import Path
-import re
 import yaml
-import random
-import shutil
+from gymnasium import Wrapper
+from isaaclab_rl.rl_games import RlGamesGpuEnv
+from rl_games.torch_runner import Runner
 
-from .utils import find_wrapper
 from .klask_rl_ovservation_wrappers import OpponentObservationWrapper
+from .utils import find_wrapper
 
 
 class KlaskRlRandomOpponentWrapper(Wrapper):
@@ -87,9 +88,7 @@ class RlGamesGpuEnvSelfPlay(RlGamesGpuEnv):
 
         obs = self.env.reset()
         # self.opponent_obs = self.get_opponent_obs(obs)
-        self.opponent_obs = find_wrapper(
-            self.env, OpponentObservationWrapper
-        ).opponent_obs
+        self.opponent_obs = find_wrapper(self.env, OpponentObservationWrapper).opponent_obs
         self.sum_rewards = 0
         return obs
 
@@ -101,9 +100,7 @@ class RlGamesGpuEnvSelfPlay(RlGamesGpuEnv):
         runner.load(self.current_config)
 
         # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-        restore_checkpoint = (
-            self.training_curriculum and self.current_checkpoint is not None
-        )
+        restore_checkpoint = self.training_curriculum and self.current_checkpoint is not None
         self.agent = runner.create_player()
         if restore_checkpoint:
             self.agent.restore(self.current_checkpoint)
@@ -124,13 +121,9 @@ class RlGamesGpuEnvSelfPlay(RlGamesGpuEnv):
             if len(checkpoints) == 0:
                 return
             checkpoints_sorted = sorted(checkpoints, key=lambda f: f.stat().st_ctime)
-            decay = (
-                0.9  # Closer to 1 → slower decay, closer to 0 → steeper bias to latest
-            )
+            decay = 0.9  # Closer to 1 → slower decay, closer to 0 → steeper bias to latest
             n = len(checkpoints_sorted)
-            weights = np.array(
-                [decay ** (n - i - 1) for i in range(n)]
-            )  # newest gets highest weight
+            weights = np.array([decay ** (n - i - 1) for i in range(n)])  # newest gets highest weight
             weights /= weights.sum()  # normalize to sum to 1
 
             # Randomly choose using the computed weights
@@ -148,15 +141,11 @@ class RlGamesGpuEnvSelfPlay(RlGamesGpuEnv):
             match = re.search(r"best_agent\((\d+)\)", self.current_checkpoint)
             if match:
                 agent_number = match.group(1)
-            self.config_path = (
-                Path(self.base_folder) / f"klask_config_{agent_number}.yaml"
-            )
+            self.config_path = Path(self.base_folder) / f"klask_config_{agent_number}.yaml"
 
         if self.mode == 0 and self.counter > 8:
             agent_folders = [f for f in self.base_folder.iterdir() if f.is_dir()]
-            agent_folders_sorted = sorted(
-                agent_folders, key=lambda f: f.stat().st_ctime
-            )
+            agent_folders_sorted = sorted(agent_folders, key=lambda f: f.stat().st_ctime)
 
             if len(agent_folders) > 4:  # if only the benchmark folder is in there
                 folders_to_delete = agent_folders_sorted[1:-4]
@@ -172,21 +161,15 @@ class RlGamesGpuEnvSelfPlay(RlGamesGpuEnv):
                 chosen_folder = random.choice(agent_folders)
 
                 # Find the checkpoint and config file in the chosen folder
-                checkpoint_path = next(
-                    chosen_folder.glob("**/player_checkpoint.pth"), None
-                )
-                self.config_path = next(
-                    chosen_folder.glob("**/player_config.yaml"), None
-                )
+                checkpoint_path = next(chosen_folder.glob("**/player_checkpoint.pth"), None)
+                self.config_path = next(chosen_folder.glob("**/player_config.yaml"), None)
                 self.current_checkpoint = checkpoint_path
 
         if self.mode == 0 and self.counter > 8 and self.current_checkpoint is not None:
             with open(self.config_path, "r") as f:
                 self.current_config = yaml.safe_load(f)
                 self.current_config["params"]["config"]["device"] = self.instance_device
-                self.current_config["params"]["config"]["device_name"] = (
-                    self.instance_device
-                )
+                self.current_config["params"]["config"]["device_name"] = self.instance_device
 
             self.create_agent()
             self.counter = 0
@@ -195,12 +178,10 @@ class RlGamesGpuEnvSelfPlay(RlGamesGpuEnv):
     def step(self, action, *args, **kwargs):
         opponent_obs = self.agent.obs_to_torch(self.opponent_obs)
         opponent_action = self.agent.get_action(opponent_obs, self.is_deterministic)
-        full_action = torch.cat([action, -opponent_action], dim=1)
+        full_action = torch.cat([action, opponent_action], dim=1)
         obs, reward, dones, info = self.env.step(full_action, *args, **kwargs)
         # self.opponent_obs = self.get_opponent_obs(obs)
-        self.opponent_obs = find_wrapper(
-            self.env, OpponentObservationWrapper
-        ).opponent_obs
+        self.opponent_obs = find_wrapper(self.env, OpponentObservationWrapper).opponent_obs
         return obs, reward, dones, info
 
     def set_weights(self, indices, weigths):
@@ -234,23 +215,16 @@ class KlaskRlAgentOpponentWrapper(Wrapper):
         self.opponent = opponent
         self.opponent.has_batch_dimension = True
 
-    def get_opponent_obs(self, obs):
-        opponent_obs = obs.detach().clone()
-        opponent_obs[:, :12] = -obs[:, :12]
-        return opponent_obs
-
     def reset(self, *args, **kwargs):
         obs, info = self.env.reset(*args, **kwargs)
-        self.opponent_obs = self.get_opponent_obs(obs["opponent"])
+        self.opponent_obs = obs["opponent"]
         return obs, info
 
     def step(self, action, *args, **kwargs):
         opponent_obs = self.opponent.obs_to_torch(self.opponent_obs)
         opponent_action = self.opponent.get_action(opponent_obs, self.is_deterministic)
-        full_action = torch.cat([action, -opponent_action], dim=1)
-        obs, reward, terminated, truncated, info = self.env.step(
-            full_action, *args, **kwargs
-        )
+        full_action = torch.cat([action, opponent_action], dim=1)
+        obs, reward, terminated, truncated, info = self.env.step(full_action, *args, **kwargs)
 
-        self.opponent_obs = self.get_opponent_obs(obs["opponent"])
+        self.opponent_obs = obs["opponent"]
         return obs, reward, terminated, truncated, info

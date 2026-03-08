@@ -57,18 +57,17 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-import gymnasium as gym
 import math
 import os
 import pickle
 import random
 import signal
-import yaml
-from datetime import datetime
 import time
+from datetime import datetime
 
-from rl_games.common import env_configurations, vecenv
-
+import gymnasium as gym
+import isaaclab_tasks  # noqa: F401
+import yaml
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -79,24 +78,23 @@ from isaaclab.envs import (
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
-
-import isaaclab_tasks  # noqa: F401
-from isaaclab_tasks.utils.hydra import hydra_task_config
 from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
-
-from klask_rl.tasks.manager_based.klask_rl.wrappers import (
-    KlaskRlRandomOpponentWrapper,
-    CurriculumWrapper,
-    RlGamesGpuEnvSelfPlay,
-    ObservationNoiseWrapper,
-    OpponentObservationWrapper,
-    KlaskRlCollisionAvoidanceWrapper,
-    ActionHistoryWrapper,
-)
+from isaaclab_tasks.utils.hydra import hydra_task_config
+from klask_rl.assets.robots.klask import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
 from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.tasks.manager_based.klask_rl.wrappers import (
+    ActionHistoryWrapper,
+    CurriculumWrapper,
+    KlaskRlCollisionAvoidanceWrapper,
+    KlaskRlRandomOpponentWrapper,
+    ObservationNoiseWrapper,
+    OpponentActionWrapper,
+    OpponentObservationWrapper,
+    RlGamesGpuEnvSelfPlay,
+)
 from klask_rl_games import KlaskRlAlgoObserver, KlaskRlRunner
+from rl_games.common import env_configurations, vecenv
 
 
 @hydra_task_config(args_cli.task, "rl_games_cfg_entry_point")
@@ -186,6 +184,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
+
+    # Negate opponent actions to convert from player frame back to world frame.
+    # Must be innermost wrapper so the actuator model sees player-frame data.
+    env = OpponentActionWrapper(env)
 
     if agent_cfg["env"].get("actuator_model", False):
         env = ActuatorModelWrapper(env)

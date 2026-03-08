@@ -75,6 +75,7 @@ from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_termin
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     CurriculumWrapper,
     KlaskRlRandomOpponentWrapper,
+    OpponentActionWrapper,
 )
 from trainer import OnlineTrainer
 
@@ -130,6 +131,9 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
 
     # --- Create the base gymnasium env ---
     isaac_env = gym.make(gym_id, cfg=env_cfg, render_mode=render_mode)
+
+    # --- 1a. Opponent action frame transform (innermost) ---
+    isaac_env = OpponentActionWrapper(isaac_env)
 
     # --- 1. Set bounded action space ---
     max_velocity = getattr(config, "max_velocity", None)
