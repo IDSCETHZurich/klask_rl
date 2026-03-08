@@ -85,6 +85,13 @@ class KlaskRlAlgoObserver(AlgoObserver):
             mean_scores = self.mean_scores.get_mean()
             self.writer.add_scalar("scores/mean", mean_scores, frame)
 
+        # log current reward weights
+        rm = self.algo.vec_env.env.unwrapped.reward_manager
+        for term, cfg in zip(rm.active_terms, rm._term_cfgs):
+            w = cfg.weight
+            val = w.item() if isinstance(w, torch.Tensor) else float(w)
+            self.writer.add_scalar(f"rewards/weights/{term}", val, frame)
+
         # log step counters as explicit metrics so any can be used as x-axis
         self.writer.add_scalar("step/env_frames", frame, frame)
         self.writer.add_scalar("step/training_iteration", epoch_num, frame)

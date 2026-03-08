@@ -91,7 +91,6 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     ObservationNoiseWrapper,
     OpponentActionWrapper,
     OpponentObservationWrapper,
-    RewardWeightWrapper,
     RlGamesGpuEnvSelfPlay,
 )
 from klask_rl_games import KlaskRlAlgoObserver, KlaskRlRunner
@@ -216,7 +215,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             agent_cfg["params"]["config"]["max_frames"] / env_cfg.scene.num_envs,
             dynamic=True,
         )
-        env = RewardWeightWrapper(env, agent_cfg["rewards"])
 
     # if self-play, use opponent observation wrapper to get access to opponent player's observations:
     if agent_cfg["params"]["config"].get("self_play", False):

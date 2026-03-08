@@ -163,7 +163,6 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
             rewards_dict = dict(rewards_cfg)
         num_steps = (float(trainer_steps) / int(config.env_num)) if trainer_steps else 1e6
         isaac_env = CurriculumWrapper(isaac_env, rewards_dict, num_steps=num_steps, dynamic=True)
-        isaac_env = RewardWeightWrapper(isaac_env, rewards_dict)
 
     # --- 4. Termination filtering ---
     terminations_cfg = getattr(config, "terminations", None)
@@ -268,27 +267,39 @@ def main(config):
         _self_play_wrapper.set_opponent(agent)
         print("Self-play enabled: opponent initialised from current agent.")
 
-    # Subclass OnlineTrainer to hook score-gated opponent updates.
-    class SelfPlayTrainer(OnlineTrainer):
-        """OnlineTrainer that conditionally updates the self-play opponent.
+    # Subclass OnlineTrainer to hook score-gated opponent updates and
+    # reward-weight logging.
+    class KlaskTrainer(OnlineTrainer):
+        """OnlineTrainer with self-play opponent updates and reward-weight logging.
 
-        At each eval boundary the wrapper's rolling mean score is checked.
-        The opponent weights are copied from the training agent only when
-        the score exceeds the configured threshold — matching the
-        ``SelfPlayManager`` behaviour in rl_games.
+        At each eval boundary:
+          - logs current reward weights via ``CurriculumWrapper.get_reward_weights()``
+            (or ``RewardWeightWrapper`` if no curriculum is active).
+          - conditionally updates the self-play opponent when the rolling score
+            exceeds the configured threshold.
         """
 
         def eval(self, agent, train_step):
+            # --- Self-play opponent update ---
             if _self_play_wrapper is not None:
                 _self_play_wrapper.maybe_update_opponent(
                     agent,
                     logger=self.logger,
                     train_step=train_step,
                 )
+            # --- Log reward weights ---
+            self._log_reward_weights(train_step)
             return super().eval(agent, train_step)
 
-    TrainerClass = SelfPlayTrainer if _self_play_wrapper is not None else OnlineTrainer
-    policy_trainer = TrainerClass(
+        def _log_reward_weights(self, train_step):
+            """Log all active reward term weights from the env's reward_manager."""
+            rm = self.train_stepper._env._env.unwrapped.reward_manager
+            for term, cfg in zip(rm.active_terms, rm._term_cfgs):
+                w = cfg.weight
+                val = w.item() if isinstance(w, torch.Tensor) else float(w)
+                self.logger.scalar(f"rewards/weights/{term}", val)
+
+    policy_trainer = KlaskTrainer(
         config.trainer,
         replay_buffer,
         logger,
