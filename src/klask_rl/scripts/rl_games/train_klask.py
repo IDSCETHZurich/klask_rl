@@ -123,6 +123,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent_cfg["params"]["load_checkpoint"] = True
         agent_cfg["params"]["load_path"] = resume_path
         print(f"[INFO]: Loading model checkpoint from: {agent_cfg['params']['load_path']}")
+    elif agent_cfg["params"].get("load_checkpoint", False) and agent_cfg["params"].get("load_path"):
+        resume_path = retrieve_file_path(agent_cfg["params"]["load_path"])
+        print(f"[INFO]: Loading model checkpoint from config: {resume_path}")
+    else:
+        resume_path = None
     train_sigma = float(args_cli.sigma) if args_cli.sigma is not None else None
 
     # multi-gpu training config
@@ -281,10 +286,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     interrupted = False
     try:
         # train the agent
-        if args_cli.checkpoint is not None:
-            runner.run({"train": True, "play": False, "sigma": train_sigma, "checkpoint": resume_path})
-        else:
-            runner.run({"train": True, "play": False, "sigma": train_sigma})
+        run_args = {"train": True, "play": False, "sigma": train_sigma}
+        if resume_path is not None:
+            run_args["checkpoint"] = resume_path
+        runner.run(run_args)
     except KeyboardInterrupt:
         interrupted = True
         print("\n[INFO] Training interrupted by user (Ctrl+C).")
