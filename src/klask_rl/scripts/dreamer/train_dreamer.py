@@ -219,8 +219,7 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
             rewards_dict = OmegaConf.to_container(rewards_cfg, resolve=True)
         else:
             rewards_dict = dict(rewards_cfg)
-        num_steps = (float(trainer_steps) / int(config.env_num)) if trainer_steps else 1e6
-        isaac_env = CurriculumWrapper(isaac_env, rewards_dict, num_steps=num_steps, dynamic=True)
+        isaac_env = CurriculumWrapper(isaac_env, rewards_dict)
 
     # --- 4. Termination filtering ---
     terminations_cfg = getattr(config, "terminations", None)

@@ -34,7 +34,7 @@ params:
   load_checkpoint: false
   load_path: ''
   config:
-    full_experiment_name: new_agent_from_pretrained/new_curriculum/refactor_same/
+    full_experiment_name: new_agent_from_pretrained/new_curriculum/no_pretraining/
     name: klask
     env_name: rlgpu
     device: cuda:0
@@ -82,18 +82,36 @@ env:
   collision_avoidance: false
 rewards:
   time_punishment:
-    type: static
-    weight: 0.0
+    type: schedule
+    phases:
+      - type: static
+        weight: -0.025
+        steps: [0, 2000000]
+      - type: static
+        weight: 0.0
+        steps: [2000000, -1]
   time_out_punishment:
     type: static
     weight: 0.0
   shot_over_middle_line:
-    type: exponential
-    weight: 0.0
-    decay_rate: 1.0e-7
+    type: schedule
+    phases:
+      - type: exponential
+        weight: 500.0
+        decay_rate: 1.0e-7
+        steps: [0, 2000000]
+      - type: static
+        weight: 0.0
+        steps: [2000000, -1]
   player_in_goal:
-    type: static
-    weight: -150.0
+    type: schedule
+    phases:
+      - type: static
+        weight: -50.0
+        steps: [0, 2000000]
+      - type: static
+        weight: -150.0
+        steps: [2000000, -1]
   opponent_in_goal:
     type: static
     weight: 0.0
@@ -101,43 +119,91 @@ rewards:
     type: static
     weight: 250.0
   goal_conceded:
-    type: static
-    weight: -150.0
+    type: schedule
+    phases:
+      - type: static
+        weight: -50.0
+        steps: [0, 2000000]
+      - type: static
+        weight: -150.0
+        steps: [2000000, -1]
   distance_player_ball_own_half:
-    type: exponential
-    weight: 0.0
-    decay_rate: 1.0e-7
-  distance_ball_opponent_goal:
-    type: exponential
-    weight: 10.1
-    decay_rate: 1.0e-7
-  distance_ball_own_goal:
-    type: exponential
-    weight: -10.1
-    decay_rate: 1.0e-7
-  ball_speed:
-    type: exponential
-    weight: 0.0
-    decay_rate: 1.0e-7
-  ball_stationary:
     type: static
-    weight: -0.5
+    weight: 0.0
+  distance_ball_opponent_goal:
+    type: schedule
+    phases:
+      - type: static
+        weight: 0.0
+        steps: [0, 2000000]
+      - type: exponential
+        weight: 10.1
+        decay_rate: 1.0e-7
+        steps: [2000000, -1]
+  distance_ball_own_goal:
+    type: schedule
+    phases:
+      - type: static
+        weight: 0.0
+        steps: [0, 2000000]
+      - type: exponential
+        weight: -10.1
+        decay_rate: 1.0e-7
+        steps: [2000000, -1]
+  ball_speed:
+    type: schedule
+    phases:
+      - type: exponential
+        weight: 5.0
+        decay_rate: 1.0e-7
+        steps: [0, 2000000]
+      - type: static
+        weight: 0.0
+        steps: [2000000, -1]
+  ball_stationary:
+    type: schedule
+    phases:
+      - type: static
+        weight: -0.005
+        steps: [0, 2000000]
+      - type: static
+        weight: -0.5
+        steps: [2000000, -1]
   collision_player_ball:
-    type: exponential
-    weight: 0.5
-    decay_rate: 1.0e-7
+    type: schedule
+    phases:
+      - type: exponential
+        weight: 15.1003
+        decay_rate: 1.0e-7
+        steps: [0, 2000000]
+      - type: exponential
+        weight: 0.5
+        decay_rate: 1.0e-7
+        steps: [2000000, -1]
   ball_in_own_half:
-    type: exponential
-    weight: 0.0
-    decay_rate: 1.0e-7
+    type: schedule
+    phases:
+      - type: exponential
+        weight: 0.001
+        decay_rate: 1.0e-7
+        steps: [0, 2000000]
+      - type: static
+        weight: 0.0
+        steps: [2000000, -1]
   close_to_boundaries:
-    type: exponential
-    weight: -0.01
-    decay_rate: 1.0e-7
+    type: schedule
+    phases:
+      - type: static
+        weight: 0.0
+        steps: [0, 2000000]
+      - type: exponential
+        weight: -0.01
+        decay_rate: 1.0e-7
+        steps: [2000000, -1]
   player_strategically_positioned:
-    type: exponential
+    type: static
     weight: 0.0
-    decay_rate: 1.0e-7
+
 terminations:
   time_out: true
   goal_scored: true
