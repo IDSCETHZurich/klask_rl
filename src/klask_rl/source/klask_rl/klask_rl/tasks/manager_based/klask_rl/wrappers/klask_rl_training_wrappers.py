@@ -159,11 +159,9 @@ class CurriculumWrapper(RewardWeightWrapper):
         if spec["type"] == "schedule":
             for phase in spec["phases"]:
                 start_step, end_step = phase["steps"]
-                if end_step == -1:
-                    if self._step >= start_step:
+                if start_step <= self._step:
+                    if end_step == -1 or self._step <= end_step:
                         return phase
-                elif start_step <= self._step <= end_step:
-                    return phase
             # Past all phases — fall back to the last one.
             return spec["phases"][-1]
         return spec
@@ -177,7 +175,8 @@ class CurriculumWrapper(RewardWeightWrapper):
         phase_type = phase["type"]
 
         if phase_type == "static":
-            return  # nothing to update
+            self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = phase["weight"]
+            return
 
         start_step = phase.get("steps", [0])[0]
 
