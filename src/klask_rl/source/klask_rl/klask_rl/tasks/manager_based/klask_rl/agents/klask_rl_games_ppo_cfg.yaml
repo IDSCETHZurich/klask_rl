@@ -119,8 +119,6 @@ rewards:
   distance_ball_opponent_goal:
     type: static
     weight: 1.0
-    # if per_second is True, the reward is scaled by dt (environment time step):
-    per_second: true
   ball_speed:
     type: static
     weight: 0.0

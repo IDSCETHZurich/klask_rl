@@ -1,6 +1,5 @@
 import torch
 from gymnasium import Wrapper
-from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 
 class RewardWeightWrapper(Wrapper):
@@ -21,12 +20,6 @@ class RewardWeightWrapper(Wrapper):
         ``weight`` is the initial value; it will be decayed by
         :class:`CurriculumWrapper`.
 
-    Weight scaling
-    --------------
-    Weights specified with ``per_second: true`` are used as-is; all others are
-    converted from per-step to per-second by dividing by
-    ``decimation * physics_dt``.
-
     Example config::
 
         rewards:
@@ -36,7 +29,6 @@ class RewardWeightWrapper(Wrapper):
           distance_ball_opponent_goal:
             type: linear
             weight: [0.0, 1.0]
-            per_second: true
           collision_player_ball:
             type: exponential
             weight: 0.5
@@ -56,11 +48,6 @@ class RewardWeightWrapper(Wrapper):
                 _weight = raw_weight[0]  # linear: start value
             else:
                 _weight = raw_weight
-
-            # Scale per-step weights to per-second.
-            if not spec.get("per_second", False):
-                _weight /= KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"]
-                # TODO: Refactor this logic to make it more readable and saner. If per_second is True we need to scale it so that it applies per second and if per_second=False we do nothing and apply it. Now it is the other way around which is super confusing.
 
             self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = _weight
 
@@ -96,7 +83,6 @@ class CurriculumWrapper(RewardWeightWrapper):
           distance_ball_opponent_goal:
             type: linear
             weight: [0.0, 1.0]
-            per_second: true
 
           # Exponential decay with configurable rate.
           # w(t) = weight * exp(-decay_rate * t)
@@ -125,8 +111,6 @@ class CurriculumWrapper(RewardWeightWrapper):
             if schedule_type == "linear":
                 # Linear interpolation: advance weight by one step increment.
                 weight_step = (spec["weight"][1] - spec["weight"][0]) / self.num_steps
-                if not spec.get("per_second", False):
-                    weight_step /= KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"]
                 self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight += weight_step
 
             elif schedule_type == "exponential":
