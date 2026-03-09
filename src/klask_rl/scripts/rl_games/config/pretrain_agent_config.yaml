@@ -82,6 +82,7 @@ env:
   collision_avoidance: false
 rewards:
   time_punishment: -0.0005
+  time_out_punishment: 0.0
   shot_over_middle_line: 500.0
   player_in_goal: -1.0
   opponent_in_goal: 0.0
@@ -89,6 +90,7 @@ rewards:
   goal_conceded: -1.0
   distance_player_ball_own_half: 0.0
   distance_ball_opponent_goal: 0.0
+  distance_ball_own_goal: 0.0
   ball_speed: 5.0
   ball_stationary: -0.0001
   collision_player_ball: 15.1003

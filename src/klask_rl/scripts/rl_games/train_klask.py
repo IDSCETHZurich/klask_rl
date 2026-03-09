@@ -213,7 +213,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             env,
             agent_cfg["rewards"],
             agent_cfg["params"]["config"]["max_frames"] / env_cfg.scene.num_envs,
-            dynamic=True,
         )
 
     # if self-play, use opponent observation wrapper to get access to opponent player's observations:

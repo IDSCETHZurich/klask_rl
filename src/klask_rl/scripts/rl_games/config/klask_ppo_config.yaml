@@ -34,7 +34,7 @@ params:
   load_checkpoint: true
   load_path: /workspace/klask_rl/logs/rl_games/klask/pretrained_agent_action_1.0/nn/last_klask_ep_35_rew_3.9405801.pth
   config:
-    full_experiment_name: new_agent_from_pretrained/v_0.6/
+    full_experiment_name: new_agent_from_pretrained/new_curriculum/refactor_same/
     name: klask
     env_name: rlgpu
     device: cuda:0
@@ -81,22 +81,63 @@ env:
   actuator_model: true
   collision_avoidance: false
 rewards:
-  time_punishment: -0.0
-  time_out_punishment: 0.0
-  shot_over_middle_line: 0.0
-  player_in_goal: -3.0
-  opponent_in_goal: 0.0
-  goal_scored: 5.0
-  goal_conceded: -3.0
-  distance_player_ball_own_half: 0.0
-  distance_ball_opponent_goal: 10.1
-  distance_ball_own_goal: -10.1
-  ball_speed: 0.0
-  ball_stationary: -0.01
-  collision_player_ball: 0.5
-  ball_in_own_half: 0.0
-  close_to_boundaries: -0.01
-  player_strategically_positioned: 0.0
+  time_punishment:
+    type: static
+    weight: 0.0
+  time_out_punishment:
+    type: static
+    weight: 0.0
+  shot_over_middle_line:
+    type: exponential
+    weight: 0.0
+    decay_rate: 1.0e-7
+  player_in_goal:
+    type: static
+    weight: -3.0
+  opponent_in_goal:
+    type: static
+    weight: 0.0
+  goal_scored:
+    type: static
+    weight: 5.0
+  goal_conceded:
+    type: static
+    weight: -3.0
+  distance_player_ball_own_half:
+    type: exponential
+    weight: 0.0
+    decay_rate: 1.0e-7
+  distance_ball_opponent_goal:
+    type: exponential
+    weight: 10.1
+    decay_rate: 1.0e-7
+  distance_ball_own_goal:
+    type: exponential
+    weight: -10.1
+    decay_rate: 1.0e-7
+  ball_speed:
+    type: exponential
+    weight: 0.0
+    decay_rate: 1.0e-7
+  ball_stationary:
+    type: static
+    weight: -0.01
+  collision_player_ball:
+    type: exponential
+    weight: 0.5
+    decay_rate: 1.0e-7
+  ball_in_own_half:
+    type: exponential
+    weight: 0.0
+    decay_rate: 1.0e-7
+  close_to_boundaries:
+    type: exponential
+    weight: -0.01
+    decay_rate: 1.0e-7
+  player_strategically_positioned:
+    type: exponential
+    weight: 0.0
+    decay_rate: 1.0e-7
 terminations:
   time_out: true
   goal_scored: true

@@ -6,88 +6,140 @@ from klask_rl.assets.robots.klask import KLASK_PARAMS
 class RewardWeightWrapper(Wrapper):
     """Sets initial reward term weights from a config dict.
 
-    Weights specified per-second are used as-is; others are converted from
-    per-step to per-second by dividing by (decimation * physics_dt).
-    For list-valued weights the first element is used as the initial value.
+    Each reward term in ``cfg`` is a dict with a ``type`` field that controls
+    how the weight behaves.  This wrapper only applies the **initial** weight;
+    see :class:`CurriculumWrapper` for schedules that update weights during
+    training.
+
+    Supported types
+    ---------------
+    ``static``
+        Constant weight, never changed after initialisation.
+    ``linear``
+        ``weight`` is ``[start, end]``; the initial weight is set to ``start``.
+    ``exponential``
+        ``weight`` is the initial value; it will be decayed by
+        :class:`CurriculumWrapper`.
+
+    Weight scaling
+    --------------
+    Weights specified with ``per_second: true`` are used as-is; all others are
+    converted from per-step to per-second by dividing by
+    ``decimation * physics_dt``.
+
+    Example config::
+
+        rewards:
+          goal_scored:
+            type: static
+            weight: 5.0
+          distance_ball_opponent_goal:
+            type: linear
+            weight: [0.0, 1.0]
+            per_second: true
+          collision_player_ball:
+            type: exponential
+            weight: 0.5
+            decay_rate: 1.0e-7
     """
 
     def __init__(self, env, cfg):
         super().__init__(env)
         self.cfg = cfg
 
-        for term, weight in cfg.items():
+        for term, spec in cfg.items():
             term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
-            if type(weight) is dict:
-                # List means [start, end] for curriculum — use start value.
-                if type(weight["weight"]) is list:
-                    _weight = weight["weight"][0]
-                else:
-                    _weight = weight["weight"]
-                if not weight.get("per_second", False):
-                    _weight /= KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"]
-                    # TODO: Refactor this logic to make it more readable and saner. If per_second is True we need to scale it so that it applies per second and if per_second=False we do nothing and apply it. Now it is the other way around which is super confusing.
+
+            # Determine initial weight.
+            raw_weight = spec["weight"]
+            if isinstance(raw_weight, list):
+                _weight = raw_weight[0]  # linear: start value
             else:
-                _weight = weight / (KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"])
+                _weight = raw_weight
+
+            # Scale per-step weights to per-second.
+            if not spec.get("per_second", False):
+                _weight /= KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"]
+                # TODO: Refactor this logic to make it more readable and saner. If per_second is True we need to scale it so that it applies per second and if per_second=False we do nothing and apply it. Now it is the other way around which is super confusing.
+
             self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = _weight
 
 
 class CurriculumWrapper(RewardWeightWrapper):
     """Sets initial reward weights and adjusts them over training.
 
-    Adds two per-step mechanisms:
-      1. **Linear schedule** — for terms with weight=[start, end], the weight
-         is linearly interpolated from start to end over ``num_steps``.
-      2. **Exponential decay** (``dynamic=True``) — auxiliary shaping rewards
-         decay exponentially and are zeroed after 20M steps so that only
-         sparse game-outcome rewards remain.
+    Each reward term declares its own schedule via the ``type`` field:
+
+    ``static``
+        Weight is set once at initialisation and never changed.
+    ``linear``
+        ``weight: [start, end]`` — linearly interpolated from *start* to
+        *end* over ``num_steps`` environment steps.
+    ``exponential``
+        ``weight`` decays as ``weight * exp(-decay_rate * step)`` where
+        ``decay_rate`` is configured per-term.
+
+    Args:
+        env: The wrapped environment.
+        cfg: Reward config dict mapping term names to their spec dicts.
+        num_steps: Total training steps; required for ``linear`` schedules.
+
+    Example config::
+
+        rewards:
+          # Constant reward — never changes.
+          goal_scored:
+            type: static
+            weight: 5.0
+
+          # Linearly ramp from 0 to 1 over the full training run.
+          distance_ball_opponent_goal:
+            type: linear
+            weight: [0.0, 1.0]
+            per_second: true
+
+          # Exponential decay with configurable rate.
+          # w(t) = weight * exp(-decay_rate * t)
+          collision_player_ball:
+            type: exponential
+            weight: 0.5
+            decay_rate: 1.0e-7
     """
 
-    # Terms excluded from dynamic decay (game-outcome / sparse signals).
-    _DECAY_EXCLUDE = frozenset(
-        {
-            "ball_stationary",
-            "time_out_punishment",
-            "time_punishment",
-            "goal_scored",
-            "goal_conceded",
-            "opponent_in_goal",
-            "player_in_goal",
-        }
-    )
-
-    def __init__(self, env, cfg, num_steps=None, dynamic=False):
+    def __init__(self, env, cfg, num_steps=None):
         super().__init__(env, cfg)
-        self.dynamic = dynamic
         self.num_steps = num_steps
         self._step = 0
 
     def step(self, actions):
         self._step += self.env.unwrapped.num_envs
-        for term, weight in self.cfg.items():
-            # 1. Linear weight schedule for [start, end] entries.
-            if type(weight) is dict and type(weight["weight"]) is list:
-                term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
-                weight_step = (weight["weight"][1] - weight["weight"][0]) / self.num_steps
-                if not weight.get("per_second", False):
+
+        for term, spec in self.cfg.items():
+            schedule_type = spec["type"]
+
+            if schedule_type == "static":
+                continue
+
+            term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
+
+            if schedule_type == "linear":
+                # Linear interpolation: advance weight by one step increment.
+                weight_step = (spec["weight"][1] - spec["weight"][0]) / self.num_steps
+                if not spec.get("per_second", False):
                     weight_step /= KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"]
                 self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight += weight_step
 
-            # 2. Exponential decay for auxiliary shaping rewards.
-            if self.dynamic and term not in self._DECAY_EXCLUDE:
-                term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
-                self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = weight * (
-                    torch.exp(
-                        -torch.tensor(
-                            self._step / 10000000,
-                            device=self.env.unwrapped.device,
-                            dtype=torch.float32,
-                        )
+            elif schedule_type == "exponential":
+                # Exponential decay: w(t) = w_0 * exp(-decay_rate * t)
+                decay_rate = spec["decay_rate"]
+                w_0 = spec["weight"]
+                self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = w_0 * torch.exp(
+                    -torch.tensor(
+                        self._step * decay_rate,
+                        device=self.env.unwrapped.device,
+                        dtype=torch.float32,
                     )
-                )  # Half-life ~6.9M steps; fully zeroed after 20M.
-                if self._step > 20_000_000:
-                    self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = torch.tensor(
-                        0.0, device=self.env.unwrapped.device, dtype=torch.float32
-                    )
+                )
 
         return self.env.step(actions)
 
