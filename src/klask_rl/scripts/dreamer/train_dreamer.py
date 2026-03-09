@@ -69,6 +69,7 @@ from dreamer import Dreamer
 from dreamer_self_play import DreamerSelfPlayWrapper
 from envs import make_envs
 from envs.isaaclab import IsaacLabVecEnv
+from gymnasium import Wrapper
 from isaaclab.sim import RenderCfg
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
 from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
@@ -76,9 +77,64 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     CurriculumWrapper,
     KlaskRlRandomOpponentWrapper,
     OpponentActionWrapper,
-    RewardWeightWrapper,
 )
 from trainer import OnlineTrainer
+
+
+class EpisodeMetricsWrapper(Wrapper):
+    """Captures episode-level metrics from the IsaacLab info dict and logs them.
+
+    IsaacLab populates ``info["log"]`` with per-step scalars such as
+    ``Episode_Termination/goal_scored`` (fraction of envs where that
+    termination fired).  The generic ``IsaacLabVecEnv`` adapter discards
+    the info dict, so this wrapper sits just below it and forwards
+    the metrics to a logger.
+
+    Call :meth:`set_logger` after construction to enable logging.
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+        self._logger = None
+
+    def set_logger(self, logger):
+        """Attach a :class:`tools.Logger` for autonomous metric logging."""
+        self._logger = logger
+
+    def step(self, actions):
+        obs, rew, terminated, truncated, info = self.env.step(actions)
+        if self._logger is not None:
+            for key, val in info.get("log", {}).items():
+                if isinstance(val, torch.Tensor):
+                    val = val.item() if val.ndim == 0 else val.mean().item()
+                self._logger.scalar(f"episode/{key}", float(val))
+        return obs, rew, terminated, truncated, info
+
+
+class RewardWeightLogWrapper(Wrapper):
+    """Logs reward term weights from the env's ``reward_manager`` on each step.
+
+    Call :meth:`set_logger` after construction to enable logging.
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+        self._logger = None
+
+    def set_logger(self, logger):
+        """Attach a :class:`tools.Logger` for autonomous metric logging."""
+        self._logger = logger
+
+    def step(self, actions):
+        obs, rew, terminated, truncated, info = self.env.step(actions)
+        if self._logger is not None:
+            rm = self.env.unwrapped.reward_manager
+            for term, cfg in zip(rm.active_terms, rm._term_cfgs):
+                w = cfg.weight
+                val = w.item() if isinstance(w, torch.Tensor) else float(w)
+                self._logger.scalar(f"rewards/weights/{term}", val)
+        return obs, rew, terminated, truncated, info
+
 
 # =============================================================================
 # Task registry — all task-specific knowledge lives here, not in envs/__init__.py
@@ -101,6 +157,8 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
       5. Opponent wrapper:
          - DreamerSelfPlayWrapper if self_play=True
          - KlaskRlRandomOpponentWrapper otherwise
+      6. EpisodeMetricsWrapper (episode termination logging)
+      7. RewardWeightLogWrapper (reward weight logging)
     """
     global _self_play_wrapper
     import importlib
@@ -185,6 +243,12 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
     else:
         isaac_env = KlaskRlRandomOpponentWrapper(isaac_env)
 
+    # --- 6. Episode metrics capture ---
+    isaac_env = EpisodeMetricsWrapper(isaac_env)
+
+    # --- 7. Reward weight logging (outermost gymnasium wrapper) ---
+    isaac_env = RewardWeightLogWrapper(isaac_env)
+
     # Wrap in the r2dreamer IsaacLabVecEnv adapter
     return IsaacLabVecEnv(isaac_env, simulation_app=simulation_app)
 
@@ -246,6 +310,13 @@ def main(config):
     )
     logger.log_hydra_config(config)
 
+    # Attach the logger to logging wrappers so they log autonomously.
+    env = vec_env._env
+    while isinstance(env, Wrapper):
+        if hasattr(env, "set_logger"):
+            env.set_logger(logger)
+        env = env.env
+
     replay_buffer = Buffer(config.buffer)
 
     print("Create env.")
@@ -267,16 +338,12 @@ def main(config):
         _self_play_wrapper.set_opponent(agent)
         print("Self-play enabled: opponent initialised from current agent.")
 
-    # Subclass OnlineTrainer to hook score-gated opponent updates and
-    # reward-weight logging.
+    # Subclass OnlineTrainer to hook score-gated opponent updates.
     class KlaskTrainer(OnlineTrainer):
-        """OnlineTrainer with self-play opponent updates and reward-weight logging.
+        """OnlineTrainer with self-play opponent updates.
 
-        At each eval boundary:
-          - logs current reward weights via ``CurriculumWrapper.get_reward_weights()``
-            (or ``RewardWeightWrapper`` if no curriculum is active).
-          - conditionally updates the self-play opponent when the rolling score
-            exceeds the configured threshold.
+        Reward weights and episode metrics are logged autonomously by
+        :class:`RewardWeightLogWrapper` and :class:`EpisodeMetricsWrapper`.
         """
 
         def eval(self, agent, train_step):
@@ -287,17 +354,7 @@ def main(config):
                     logger=self.logger,
                     train_step=train_step,
                 )
-            # --- Log reward weights ---
-            self._log_reward_weights(train_step)
             return super().eval(agent, train_step)
-
-        def _log_reward_weights(self, train_step):
-            """Log all active reward term weights from the env's reward_manager."""
-            rm = self.train_stepper._env._env.unwrapped.reward_manager
-            for term, cfg in zip(rm.active_terms, rm._term_cfgs):
-                w = cfg.weight
-                val = w.item() if isinstance(w, torch.Tensor) else float(w)
-                self.logger.scalar(f"rewards/weights/{term}", val)
 
     policy_trainer = KlaskTrainer(
         config.trainer,
