@@ -61,7 +61,7 @@ class CurriculumWrapper(RewardWeightWrapper):
         Weight is set once at initialisation and never changed.
     ``linear``
         ``weight: [start, end]`` — linearly interpolated from *start* to
-        *end* over ``num_steps`` environment steps.
+        *end* over ``num_steps`` environment steps (configured per-term).
     ``exponential``
         ``weight`` decays as ``weight * exp(-decay_rate * step)`` where
         ``decay_rate`` is configured per-term.
@@ -69,7 +69,6 @@ class CurriculumWrapper(RewardWeightWrapper):
     Args:
         env: The wrapped environment.
         cfg: Reward config dict mapping term names to their spec dicts.
-        num_steps: Total training steps; required for ``linear`` schedules.
 
     Example config::
 
@@ -79,10 +78,11 @@ class CurriculumWrapper(RewardWeightWrapper):
             type: static
             weight: 5.0
 
-          # Linearly ramp from 0 to 1 over the full training run.
+          # Linearly ramp from 0 to 1 over num_steps.
           distance_ball_opponent_goal:
             type: linear
             weight: [0.0, 1.0]
+            num_steps: 10000000
 
           # Exponential decay with configurable rate.
           # w(t) = weight * exp(-decay_rate * t)
@@ -92,9 +92,8 @@ class CurriculumWrapper(RewardWeightWrapper):
             decay_rate: 1.0e-7
     """
 
-    def __init__(self, env, cfg, num_steps=None):
+    def __init__(self, env, cfg):
         super().__init__(env, cfg)
-        self.num_steps = num_steps
         self._step = 0
 
     def step(self, actions):
@@ -110,7 +109,7 @@ class CurriculumWrapper(RewardWeightWrapper):
 
             if schedule_type == "linear":
                 # Linear interpolation: advance weight by one step increment.
-                weight_step = (spec["weight"][1] - spec["weight"][0]) / self.num_steps
+                weight_step = (spec["weight"][1] - spec["weight"][0]) / spec["num_steps"]
                 self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight += weight_step
 
             elif schedule_type == "exponential":

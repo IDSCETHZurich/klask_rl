@@ -209,11 +209,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # configure active reward terms and curricula as specified in agent_cfg:
     if "rewards" in agent_cfg.keys():
-        env = CurriculumWrapper(
-            env,
-            agent_cfg["rewards"],
-            agent_cfg["params"]["config"]["max_frames"] / env_cfg.scene.num_envs,
-        )
+        env = CurriculumWrapper(env, agent_cfg["rewards"])
 
     # if self-play, use opponent observation wrapper to get access to opponent player's observations:
     if agent_cfg["params"]["config"].get("self_play", False):
