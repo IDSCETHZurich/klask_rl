@@ -32,9 +32,9 @@ params:
       regularizer:
         name: None
   load_checkpoint: true
-  load_path: /workspace/klask_rl/logs/rl_games/klask/pretrained_agent_action_1.0/nn/last_klask_ep_35_rew_3.9405801.pth
+  load_path: /workspace/klask_rl/logs/rl_games/klask/pretrained_agent/nn/last_klask_ep_2730_rew_1.8527617.pth
   config:
-    full_experiment_name: new_agent_from_pretrained/new_curriculum/refactor_no_per_second/
+    full_experiment_name: new_agent_from_new_pretrained/
     name: klask
     env_name: rlgpu
     device: cuda:0
