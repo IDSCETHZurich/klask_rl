@@ -158,7 +158,7 @@ class DreamerSelfPlayWrapper(Wrapper):
             # Encode the reset observation so the opponent has seen the
             # initial state before its first action — matches the rl_games
             # flow where OpponentObservationWrapper captures obs on reset.
-            is_first = torch.ones(num_envs, 1, dtype=torch.float32, device=self._device)
+            is_first = torch.ones(num_envs, 1, dtype=torch.bool, device=self._device)
             self._encode_opponent_obs(obs, is_first)
         return obs, info
 
@@ -175,7 +175,7 @@ class DreamerSelfPlayWrapper(Wrapper):
         # Update opponent RSSM state with the new opponent observation.
         done = terminated | truncated
         if self._opponent_encoder is not None:
-            is_first = done.unsqueeze(-1).to(torch.float32)
+            is_first = done.unsqueeze(-1).to(torch.bool)
             self._encode_opponent_obs(obs, is_first)
             # Re-initialise state for environments that just finished.
             if done.any():

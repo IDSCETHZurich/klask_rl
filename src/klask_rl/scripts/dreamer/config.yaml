@@ -49,22 +49,63 @@ env:
     mlp_keys: "policy"
     cnn_keys: "image"
   rewards:
-    time_punishment: 0.0
-    time_out_punishment: 0.0
-    shot_over_middle_line: 0.0
-    player_in_goal: -3.0
-    opponent_in_goal: 0.0
-    goal_scored: 5.0
-    goal_conceded: -3.0
-    distance_player_ball_own_half: 0.0
-    distance_ball_opponent_goal: 0.1
-    distance_ball_own_goal: -0.1
-    ball_speed: 0.0
-    ball_stationary: -0.01
-    collision_player_ball: 0.5
-    ball_in_own_half: 0.0
-    close_to_boundaries: -0.01
-    player_strategically_positioned: 0.0
+    time_punishment:
+      type: static
+      weight: -0.025
+    time_out_punishment:
+      type: static
+      weight: 0.0
+    shot_over_middle_line:
+      type: exponential
+      weight: 500.0
+      decay_rate: 1.0e-7
+    player_in_goal:
+      type: static
+      weight: -50.0
+    opponent_in_goal:
+      type: static
+      weight: 0.0
+    goal_scored:
+      type: static
+      weight: 250.0
+    goal_conceded:
+      type: static
+      weight: -50.0
+    distance_player_ball_own_half:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1.0e-7
+    distance_ball_opponent_goal:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1.0e-7
+    distance_ball_own_goal:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1.0e-7
+    ball_speed:
+      type: exponential
+      weight: 5.0
+      decay_rate: 1.0e-7
+    ball_stationary:
+      type: static
+      weight: -0.005
+    collision_player_ball:
+      type: exponential
+      weight: 15.1003
+      decay_rate: 1.0e-7
+    ball_in_own_half:
+      type: exponential
+      weight: 0.001
+      decay_rate: 1.0e-7
+    close_to_boundaries:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1.0e-7
+    player_strategically_positioned:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1.0e-7
   terminations:
     time_out: true
     goal_scored: true
@@ -92,9 +133,9 @@ trainer:
   update_log_every: 5e3
   action_repeat: ${env.action_repeat}
   memory_history_snapshot: False # Record full allocation trace for PyTorch Memory Visualizer
-  memory_history_steps: 100     # Number of training steps to record before saving the snapshot
+  memory_history_steps: 100 # Number of training steps to record before saving the snapshot
 
-self_play: false
+self_play: true
 self_play_config:
-  update_score: 0.3 # opponent updated only when rolling mean score > this
+  update_score: 0.2 # opponent updated only when rolling mean score > this
   games_to_track: 4096 # rolling window size for score averaging
