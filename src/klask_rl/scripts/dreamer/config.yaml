@@ -51,17 +51,16 @@ env:
   rewards:
     time_punishment:
       type: static
-      weight: -0.025
+      weight: 0.0
     time_out_punishment:
       type: static
       weight: 0.0
     shot_over_middle_line:
-      type: exponential
-      weight: 500.0
-      decay_rate: 1.0e-7
+      type: static
+      weight: 0.0
     player_in_goal:
       type: static
-      weight: -50.0
+      weight: -150.0
     opponent_in_goal:
       type: static
       weight: 0.0
@@ -70,42 +69,38 @@ env:
       weight: 250.0
     goal_conceded:
       type: static
-      weight: -50.0
+      weight: -150.0
     distance_player_ball_own_half:
-      type: exponential
+      type: static
       weight: 0.0
-      decay_rate: 1.0e-7
     distance_ball_opponent_goal:
       type: exponential
-      weight: 0.0
+      weight: 10.1
       decay_rate: 1.0e-7
     distance_ball_own_goal:
       type: exponential
-      weight: 0.0
+      weight: -10.1
       decay_rate: 1.0e-7
     ball_speed:
-      type: exponential
-      weight: 5.0
-      decay_rate: 1.0e-7
+      type: static
+      weight: 0.0
     ball_stationary:
       type: static
-      weight: -0.005
+      weight: -0.5
     collision_player_ball:
       type: exponential
-      weight: 15.1003
+      weight: 0.5
       decay_rate: 1.0e-7
     ball_in_own_half:
-      type: exponential
-      weight: 0.001
-      decay_rate: 1.0e-7
+      type: static
+      weight: 0.0
     close_to_boundaries:
       type: exponential
-      weight: 0.0
+      weight: -0.01
       decay_rate: 1.0e-7
     player_strategically_positioned:
-      type: exponential
+      type: static
       weight: 0.0
-      decay_rate: 1.0e-7
   terminations:
     time_out: true
     goal_scored: true
