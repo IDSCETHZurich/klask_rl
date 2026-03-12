@@ -14,6 +14,7 @@ from ..utils_manager_based import (
     distance_to_goal,
     goal_position_obs,
     padded_image,
+    padded_image_rotated,
     root_lin_xy_vel_w,
     root_xy_pos_w,
 )
@@ -323,8 +324,20 @@ class DreamerObservationsCfg:
 
     @configclass
     class ImageObsGroup(ObsGroup):
+        # TODO: change padding to transform once it is woring.
         image = ObsTerm(
             func=padded_image,
+            params={"sensor_cfg": SceneEntityCfg("camera"), "data_type": "rgb", "target_h": 64, "target_w": 64},
+        )
+
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    @configclass
+    class OpponentImageObsGroup(ObsGroup):
+        image = ObsTerm(
+            func=padded_image_rotated,
             params={"sensor_cfg": SceneEntityCfg("camera"), "data_type": "rgb", "target_h": 64, "target_w": 64},
         )
 
@@ -336,3 +349,4 @@ class DreamerObservationsCfg:
     policy: ObsGroup = _PlayerPolicyExtendedCfg()
     opponent: ObsGroup = _OpponentPolicyExtendedCfg()
     image: ObsGroup = ImageObsGroup()
+    opponent_image: ObsGroup = OpponentImageObsGroup()

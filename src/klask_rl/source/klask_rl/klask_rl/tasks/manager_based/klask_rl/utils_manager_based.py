@@ -35,6 +35,24 @@ def padded_image(
     return images
 
 
+def padded_image_rotated(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("camera"),
+    data_type: str = "rgb",
+    target_h: int = 64,
+    target_w: int = 64,
+) -> torch.Tensor:
+    """Return a 180°-rotated camera image zero-padded to (target_h, target_w).
+
+    This provides the opponent's perspective by rotating the player camera
+    image by 180° (equivalent to ``torch.rot90(…, k=2)``) without requiring
+    a second physical camera in the scene.
+    """
+    images = padded_image(env, sensor_cfg, data_type, target_h, target_w)
+    # 180° rotation on the spatial (H, W) dimensions
+    return torch.rot90(images, k=2, dims=[1, 2])
+
+
 def reset_ball_hit_tracking(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,

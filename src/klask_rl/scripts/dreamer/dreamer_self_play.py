@@ -272,18 +272,14 @@ class DreamerSelfPlayWrapper(Wrapper):
             Float tensor of shape ``(num_envs, 1)`` — ``1.0`` for envs that
             just reset, ``0.0`` otherwise.
         """
-        opp_obs_raw = obs["opponent"]
 
         # Build an obs dict compatible with the encoder.
         opp_obs_dict = {}
-        if "image" in obs:
-            # TODO: mirror image for opponent if needed
-            opp_obs_dict["image"] = obs["image"]
-        opp_obs_dict["policy"] = opp_obs_raw
+        opp_obs_dict["policy"] = obs["opponent"]
+        opp_obs_dict["image"] = obs["opponent_image"]
 
         # Preprocess (image normalisation).
-        if "image" in opp_obs_dict:
-            opp_obs_dict["image"] = opp_obs_dict["image"].float() / 255.0
+        opp_obs_dict["image"] = opp_obs_dict["image"].float() / 255.0
 
         # Encode → RSSM obs step.
         embed = self._opponent_encoder(opp_obs_dict)
