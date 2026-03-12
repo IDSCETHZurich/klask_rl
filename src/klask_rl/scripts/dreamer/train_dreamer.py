@@ -90,12 +90,25 @@ class EpisodeMetricsWrapper(Wrapper):
     the info dict, so this wrapper sits just below it and forwards
     the metrics to a logger.
 
+    Metrics are accumulated over a sliding window of recent episodes
+    (default 100) so that logged values represent a meaningful rate
+    rather than a single episode's binary indicator.
+
     Call :meth:`set_logger` after construction to enable logging.
     """
 
-    def __init__(self, env):
+    def __init__(self, env, window_size: int = 100):
         super().__init__(env)
         self._logger = None
+        self._window_size = window_size
+        # Per-episode accumulators: key -> running sum for the current episode
+        self._ep_sums: dict[str, float] = {}
+        self._ep_counts: dict[str, int] = {}
+        # Sliding window of completed episode means: key -> deque of floats
+        from collections import deque
+
+        self._history: dict[str, deque] = {}
+        self._deque_factory = lambda: deque(maxlen=self._window_size)
 
     def set_logger(self, logger):
         """Attach a :class:`tools.Logger` for autonomous metric logging."""
@@ -104,10 +117,34 @@ class EpisodeMetricsWrapper(Wrapper):
     def step(self, actions):
         obs, rew, terminated, truncated, info = self.env.step(actions)
         if self._logger is not None:
+            # Accumulate per-step values for the current episode
             for key, val in info.get("log", {}).items():
                 if isinstance(val, torch.Tensor):
                     val = val.item() if val.ndim == 0 else val.mean().item()
-                self._logger.scalar(f"episode/{key}", float(val))
+                val = float(val)
+                self._ep_sums[key] = self._ep_sums.get(key, 0.0) + val
+                self._ep_counts[key] = self._ep_counts.get(key, 0) + 1
+
+            # On episode end, push the per-episode mean into the sliding
+            # window and log the windowed average.
+            done = terminated or truncated
+            # Handle both scalar bool and tensor
+            if isinstance(done, torch.Tensor):
+                done = done.any().item()
+            if done:
+                for key in list(self._ep_sums.keys()):
+                    ep_mean = self._ep_sums[key] / max(self._ep_counts[key], 1)
+                    if key not in self._history:
+                        self._history[key] = self._deque_factory()
+                    self._history[key].append(ep_mean)
+                    # Log the windowed average across recent episodes
+                    window = self._history[key]
+                    windowed_avg = sum(window) / len(window)
+                    self._logger.scalar(f"episode/{key}", windowed_avg)
+                # Reset per-episode accumulators
+                self._ep_sums.clear()
+                self._ep_counts.clear()
+
         return obs, rew, terminated, truncated, info
 
 
