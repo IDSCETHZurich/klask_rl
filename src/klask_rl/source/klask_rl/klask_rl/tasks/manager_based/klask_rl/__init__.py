@@ -77,7 +77,7 @@ gym.register(
 
 gym.register(
     id="Klask-Rl-Dreamer-v0",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point=f"{__name__}.klask_rl_dreamer_env:KlaskRlDreamerEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlDreamerEnvCfg",
