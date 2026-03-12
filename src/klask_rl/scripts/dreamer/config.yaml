@@ -75,12 +75,12 @@ env:
       weight: 0.0
     distance_ball_opponent_goal:
       type: exponential
-      weight: 10.1
-      decay_rate: 1.0e-7
+      weight: 5.0
+      decay_rate: 1.0e-6
     distance_ball_own_goal:
       type: exponential
-      weight: -10.1
-      decay_rate: 1.0e-7
+      weight: -5.0
+      decay_rate: 1.0e-6
     ball_speed:
       type: static
       weight: 0.0
@@ -90,14 +90,14 @@ env:
     collision_player_ball:
       type: exponential
       weight: 0.5
-      decay_rate: 1.0e-7
+      decay_rate: 1.0e-6
     ball_in_own_half:
       type: static
       weight: 0.0
     close_to_boundaries:
       type: exponential
       weight: -0.01
-      decay_rate: 1.0e-7
+      decay_rate: 1.0e-6
     player_strategically_positioned:
       type: static
       weight: 0.0
