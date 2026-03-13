@@ -73,17 +73,6 @@ class DreamerSelfPlayWrapper(Wrapper):
         for _ in range(games_to_track):
             self._score_buffer.append(0.0)
 
-        # --- Halve the action space (player only) ---
-        if hasattr(self.env.unwrapped, "single_action_space"):
-            original_space = self.env.unwrapped.single_action_space
-            if hasattr(original_space, "shape") and original_space.shape[0] == 4:
-                self.env.unwrapped._klask_original_single_action_space = original_space
-                self.env.unwrapped.single_action_space = gym.spaces.Box(
-                    low=original_space.low[:2],
-                    high=original_space.high[:2],
-                    dtype=original_space.dtype,
-                )
-
         # Opponent state — populated by ``set_opponent()``.
         self._opponent_encoder = None
         self._opponent_rssm = None
