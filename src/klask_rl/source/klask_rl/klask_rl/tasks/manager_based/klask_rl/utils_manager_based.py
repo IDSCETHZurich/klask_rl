@@ -9,6 +9,17 @@ from isaaclab.sensors import TiledCamera, Camera, RayCasterCamera
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 
+def _pad_image_to_target(images: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
+    """Zero-pad image tensor (N, H, W, C) to (N, target_h, target_w, C)."""
+    _, h, w, _ = images.shape
+    pad_bottom = target_h - h
+    pad_right = target_w - w
+    if pad_bottom > 0 or pad_right > 0:
+        # For (N, H, W, C): pad W on the right and H on the bottom.
+        images = F.pad(images, (0, 0, 0, pad_right, 0, pad_bottom), value=0)
+    return images
+
+
 def padded_image(
     env: ManagerBasedRLEnv,
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("camera"),
@@ -24,15 +35,7 @@ def padded_image(
     """
     sensor: TiledCamera | Camera | RayCasterCamera = env.scene.sensors[sensor_cfg.name]
     images = sensor.data.output[data_type]  # (N, H, W, C)
-    _, h, w, _ = images.shape
-    pad_bottom = target_h - h
-    pad_right = target_w - w
-    if pad_bottom > 0 or pad_right > 0:
-        # F.pad expects (last_dim_left, last_dim_right, ..., first_dim_left, first_dim_right)
-        # For (N, H, W, C) we want to pad W (dim 2) and H (dim 1):
-        #   C: (0, 0), W: (0, pad_right), H: (0, pad_bottom)
-        images = F.pad(images, (0, 0, 0, pad_right, 0, pad_bottom), value=0)
-    return images
+    return _pad_image_to_target(images, target_h, target_w)
 
 
 def padded_image_rotated(
@@ -48,9 +51,11 @@ def padded_image_rotated(
     image by 180° (equivalent to ``torch.rot90(…, k=2)``) without requiring
     a second physical camera in the scene.
     """
-    images = padded_image(env, sensor_cfg, data_type, target_h, target_w)
-    # 180° rotation on the spatial (H, W) dimensions
-    return torch.rot90(images, k=2, dims=[1, 2])
+    sensor: TiledCamera | Camera | RayCasterCamera = env.scene.sensors[sensor_cfg.name]
+    images = sensor.data.output[data_type]  # (N, H, W, C)
+    # 180° rotation on the spatial (H, W) dimensions before padding
+    images = torch.rot90(images, k=2, dims=[1, 2])
+    return _pad_image_to_target(images, target_h, target_w)
 
 
 def reset_ball_hit_tracking(
