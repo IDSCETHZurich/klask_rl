@@ -165,13 +165,11 @@ class DreamerSelfPlayWrapper(Wrapper):
         done = terminated | truncated
         if self._opponent_encoder is not None:
             is_first = done.unsqueeze(-1).to(torch.bool)
+            # obs_step internally zeros stoch/deter/prev_action for done envs (via is_first),
+            # then computes the posterior from the first obs of the new episode — no manual
+            # reset needed.  _opp_prev_action is always overwritten by _get_opponent_action()
+            # before _encode_opponent_obs reads it on the next step.
             self._encode_opponent_obs(obs, is_first)
-            # Re-initialise state for environments that just finished.
-            if done.any():
-                init_stoch, init_deter = self._opponent_rssm.initial(done.sum().item())
-                self._opp_stoch[done] = init_stoch
-                self._opp_deter[done] = init_deter
-                self._opp_prev_action[done] = 0.0
 
         # --- Track episode outcomes for score-gated updates ---
         if done.any():
