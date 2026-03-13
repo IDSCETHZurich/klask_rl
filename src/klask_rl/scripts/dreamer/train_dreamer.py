@@ -274,6 +274,7 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
             isaac_env,
             update_score=float(sp_cfg.get("update_score", 0.7)),
             games_to_track=int(sp_cfg.get("games_to_track", 4096)),
+            compile=bool(sp_cfg.get("compile", False)),
         )
         isaac_env = _self_play_wrapper
     else:
@@ -309,6 +310,10 @@ def main(config):
     sp_cfg = (
         OmegaConf.to_container(config.get("self_play_config", OmegaConf.create({})), resolve=True) if self_play else {}
     )
+    # Mirror the model compile flag so the opponent is also compiled when the
+    # training agent is.
+    if self_play:
+        sp_cfg.setdefault("compile", bool(getattr(config.model, "compile", False)))
 
     vec_env = _make_env(
         config.env,

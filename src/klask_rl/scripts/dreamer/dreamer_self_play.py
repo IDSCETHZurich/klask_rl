@@ -60,9 +60,11 @@ class DreamerSelfPlayWrapper(Wrapper):
         eval_mode: bool = False,
         update_score: float = 0.7,
         games_to_track: int = 4096,
+        compile: bool = False,
     ):
         super().__init__(env)
         self._eval_mode = eval_mode
+        self._compile = compile
 
         # --- Score tracking (mirrors rl_games SelfPlayManager) ---
         self._update_score = update_score
@@ -74,9 +76,15 @@ class DreamerSelfPlayWrapper(Wrapper):
             self._score_buffer.append(0.0)
 
         # Opponent state — populated by ``set_opponent()``.
+        # _opponent_{enc,rssm,actor} are the inference-facing modules (may be
+        # torch.compile-wrapped).  _opponent_{enc,rssm,actor}_orig are always
+        # the raw nn.Module instances used for in-place weight updates.
         self._opponent_encoder = None
         self._opponent_rssm = None
         self._opponent_actor = None
+        self._opponent_encoder_orig = None
+        self._opponent_rssm_orig = None
+        self._opponent_actor_orig = None
         self._opp_stoch = None
         self._opp_deter = None
         self._opp_prev_action = None
@@ -182,14 +190,44 @@ class DreamerSelfPlayWrapper(Wrapper):
     # ------------------------------------------------------------------
 
     def _copy_weights(self, agent):
-        """Deep-copy encoder, RSSM, and actor from the training agent."""
-        self._opponent_encoder = copy.deepcopy(agent.encoder)
-        self._opponent_rssm = copy.deepcopy(agent.rssm)
-        self._opponent_actor = copy.deepcopy(agent.actor)
-        for module in (self._opponent_encoder, self._opponent_rssm, self._opponent_actor):
-            module.eval()
-            for p in module.parameters():
-                p.requires_grad_(False)
+        """Copy encoder, RSSM, and actor weights from the training agent.
+
+        First call: deep-copies the modules to create correctly-shaped tensors
+        on the right device, then optionally wraps them with torch.compile for
+        faster inference.
+
+        Subsequent calls: updates weights in-place via load_state_dict on the
+        uncompiled originals — much faster than deepcopy.  torch.compile shares
+        the same underlying parameter tensors, so compiled graphs pick up the
+        new weights automatically without recompilation.
+        """
+        if self._opponent_encoder is None:
+            # First call — must deepcopy to get architecture / device / dtype.
+            enc = copy.deepcopy(agent.encoder)
+            rssm = copy.deepcopy(agent.rssm)
+            actor = copy.deepcopy(agent.actor)
+            for module in (enc, rssm, actor):
+                module.eval()
+                for p in module.parameters():
+                    p.requires_grad_(False)
+            # Keep uncompiled originals for efficient in-place weight updates.
+            self._opponent_encoder_orig = enc
+            self._opponent_rssm_orig = rssm
+            self._opponent_actor_orig = actor
+            if self._compile:
+                self._opponent_encoder = torch.compile(enc, mode="reduce-overhead")
+                self._opponent_rssm = torch.compile(rssm, mode="reduce-overhead")
+                self._opponent_actor = torch.compile(actor, mode="reduce-overhead")
+            else:
+                self._opponent_encoder = enc
+                self._opponent_rssm = rssm
+                self._opponent_actor = actor
+        else:
+            # Subsequent calls — update parameters in-place; avoids deepcopy
+            # overhead and preserves any torch.compile wrapping.
+            self._opponent_encoder_orig.load_state_dict(agent.encoder.state_dict())
+            self._opponent_rssm_orig.load_state_dict(agent.rssm.state_dict())
+            self._opponent_actor_orig.load_state_dict(agent.actor.state_dict())
 
     def _record_episode_scores(self, done):
         """Record +1 / -1 / 0 for finished episodes based on termination type.
