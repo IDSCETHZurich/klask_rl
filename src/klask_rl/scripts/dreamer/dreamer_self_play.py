@@ -66,6 +66,17 @@ class DreamerSelfPlayWrapper(Wrapper):
         self._eval_mode = eval_mode
         self._compile = compile
 
+        # --- Halve the action space (player only) ---
+        if hasattr(self.env.unwrapped, "single_action_space"):
+            original_space = self.env.unwrapped.single_action_space
+            if hasattr(original_space, "shape") and original_space.shape[0] == 4:
+                self.env.unwrapped._klask_original_single_action_space = original_space
+                self.env.unwrapped.single_action_space = gym.spaces.Box(
+                    low=original_space.low[:2],
+                    high=original_space.high[:2],
+                    dtype=original_space.dtype,
+                )
+
         # --- Score tracking (mirrors rl_games SelfPlayManager) ---
         self._update_score = update_score
         self._games_to_track = games_to_track
@@ -271,8 +282,9 @@ class DreamerSelfPlayWrapper(Wrapper):
         stoch, deter = self._opponent_rssm.initial(num_envs)
         self._opp_stoch = stoch
         self._opp_deter = deter
-        # The opponent action dimension is 2 (same as player).
-        self._opp_prev_action = torch.zeros(num_envs, 2, dtype=torch.float32, device=self._device)
+        self._opp_prev_action = torch.zeros(
+            num_envs, self._opponent_rssm._act_dim, dtype=torch.float32, device=self._device
+        )
 
     @torch.no_grad()
     def _get_opponent_action(self):
