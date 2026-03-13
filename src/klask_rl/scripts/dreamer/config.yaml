@@ -12,7 +12,7 @@ model:
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_vision_rgb_50M
+wandb_name: dreamer_vision_rgb_50M_selfplay_new_params
 seed: 0
 deterministic_run: False
 device: "cuda:0"
@@ -60,16 +60,16 @@ env:
       weight: 0.0
     player_in_goal:
       type: static
-      weight: -150.0
+      weight: -15000.0
     opponent_in_goal:
       type: static
       weight: 0.0
     goal_scored:
       type: static
-      weight: 250.0
+      weight: 25000.0
     goal_conceded:
       type: static
-      weight: -150.0
+      weight: -15000.0
     distance_player_ball_own_half:
       type: static
       weight: 0.0
@@ -86,18 +86,17 @@ env:
       weight: 0.0
     ball_stationary:
       type: static
-      weight: -0.5
+      weight: -1.0
     collision_player_ball:
       type: exponential
-      weight: 0.5
+      weight: 50.0
       decay_rate: 1.0e-6
     ball_in_own_half:
       type: static
       weight: 0.0
     close_to_boundaries:
-      type: exponential
-      weight: -0.01
-      decay_rate: 1.0e-6
+      type: static
+      weight: 0.0
     player_strategically_positioned:
       type: static
       weight: 0.0
