@@ -216,16 +216,17 @@ class DreamerSelfPlayWrapper(Wrapper):
             "time_out": 0.0,
         }
 
-        # Iterate over finished envs and record the score for whichever
-        # termination was active.
+        # Accumulate per-env scores on GPU, then do a single GPU→CPU transfer.
+        # This avoids up to 5 separate .item() syncs (one per term) in the original loop.
+        env_scores = torch.zeros(done_mask.shape[0], dtype=torch.float32, device=done_mask.device)
         for term_name, score in score_map.items():
             if term_name not in term_mgr.active_terms:
                 continue
             term_active = term_mgr.get_term(term_name)  # (num_envs,) bool
-            # Count envs where this termination fired AND the episode ended.
-            count = int((term_active & done_mask).sum().item())
-            for _ in range(count):
-                self._score_buffer.append(score)
+            env_scores += (term_active & done_mask).float() * score
+
+        for s in env_scores[done_mask].tolist():
+            self._score_buffer.append(s)
 
     def _reset_opponent_state(self, num_envs):
         """Reset RSSM state for all environments."""
