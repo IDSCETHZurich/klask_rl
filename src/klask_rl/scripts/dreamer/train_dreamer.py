@@ -445,9 +445,37 @@ def main(config):
     if _resume_step > 0:
         policy_trainer._should_pretrain._once = False
 
+    def _save_checkpoint(step):
+        """Save a full checkpoint at the given step.
+
+        Writes both a numbered ``checkpoint_{step}.pt`` and overwrites
+        ``latest.pt`` so that resume always picks up the newest one.
+        """
+        # Find curriculum step from wrapper chain.
+        _curr_step = 0
+        _env = vec_env._env
+        while isinstance(_env, Wrapper):
+            if isinstance(_env, CurriculumWrapper):
+                _curr_step = _env._step
+                break
+            _env = _env.env
+        items_to_save = {
+            "agent_state_dict": agent.state_dict(),
+            "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
+            "step": step,
+            "curriculum_step": _curr_step,
+            "scheduler_state_dict": agent._scheduler.state_dict(),
+            "scaler_state_dict": agent._scaler.state_dict(),
+            "slow_value_updates": agent._slow_value_updates,
+            **({"ema_updates": agent._ema_updates} if hasattr(agent, "_ema_updates") else {}),
+        }
+        torch.save(items_to_save, logdir / f"checkpoint_{step}.pt")
+        torch.save(items_to_save, logdir / "latest.pt")
+        print(f"Checkpoint saved: checkpoint_{step}.pt + latest.pt")
+
     exit_code = 0
     try:
-        policy_trainer.begin(agent, initial_step=_resume_step)
+        policy_trainer.begin(agent, initial_step=_resume_step, save_fn=_save_checkpoint)
     except KeyboardInterrupt:
         print("\nTraining interrupted by user (Ctrl+C).")
         exit_code = 1
@@ -460,26 +488,7 @@ def main(config):
         traceback.print_exc()
         exit_code = 1
     finally:
-        # Find curriculum step from wrapper chain.
-        _curr_step = 0
-        _env = vec_env._env
-        while isinstance(_env, Wrapper):
-            if isinstance(_env, CurriculumWrapper):
-                _curr_step = _env._step
-                break
-            _env = _env.env
-        items_to_save = {
-            "agent_state_dict": agent.state_dict(),
-            "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
-            "step": policy_trainer._step,
-            "curriculum_step": _curr_step,
-            "scheduler_state_dict": agent._scheduler.state_dict(),
-            "scaler_state_dict": agent._scaler.state_dict(),
-            "slow_value_updates": agent._slow_value_updates,
-            **({"ema_updates": agent._ema_updates} if hasattr(agent, "_ema_updates") else {}),
-        }
-        torch.save(items_to_save, logdir / "latest.pt")
-        print(f"Checkpoint saved to {logdir / 'latest.pt'}")
+        _save_checkpoint(policy_trainer._step)
 
         logger.close(exit_code=exit_code)
         vec_env._env.close()
