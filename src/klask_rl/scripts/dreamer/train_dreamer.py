@@ -377,6 +377,38 @@ def main(config):
         act_space,
     ).to(config.device)
 
+    # Resume from checkpoint if one exists in the logdir.
+    _resume_step = 0
+    checkpoint_path = logdir / "latest.pt"
+    if checkpoint_path.exists():
+        print(f"Resuming from checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=config.device)
+        agent.load_state_dict(checkpoint["agent_state_dict"])
+        tools.recursively_load_optim_state_dict(agent, checkpoint["optims_state_dict"])
+        _resume_step = checkpoint.get("step", 0)
+        # Restore curriculum step so reward weight schedules continue correctly.
+        _curriculum_step = checkpoint.get("curriculum_step", 0)
+        if _curriculum_step > 0:
+            env = vec_env._env
+            while isinstance(env, Wrapper):
+                if isinstance(env, CurriculumWrapper):
+                    env._step = _curriculum_step
+                    break
+                env = env.env
+        # Restore LR scheduler state so warmup doesn't restart.
+        if "scheduler_state_dict" in checkpoint:
+            agent._scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        # Restore GradScaler state so AMP scale factor continues correctly.
+        if "scaler_state_dict" in checkpoint:
+            agent._scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        # Restore slow target update counter.
+        if "slow_value_updates" in checkpoint:
+            agent._slow_value_updates = checkpoint["slow_value_updates"]
+        # Restore DreamerPro EMA update counter (only present with dreamerpro config).
+        if "ema_updates" in checkpoint and hasattr(agent, "_ema_updates"):
+            agent._ema_updates = checkpoint["ema_updates"]
+        print(f"  Restored agent weights, optimizer states, step={_resume_step}, curriculum_step={_curriculum_step}")
+
     # Initialise self-play opponent from the (randomly initialised) agent.
     if _self_play_wrapper is not None:
         _self_play_wrapper.set_opponent(agent)
@@ -409,9 +441,13 @@ def main(config):
         eval_stepper=eval_envs,
     )
 
+    # If resuming, skip the pretrain phase (model is already trained).
+    if _resume_step > 0:
+        policy_trainer._should_pretrain._once = False
+
     exit_code = 0
     try:
-        policy_trainer.begin(agent)
+        policy_trainer.begin(agent, initial_step=_resume_step)
     except KeyboardInterrupt:
         print("\nTraining interrupted by user (Ctrl+C).")
         exit_code = 1
@@ -424,9 +460,23 @@ def main(config):
         traceback.print_exc()
         exit_code = 1
     finally:
+        # Find curriculum step from wrapper chain.
+        _curr_step = 0
+        _env = vec_env._env
+        while isinstance(_env, Wrapper):
+            if isinstance(_env, CurriculumWrapper):
+                _curr_step = _env._step
+                break
+            _env = _env.env
         items_to_save = {
             "agent_state_dict": agent.state_dict(),
             "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
+            "step": policy_trainer._step,
+            "curriculum_step": _curr_step,
+            "scheduler_state_dict": agent._scheduler.state_dict(),
+            "scaler_state_dict": agent._scaler.state_dict(),
+            "slow_value_updates": agent._slow_value_updates,
+            **({"ema_updates": agent._ema_updates} if hasattr(agent, "_ema_updates") else {}),
         }
         torch.save(items_to_save, logdir / "latest.pt")
         print(f"Checkpoint saved to {logdir / 'latest.pt'}")
