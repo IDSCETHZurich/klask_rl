@@ -141,7 +141,9 @@ class EpisodeMetricsWrapper(Wrapper):
                     window = self._history[key]
                     windowed_avg = sum(window) / len(window)
                     key = key.lower()
-                    if not key.startswith("episode_"):
+                    if key.startswith("episode_"):
+                        key = key.replace("_", "/", 1)
+                    else:
                         key = f"episode/{key}"
                     self._logger.scalar(key, windowed_avg)
                 # Reset per-episode accumulators
