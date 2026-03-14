@@ -432,19 +432,6 @@ def main(config):
                 )
             return super().eval(agent, train_step)
 
-    policy_trainer = KlaskTrainer(
-        config.trainer,
-        replay_buffer,
-        logger,
-        logdir,
-        train_stepper=train_envs,
-        eval_stepper=eval_envs,
-    )
-
-    # If resuming, skip the pretrain phase (model is already trained).
-    if _resume_step > 0:
-        policy_trainer._should_pretrain._once = False
-
     def _save_checkpoint(step):
         """Save a full checkpoint at the given step.
 
@@ -473,9 +460,20 @@ def main(config):
         torch.save(items_to_save, logdir / "latest.pt")
         print(f"Checkpoint saved: checkpoint_{step}.pt + latest.pt")
 
+    policy_trainer = KlaskTrainer(
+        config.trainer,
+        replay_buffer,
+        logger,
+        logdir,
+        train_stepper=train_envs,
+        eval_stepper=eval_envs,
+        initial_step=_resume_step,
+        save_fn=_save_checkpoint,
+    )
+
     exit_code = 0
     try:
-        policy_trainer.begin(agent, initial_step=_resume_step, save_fn=_save_checkpoint)
+        policy_trainer.begin(agent)
     except KeyboardInterrupt:
         print("\nTraining interrupted by user (Ctrl+C).")
         exit_code = 1
