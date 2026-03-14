@@ -140,7 +140,10 @@ class EpisodeMetricsWrapper(Wrapper):
                     # Log the windowed average across recent episodes
                     window = self._history[key]
                     windowed_avg = sum(window) / len(window)
-                    self._logger.scalar(f"episode/{key}", windowed_avg)
+                    key = key.lower()
+                    if not key.startswith("episode_"):
+                        key = f"episode/{key}"
+                    self._logger.scalar(key, windowed_avg)
                 # Reset per-episode accumulators
                 self._ep_sums.clear()
                 self._ep_counts.clear()
