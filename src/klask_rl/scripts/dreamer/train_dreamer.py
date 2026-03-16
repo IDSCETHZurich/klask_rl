@@ -127,10 +127,10 @@ class EpisodeMetricsWrapper(Wrapper):
 
             # On episode end, push the per-episode mean into the sliding
             # window and log the windowed average.
-            done = terminated or truncated
-            # Handle both scalar bool and tensor
-            if isinstance(done, torch.Tensor):
-                done = done.any().item()
+            if isinstance(terminated, torch.Tensor):
+                done = (terminated | truncated).any().item()
+            else:
+                done = terminated or truncated
             if done:
                 for key in list(self._ep_sums.keys()):
                     ep_mean = self._ep_sums[key] / max(self._ep_counts[key], 1)
