@@ -414,6 +414,14 @@ def main(config):
     # Initialise self-play opponent from the (randomly initialised) agent.
     if _self_play_wrapper is not None:
         _self_play_wrapper.set_opponent(agent)
+        # Restore score buffer from checkpoint so mean_score continues
+        # correctly instead of being diluted by 4096 pre-filled zeros.
+        if checkpoint_path.exists():
+            _saved_scores = checkpoint.get("selfplay_score_buffer")
+            if _saved_scores is not None:
+                _self_play_wrapper._score_buffer.clear()
+                _self_play_wrapper._score_buffer.extend(_saved_scores)
+                print(f"  Restored self-play score buffer ({len(_saved_scores)} entries, mean={_self_play_wrapper.mean_score:.3f})")
         print("Self-play enabled: opponent initialised from current agent.")
 
     # Subclass OnlineTrainer to hook score-gated opponent updates.
@@ -457,10 +465,11 @@ def main(config):
             "scaler_state_dict": agent._scaler.state_dict(),
             "slow_value_updates": agent._slow_value_updates,
             **({"ema_updates": agent._ema_updates} if hasattr(agent, "_ema_updates") else {}),
+            **({"selfplay_score_buffer": list(_self_play_wrapper._score_buffer)} if _self_play_wrapper is not None else {}),
         }
         torch.save(items_to_save, logdir / f"checkpoint_{step}.pt")
         torch.save(items_to_save, logdir / "latest.pt")
-        print(f"Checkpoint saved: checkpoint_{step}.pt + latest.pt")
+        print(f"Checkpoint saved: {str(logdir.absolute())}/checkpoint_{step}.pt + latest.pt")
 
     policy_trainer = KlaskTrainer(
         config.trainer,
