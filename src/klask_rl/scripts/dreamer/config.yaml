@@ -9,10 +9,10 @@ model:
   memory_peak_tracking: True # Log per-section GPU peak memory as scalars
 
 # Logging
-logdir: /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
+logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_vision_rgb_50M_selfplay_new_params
+wandb_name: dreamer_vision_rgb_50M_selfplay_new_params_16envs
 seed: 0
 deterministic_run: False
 device: "cuda:0"
@@ -30,7 +30,7 @@ batch_length: 64
 env:
   task: "isaaclab_Klask-Rl-Dreamer-v0"
   steps: 2e7
-  env_num: 1
+  env_num: 16
   eval_episode_num: 10
   action_repeat: 20
   train_ratio: 128
