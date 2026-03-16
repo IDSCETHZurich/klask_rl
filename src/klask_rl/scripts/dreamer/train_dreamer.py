@@ -72,7 +72,6 @@ from envs.isaaclab import IsaacLabVecEnv
 from gymnasium import Wrapper
 from isaaclab.sim import RenderCfg
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
-from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     CurriculumWrapper,
     KlaskRlRandomOpponentWrapper,
@@ -230,6 +229,19 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
     # so we disable the antialiasing for a more pixelated (and hence more realistic) image.
     env_cfg.sim.render = RenderCfg(antialiasing_mode="Off")
 
+    # Null out disabled termination terms on env_cfg BEFORE construction so
+    # IsaacLab's TerminationManager never registers them (_prepare_terms skips None).
+    terminations_cfg = getattr(config, "terminations", None)
+    if terminations_cfg is not None and hasattr(env_cfg, "terminations"):
+        term_dict = (
+            OmegaConf.to_container(terminations_cfg, resolve=True)
+            if OmegaConf.is_config(terminations_cfg)
+            else dict(terminations_cfg)
+        )
+        for term, active in term_dict.items():
+            if not active and hasattr(env_cfg.terminations, term):
+                setattr(env_cfg.terminations, term, None)
+
     # --- Create the base gymnasium env ---
     isaac_env = gym.make(gym_id, cfg=env_cfg, render_mode=render_mode)
 
@@ -262,15 +274,6 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
         else:
             rewards_dict = dict(rewards_cfg)
         isaac_env = CurriculumWrapper(isaac_env, rewards_dict)
-
-    # --- 4. Termination filtering ---
-    terminations_cfg = getattr(config, "terminations", None)
-    if terminations_cfg is not None:
-        if OmegaConf.is_config(terminations_cfg):
-            term_dict = OmegaConf.to_container(terminations_cfg, resolve=True)
-        else:
-            term_dict = dict(terminations_cfg)
-        set_terminations(isaac_env, term_dict)
 
     # --- 5. Opponent wrapper ---
     if self_play:

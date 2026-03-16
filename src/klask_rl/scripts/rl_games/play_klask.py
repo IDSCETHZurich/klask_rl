@@ -100,7 +100,6 @@ from isaaclab_tasks.utils import (
 )
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
-from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     ActionHistoryWrapper,
     RewardWeightWrapper,
@@ -162,6 +161,12 @@ def main():
 
     clip_obs = agent_cfg["params"]["env"].get("clip_observations", math.inf)
     clip_actions = agent_cfg["params"]["env"].get("clip_actions", math.inf)
+
+    # Null out disabled termination terms on env_cfg BEFORE construction.
+    if "terminations" in agent_cfg and hasattr(env_cfg, "terminations"):
+        for term, active in agent_cfg["terminations"].items():
+            if not active and hasattr(env_cfg.terminations, term):
+                setattr(env_cfg.terminations, term, None)
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
@@ -233,10 +238,6 @@ def main():
             "rlgpu",
             {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: env},
         )
-
-    # set active termination terms specified in agent_cfg:
-    if "terminations" in agent_cfg.keys():
-        set_terminations(env, agent_cfg["terminations"])
 
     # load previously trained model
     agent_cfg["params"]["load_checkpoint"] = True
