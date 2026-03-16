@@ -229,3 +229,8 @@ outputs/
 
 # Weights & Biases
 wandb/
+
+# Streamer data dir
+${data}
+
+logdir/

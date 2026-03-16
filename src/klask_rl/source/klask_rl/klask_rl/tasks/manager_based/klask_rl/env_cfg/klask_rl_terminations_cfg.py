@@ -11,6 +11,7 @@ from klask_rl.assets.robots.klask import KLASK_PARAMS
 from ..utils_manager_based import (
     ball_in_goal,
     collision_player_ball_bool,
+    ball_hit_timeout,
     in_goal,
 )
 
@@ -85,9 +86,11 @@ class TerminationsCfgTwoStageHer:
     Episode ends when:
     - Timeout (truncation) - max episode length reached
     - Goal scored (success) - ball enters opponent goal
+    - Ball hit timeout - 0.5 seconds after ball was hit
 
-    Note: Ball hit does NOT terminate the episode. The agent continues
-    to control the ball in stage 2 (scoring phase) after hitting it.
+    Note: Ball hit does NOT terminate the episode immediately. The agent continues
+    to control the ball in stage 2 (scoring phase) after hitting it, but the episode
+    terminates 0.5 seconds after the hit.
     """
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
@@ -99,5 +102,15 @@ class TerminationsCfgTwoStageHer:
             "asset_cfg": SceneEntityCfg("ball"),
             "goal": KLASK_PARAMS["opponent_goal"],
             "max_ball_vel": KLASK_PARAMS["max_ball_vel"],
+        },
+    )
+
+    # Ball hit timeout termination - episode ends 0.5s after ball hit
+    ball_hit_timeout_term = DoneTerm(
+        func=ball_hit_timeout,
+        params={
+            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+            "ball_cfg": SceneEntityCfg("ball"),
+            "timeout": 0.5,
         },
     )

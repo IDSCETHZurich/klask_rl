@@ -41,14 +41,14 @@ params:
         name: None
 
   load_checkpoint: False # flag which sets whether to load the checkpoint
-  load_path: "" # path to the checkpoint to load
+  load_path: '' # path to the checkpoint to load
 
   config:
     full_experiment_name: test
     name: klask
     env_name: rlgpu
-    device: "cuda:0"
-    device_name: "cuda:0"
+    device: 'cuda:0'
+    device_name: 'cuda:0'
     multi_gpu: False
     ppo: True
     mixed_precision: False
@@ -103,20 +103,34 @@ env:
 
 rewards:
   # reward terms and their weights:
-  player_in_goal: !!float -10.0
-  goal_scored: !!float 10.0
-  goal_conceded: !!float -10.0
+  # type: static | linear | exponential
+  #   static:      constant weight, never changes.
+  #   linear:      weight: [start, end], linearly interpolated over training.
+  #   exponential: weight decays as w * exp(-decay_rate * step).
+  player_in_goal:
+    type: static
+    weight: -10.0
+  goal_scored:
+    type: static
+    weight: 10.0
+  goal_conceded:
+    type: static
+    weight: -10.0
   distance_ball_opponent_goal:
+    type: static
     weight: 1.0
-    # if per_second is True, the reward is scaled by dt (environment time step):
-    per_second: True
-    # alternatively, define start and end weight; weights are linearly interpolated during training:
-    # (see CurriculumWrapper for implementation details)
-    # weight: [0.0, 1.0]
-  ball_speed: !!float 0.0
-  distance_player_ball_own_half: !!float 0.0
-  ball_stationary: !!float 0.0
-  collision_player_ball: !!float 1.0
+  ball_speed:
+    type: static
+    weight: 0.0
+  distance_player_ball_own_half:
+    type: static
+    weight: 0.0
+  ball_stationary:
+    type: static
+    weight: 0.0
+  collision_player_ball:
+    type: static
+    weight: 1.0
 
 terminations:
   # If left out of the config.yaml file, terminations are active by default; use this if you want to

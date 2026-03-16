@@ -1,8 +1,8 @@
-from rl_games.algos_torch import torch_ext
-from rl_games.common.algo_observer import AlgoObserver
-from rl_games.algos_torch.self_play_manager import SelfPlayManager
-from rl_games.torch_runner import Runner, _restore, _override_sigma
 import torch
+from rl_games.algos_torch import torch_ext
+from rl_games.algos_torch.self_play_manager import SelfPlayManager
+from rl_games.common.algo_observer import AlgoObserver
+from rl_games.torch_runner import Runner, _override_sigma, _restore
 
 
 class KlaskRlAlgoObserver(AlgoObserver):
@@ -36,20 +36,24 @@ class KlaskRlAlgoObserver(AlgoObserver):
                 if isinstance(v, float) or isinstance(v, int) or (isinstance(v, torch.Tensor) and len(v.shape) == 0):
                     self.direct_info[k] = v
                 if k == "episode":
-
+                    # Values are fractions (mean over all envs), convert to counts
+                    # by multiplying by num_envs so we push the right number of
+                    # entries into the rolling score buffer.
+                    num_envs = self.algo.num_actors
                     for key, val in v.items():
-                        if isinstance(val, torch.Tensor) and len(val.shape) != 0:
-                            val = int(val.item())
+                        if isinstance(val, torch.Tensor):
+                            val = val.item()
+                        count = max(1, round(float(val) * num_envs))
                         if key == "Episode_Termination/goal_scored":
-                            self.mean_scores.update(torch.ones(int(val), dtype=torch.float).to(self.algo.ppo_device))
+                            self.mean_scores.update(torch.ones(count, dtype=torch.float).to(self.algo.ppo_device))
                         elif key == "Episode_Termination/goal_conceded":
-                            self.mean_scores.update(-torch.ones(int(val), dtype=torch.float).to(self.algo.ppo_device))
+                            self.mean_scores.update(-torch.ones(count, dtype=torch.float).to(self.algo.ppo_device))
                         elif key == "Episode_Termination/player_in_goal":
-                            self.mean_scores.update(-torch.ones(int(val), dtype=torch.float).to(self.algo.ppo_device))
+                            self.mean_scores.update(-torch.ones(count, dtype=torch.float).to(self.algo.ppo_device))
                         elif key == "Episode_Termination/opponent_in_goal":
-                            self.mean_scores.update(torch.ones(int(val), dtype=torch.float).to(self.algo.ppo_device))
+                            self.mean_scores.update(torch.ones(count, dtype=torch.float).to(self.algo.ppo_device))
                         elif key == "Episode_Termination/time_out":
-                            self.mean_scores.update(torch.zeros(int(val), dtype=torch.float).to(self.algo.ppo_device))
+                            self.mean_scores.update(torch.zeros(count, dtype=torch.float).to(self.algo.ppo_device))
 
     def after_clear_stats(self):
         # clear stored buffers
@@ -71,19 +75,27 @@ class KlaskRlAlgoObserver(AlgoObserver):
                         ep_info[key] = ep_info[key].unsqueeze(0)
                     info_tensor = torch.cat((info_tensor, ep_info[key].to(self.algo.device)))
                 value = torch.mean(info_tensor)
-                self.writer.add_scalar("Episode/" + key, value, epoch_num)
+                self.writer.add_scalar(key.replace("_", "/", 1), value, epoch_num)
             self.ep_infos.clear()
         # log scalars from env information
         for k, v in self.direct_info.items():
-            self.writer.add_scalar(f"{k}/frame", v, frame)
-            self.writer.add_scalar(f"{k}/iter", v, epoch_num)
-            self.writer.add_scalar(f"{k}/time", v, total_time)
+            self.writer.add_scalar(f"{k}", v, frame)
         # log mean reward/score from the env
         if self.mean_scores.current_size > 0:
             mean_scores = self.mean_scores.get_mean()
             self.writer.add_scalar("scores/mean", mean_scores, frame)
-            self.writer.add_scalar("scores/iter", mean_scores, epoch_num)
-            self.writer.add_scalar("scores/time", mean_scores, total_time)
+
+        # log current reward weights
+        rm = self.algo.vec_env.env.unwrapped.reward_manager
+        for term, cfg in zip(rm.active_terms, rm._term_cfgs):
+            w = cfg.weight
+            val = w.item() if isinstance(w, torch.Tensor) else float(w)
+            self.writer.add_scalar(f"rewards/weights/{term}", val, frame)
+
+        # log step counters as explicit metrics so any can be used as x-axis
+        self.writer.add_scalar("step/env_frames", frame, frame)
+        self.writer.add_scalar("step/training_iteration", epoch_num, frame)
+        self.writer.add_scalar("step/wall_time", total_time, frame)
 
 
 class KlaskRlSelfPlayManager(SelfPlayManager):
@@ -124,6 +136,7 @@ class KlaskRlRunner(Runner):
         agent = self.algo_factory.create(self.algo_name, base_name="run", params=self.params)
         _restore(agent, args)
         _override_sigma(agent, args)
+
         if agent.has_self_play_config:
             agent.self_play_manager = KlaskRlSelfPlayManager(agent.self_play_config, agent.writer)
         agent.train()

@@ -1,6 +1,20 @@
-import torch
 import gymnasium as gym
-from gymnasium import Wrapper, ObservationWrapper
+import torch
+from gymnasium import ObservationWrapper, Wrapper
+
+
+class OpponentActionWrapper(Wrapper):
+    """Negates opponent actions (indices 2:) to convert from player frame back to world frame.
+
+    This wrapper should sit closest to the env (innermost), so that:
+    - Going down: opponent actions in player frame are rotated 180° to world frame
+    - Going up: observations are passed through unchanged (rotation is handled by ObservationsCfg)
+    """
+
+    def step(self, actions, *args, **kwargs):
+        actions = actions.clone()
+        actions[:, 2:] = -actions[:, 2:]
+        return self.env.step(actions, *args, **kwargs)
 
 
 class ObservationNoiseWrapper(ObservationWrapper):
@@ -22,7 +36,13 @@ class ObservationNoiseWrapper(ObservationWrapper):
         return observation
 
 
-class OpponentObservationWrapper(Wrapper):  # TODO: why does this inherite from Wrapper and not ObservationWrapper?
+class OpponentObservationWrapper(Wrapper):
+    """Stores opponent observations for access by the self-play env wrapper.
+
+    The opponent observations are already rotated to player frame by the ObservationsCfg,
+    so this wrapper only stores/passes them without additional transformation.
+    """
+
     def __init__(self, env, mode="train"):
         super().__init__(env)
         self.mode = mode
@@ -38,23 +58,14 @@ class OpponentObservationWrapper(Wrapper):  # TODO: why does this inherite from 
                     low=original_space.low[:2], high=original_space.high[:2], dtype=original_space.dtype
                 )
 
-    def get_opponent_obs(self, obs):
-        opponent_obs = obs.detach().clone()
-        opponent_obs[:, :12] = -obs[:, :12]
-        return opponent_obs
-
     def reset(self, *args, **kwargs):
         obs_dict, extras = self.env.reset(*args, **kwargs)
         if self.mode == "train":
-            self.opponent_obs = self.get_opponent_obs(obs_dict["opponent"])
-        else:
-            obs_dict["opponent"] = self.get_opponent_obs(obs_dict["opponent"])
+            self.opponent_obs = obs_dict["opponent"]
         return obs_dict, extras
 
     def step(self, actions, *args, **kwargs):
         obs_dict, rew, terminated, truncated, extras = self.env.step(actions, *args, **kwargs)
         if self.mode == "train":
-            self.opponent_obs = self.get_opponent_obs(obs_dict["opponent"])
-        else:
-            obs_dict["opponent"] = self.get_opponent_obs(obs_dict["opponent"])
+            self.opponent_obs = obs_dict["opponent"]
         return obs_dict, rew, terminated, truncated, extras

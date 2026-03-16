@@ -5,6 +5,9 @@
 
 """Script to train RL agent with RL-Games."""
 
+# Note: it is likly that the following command produced teh best agent (Tobias)
+# python scripts/rl_games/train_klask.py --config /workspace/klask_rl/scripts/rl_games/config/klask_config_3.yaml --device cuda:0 --headless --num_envs 4096 --wandb-project-name KLASK --training_curriculum --mode 0 --checkpoint /workspace/klask_rl/logs/rl_games/klask/pretrained_agent_action_1.0/nn/last_klask_ep_35_rew_3.9405801.pth --project_folder /workspace/klask_rl/logs/rl_games/klask/pool_of_players/
+
 """Launch Isaac Sim Simulator first."""
 
 import argparse
@@ -54,17 +57,17 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-import gymnasium as gym
 import math
 import os
 import pickle
 import random
-import yaml
-from datetime import datetime
+import signal
 import time
+from datetime import datetime
 
-from rl_games.common import env_configurations, vecenv
-
+import gymnasium as gym
+import isaaclab_tasks  # noqa: F401
+import yaml
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -75,24 +78,23 @@ from isaaclab.envs import (
 from isaaclab.utils.assets import retrieve_file_path
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
-
-import isaaclab_tasks  # noqa: F401
-from isaaclab_tasks.utils.hydra import hydra_task_config
 from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
-
-from klask_rl.tasks.manager_based.klask_rl.wrappers import (
-    KlaskRlRandomOpponentWrapper,
-    CurriculumWrapper,
-    RlGamesGpuEnvSelfPlay,
-    ObservationNoiseWrapper,
-    OpponentObservationWrapper,
-    KlaskRlCollisionAvoidanceWrapper,
-    ActionHistoryWrapper,
-)
+from isaaclab_tasks.utils.hydra import hydra_task_config
+from klask_rl.assets.robots.klask import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
 from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.tasks.manager_based.klask_rl.wrappers import (
+    ActionHistoryWrapper,
+    CurriculumWrapper,
+    KlaskRlCollisionAvoidanceWrapper,
+    KlaskRlRandomOpponentWrapper,
+    ObservationNoiseWrapper,
+    OpponentActionWrapper,
+    OpponentObservationWrapper,
+    RlGamesGpuEnvSelfPlay,
+)
 from klask_rl_games import KlaskRlAlgoObserver, KlaskRlRunner
+from rl_games.common import env_configurations, vecenv
 
 
 @hydra_task_config(args_cli.task, "rl_games_cfg_entry_point")
@@ -121,6 +123,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent_cfg["params"]["load_checkpoint"] = True
         agent_cfg["params"]["load_path"] = resume_path
         print(f"[INFO]: Loading model checkpoint from: {agent_cfg['params']['load_path']}")
+    elif agent_cfg["params"].get("load_checkpoint", False) and agent_cfg["params"].get("load_path"):
+        resume_path = retrieve_file_path(agent_cfg["params"]["load_path"])
+        print(f"[INFO]: Loading model checkpoint from config: {resume_path}")
+    else:
+        resume_path = None
     train_sigma = float(args_cli.sigma) if args_cli.sigma is not None else None
 
     # multi-gpu training config
@@ -183,6 +190,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
+    # Negate opponent actions to convert from player frame back to world frame.
+    # Must be innermost wrapper so the actuator model sees player-frame data.
+    env = OpponentActionWrapper(env)
+
     if agent_cfg["env"].get("actuator_model", False):
         env = ActuatorModelWrapper(env)
 
@@ -198,12 +209,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # configure active reward terms and curricula as specified in agent_cfg:
     if "rewards" in agent_cfg.keys():
-        env = CurriculumWrapper(
-            env,
-            agent_cfg["rewards"],
-            agent_cfg["params"]["config"]["max_frames"] / env_cfg.scene.num_envs,
-            dynamic=True,
-        )
+        env = CurriculumWrapper(env, agent_cfg["rewards"])
 
     # if self-play, use opponent observation wrapper to get access to opponent player's observations:
     if agent_cfg["params"]["config"].get("self_play", False):
@@ -255,7 +261,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         agent_cfg["env"] = KLASK_PARAMS
 
-    if args_cli.wandb_project_name is not None:
+    use_wandb = args_cli.wandb_project_name is not None
+    if use_wandb:
         import wandb
 
         config = {"agent": agent_cfg, "env": env_cfg.to_dict()}
@@ -271,22 +278,37 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # reset the agent and env
     runner.reset()
     start_time = time.time()
-    # train the agent
-    if args_cli.checkpoint is not None:
-        runner.run({"train": True, "play": False, "sigma": train_sigma, "checkpoint": resume_path})
-    else:
-        runner.run({"train": True, "play": False, "sigma": train_sigma})
-    print(f"Total training time: {time.time() - start_time}")
+    interrupted = False
+    try:
+        # train the agent
+        run_args = {"train": True, "play": False, "sigma": train_sigma}
+        if resume_path is not None:
+            run_args["checkpoint"] = resume_path
+        runner.run(run_args)
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\n[INFO] Training interrupted by user (Ctrl+C).")
+    finally:
+        print(f"Total training time: {time.time() - start_time}")
 
-    # log model checkpoint to wandb:
-    if args_cli.wandb_project_name is not None:
-        model = wandb.Artifact("model", type="model")
-        model.add_file(os.path.join(log_root_path, log_dir, "nn", f"{agent_cfg['params']['config']['name']}.pth"))
-        wandb.log_artifact(model)
-        wandb.finish()
+        # log model checkpoint to wandb and finish the run:
+        if use_wandb:
+            if interrupted:
+                wandb.finish(exit_code=1)
+            else:
+                model = wandb.Artifact("model", type="model")
+                model.add_file(
+                    os.path.join(log_root_path, log_dir, "nn", f"{agent_cfg['params']['config']['name']}.pth")
+                )
+                wandb.log_artifact(model)
+                wandb.finish()
 
-    # close the simulator
-    env.close()
+        # close the simulator
+        env.close()
+
+    # re-raise so the process exits cleanly after cleanup
+    if interrupted:
+        signal.raise_signal(signal.SIGINT)
 
 
 if __name__ == "__main__":

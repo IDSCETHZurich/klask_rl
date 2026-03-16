@@ -1,63 +1,210 @@
 import torch
 from gymnasium import Wrapper
-from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 
-class CurriculumWrapper(Wrapper):
-    def __init__(self, env, cfg, num_steps=None, mode="train", dynamic=False):
+class RewardWeightWrapper(Wrapper):
+    """Sets initial reward term weights from a config dict.
+
+    Each reward term in ``cfg`` is a dict with a ``type`` field that controls
+    how the weight behaves.  This wrapper only applies the **initial** weight;
+    see :class:`CurriculumWrapper` for schedules that update weights during
+    training.
+
+    Supported types
+    ---------------
+    ``static``
+        Constant weight, never changed after initialisation.
+    ``linear``
+        ``weight`` is ``[start, end]``; the initial weight is set to ``start``.
+        Requires ``num_steps``.
+    ``exponential``
+        ``weight`` is the initial value; it will be decayed by
+        :class:`CurriculumWrapper`.  Requires ``decay_rate``.
+    ``schedule``
+        A list of phases, each with its own ``type``, ``steps: [start, end]``
+        range, and parameters.  The initial weight is taken from the first
+        phase.
+
+    Example config::
+
+        rewards:
+          goal_scored:
+            type: static
+            weight: 5.0
+          distance_ball_opponent_goal:
+            type: linear
+            weight: [0.0, 1.0]
+            num_steps: 10000000
+          collision_player_ball:
+            type: exponential
+            weight: 0.5
+            decay_rate: 1.0e-7
+          ball_speed:
+            type: schedule
+            phases:
+              - type: static
+                weight: 0.0
+                steps: [0, 1000000]
+              - type: linear
+                weight: [0.0, 2.0]
+                steps: [1000000, 5000000]
+              - type: exponential
+                weight: 2.0
+                decay_rate: 1.0e-7
+                steps: [5000000, -1]
+    """
+
+    def __init__(self, env, cfg):
         super().__init__(env)
-        self.dynamic = dynamic
         self.cfg = cfg
-        self.num_steps = num_steps
-        self.mode = mode
-        self._step = 0
-        for term, weight in cfg.items():
+
+        for term, spec in cfg.items():
             term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
-            if type(weight) is dict:
-                if type(weight["weight"]) is list:
-                    _weight = weight["weight"][0]
+
+            # Determine initial weight.
+            if spec["type"] == "schedule":
+                # Use the weight from the first phase.
+                first = spec["phases"][0]
+                raw_weight = first["weight"]
+                if isinstance(raw_weight, list):
+                    _weight = raw_weight[0]
                 else:
-                    _weight = weight["weight"]
-                if not weight.get("per_second", False):
-                    _weight /= KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"]
+                    _weight = raw_weight
             else:
-                _weight = weight / (KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"])
+                raw_weight = spec["weight"]
+                if isinstance(raw_weight, list):
+                    _weight = raw_weight[0]  # linear: start value
+                else:
+                    _weight = raw_weight
+
             self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = _weight
 
-    def step(self, actions):
-        if self.mode == "train":
-            self._step += self.env.unwrapped.num_envs
-            for term, weight in self.cfg.items():
-                if type(weight) is dict and type(weight["weight"]) is list:
-                    term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
-                    weight_step = (weight["weight"][1] - weight["weight"][0]) / self.num_steps
-                    if not weight.get("per_second", False):
-                        weight_step /= KLASK_PARAMS["decimation"] * KLASK_PARAMS["physics_dt"]
-                    self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight += weight_step
 
-                if self.dynamic and not (
-                    term == "ball_stationary"
-                    or term == "time_out_punishment"
-                    or term == "time_punishment"
-                    or term == "goal_scored"
-                    or term == "goal_conceded"
-                    or term == "opponent_in_goal"
-                    or term == "player_in_goal"
-                ):
-                    term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
-                    self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = weight * (
-                        torch.exp(
-                            -torch.tensor(
-                                self._step / 10000000,
-                                device=self.env.unwrapped.device,
-                                dtype=torch.float32,
-                            )
-                        )
-                    )  # coeff chosen sucht that half the max reward at 20 mio steps
-                    if self._step > 20_000_000:
-                        self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = torch.tensor(
-                            0.0, device=self.env.unwrapped.device, dtype=torch.float32
-                        )
+class CurriculumWrapper(RewardWeightWrapper):
+    """Sets initial reward weights and adjusts them over training.
+
+    Each reward term declares its own schedule via the ``type`` field:
+
+    ``static``
+        Weight is set once at initialisation and never changed.
+    ``linear``
+        ``weight: [start, end]`` — linearly interpolated from *start* to
+        *end* over ``num_steps`` environment steps.
+    ``exponential``
+        ``weight`` decays as ``weight * exp(-decay_rate * step)``.
+    ``schedule``
+        A list of phases, each with its own ``type`` (``static``,
+        ``linear``, or ``exponential``), a ``steps: [start, end]`` range,
+        and the corresponding parameters.  The ``steps`` range controls
+        when each phase is active and is used as the reference for linear
+        interpolation and exponential elapsed time.  The first phase whose
+        range contains the current step is applied.  Use ``-1`` as
+        ``end`` to make a phase extend indefinitely.
+
+    Args:
+        env: The wrapped environment.
+        cfg: Reward config dict mapping term names to their spec dicts.
+
+    Example config::
+
+        rewards:
+          # Constant reward — never changes.
+          goal_scored:
+            type: static
+            weight: 5.0
+
+          # Linearly ramp from 0 to 1 over num_steps (starting at step 0).
+          distance_ball_opponent_goal:
+            type: linear
+            weight: [0.0, 1.0]
+            num_steps: 10000000
+
+          # Exponential decay (starting at step 0).
+          # w(t) = weight * exp(-decay_rate * t)
+          collision_player_ball:
+            type: exponential
+            weight: 0.5
+            decay_rate: 1.0e-7
+
+          # Multi-phase schedule: compose any sequence of types.
+          # Each phase has a steps: [start, end] range.
+          # Use -1 as end to extend a phase indefinitely.
+          ball_speed:
+            type: schedule
+            phases:
+              - type: static
+                weight: 0.0
+                steps: [0, 1000000]
+              - type: linear
+                weight: [0.0, 2.0]
+                steps: [1000000, 5000000]
+              - type: exponential
+                weight: 2.0
+                decay_rate: 1.0e-7
+                steps: [5000000, -1]
+    """
+
+    def __init__(self, env, cfg):
+        super().__init__(env, cfg)
+        self._step = 0
+
+    def _get_active_phase(self, spec):
+        """Return the active phase config for the current step.
+
+        For ``schedule`` types, finds the first phase whose step range
+        contains ``self._step`` (or the last phase if past all ranges).
+        An ``end_step`` of ``-1`` means the phase extends indefinitely.
+        For all other types the spec itself is the phase.
+        """
+        if spec["type"] == "schedule":
+            for phase in spec["phases"]:
+                start_step, end_step = phase["steps"]
+                if start_step <= self._step:
+                    if end_step == -1 or self._step <= end_step:
+                        return phase
+            # Past all phases — fall back to the last one.
+            return spec["phases"][-1]
+        return spec
+
+    def _apply_phase(self, term_idx, phase):
+        """Apply a single phase to the reward term at the current step.
+
+        For standalone types (no ``steps`` key), defaults to
+        ``[0, num_steps]`` for linear and ``[0, 0]`` for exponential.
+        """
+        phase_type = phase["type"]
+
+        if phase_type == "static":
+            self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = phase["weight"]
+            return
+
+        start_step = phase.get("steps", [0])[0]
+
+        if phase_type == "linear":
+            end_step = phase["steps"][1] if "steps" in phase else phase["num_steps"]
+            progress = (self._step - start_step) / (end_step - start_step)
+            progress = min(max(progress, 0.0), 1.0)
+            w = phase["weight"][0] + (phase["weight"][1] - phase["weight"][0]) * progress
+            self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = w
+
+        elif phase_type == "exponential":
+            elapsed = max(self._step - start_step, 0)
+            w_0 = phase["weight"]
+            self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = w_0 * torch.exp(
+                -torch.tensor(
+                    elapsed * phase["decay_rate"],
+                    device=self.env.unwrapped.device,
+                    dtype=torch.float32,
+                )
+            )
+
+    def step(self, actions):
+        self._step += self.env.unwrapped.num_envs
+
+        for term, spec in self.cfg.items():
+            term_idx = self.env.unwrapped.reward_manager.active_terms.index(term)
+            phase = self._get_active_phase(spec)
+            self._apply_phase(term_idx, phase)
 
         return self.env.step(actions)
 

@@ -32,19 +32,9 @@ parser.add_argument(
 args, remaining_argv = parser.parse_known_args()
 
 # Resolve config path
-config_dir = Path(__file__).parent / "config"
-if Path(args.config).is_absolute():
-    CONFIG_PATH = Path(args.config)
-elif (
-    args.config.startswith("experiments/") or "/" in args.config or "\\" in args.config
-):
-    CONFIG_PATH = config_dir / args.config
-else:
-    # Check experiments folder first, then root config folder
-    if (config_dir / "experiments" / args.config).exists():
-        CONFIG_PATH = config_dir / "experiments" / args.config
-    else:
-        CONFIG_PATH = config_dir / args.config
+from env_utils import resolve_config_path, get_log_root_path
+
+CONFIG_PATH = resolve_config_path(args.config, __file__)
 
 # Load config and set CUDA_VISIBLE_DEVICES BEFORE importing isaaclab
 from experiment_config import ExperimentConfig
@@ -58,8 +48,7 @@ CONFIG.setup_cuda_visibility()
 # (must be before Isaac Sim startup which produces lots of output)
 run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 # Use absolute path relative to script location (not cwd) for Ray Tune compatibility
-script_dir = Path(__file__).parent.parent  # Go up to klask_rl/
-log_root_path = str(script_dir / "logs" / "sb3_sac" / CONFIG.task)
+log_root_path = get_log_root_path(CONFIG, __file__)
 print(f"[INFO] Logging experiment in directory: {log_root_path}")
 print(f"Exact experiment name requested from command line: {run_info}")
 
@@ -72,12 +61,58 @@ print(f"Exact experiment name requested from command line: {run_info}")
 remaining_argv = CONFIG.apply_cli_overrides(remaining_argv)
 
 # Extract Ray Tune parameter keys from remaining_argv to avoid duplicates
+# and apply overrides to CONFIG so to_dict() reflects actual values
+# (needed for accurate wandb logging)
 ray_tune_keys = set()
+
+# Mapping from Hydra override keys to CONFIG attributes.
+# get_hydra_overrides() generates Hydra keys like "env.scene.num_envs" from
+# CONFIG attributes like "num_envs". When Ray Tune provides these as CLI
+# overrides, we need to map them back to update CONFIG for accurate logging.
+_HYDRA_KEY_TO_CONFIG_ATTR = {
+    # env overrides (Hydra key → CONFIG attribute name)
+    "env.scene.num_envs": "num_envs",
+    "env.episode_length_s": "episode_length_s",
+    "env.seed": "seed",
+    # env fields not in get_hydra_overrides but in the YAML
+    "env.max_velocity": "max_velocity",
+}
+
+
+def _apply_cli_override_to_config(key: str, raw_value: str) -> None:
+    """Apply a single CLI override to CONFIG so to_dict() is accurate.
+
+    Handles:
+    - env.* keys via _HYDRA_KEY_TO_CONFIG_ATTR (mapped to top-level CONFIG attrs)
+    - agent.* keys → CONFIG.agent_cfg (nested dict, e.g. policy_kwargs.net_arch)
+    - her.* and two_stage.* are already handled by apply_cli_overrides() upstream
+    """
+    parsed_value = ExperimentConfig._parse_cli_value(raw_value)
+
+    # Direct attribute mappings (Hydra key → CONFIG attribute)
+    if key in _HYDRA_KEY_TO_CONFIG_ATTR:
+        setattr(CONFIG, _HYDRA_KEY_TO_CONFIG_ATTR[key], parsed_value)
+        return
+
+    # agent.* → CONFIG.agent_cfg (nested dict)
+    if key.startswith("agent."):
+        agent_subkey = key[len("agent.") :]
+        parts = agent_subkey.split(".")
+        target = CONFIG.agent_cfg
+        for part in parts[:-1]:
+            if part not in target:
+                target[part] = {}
+            target = target[part]
+        target[parts[-1]] = parsed_value
+
+
 for arg in remaining_argv:
     # Parse Hydra overrides like "agent.policy_kwargs.net_arch=[256,128,64]"
     if "=" in arg:
-        key = arg.split("=")[0].strip("'\"")
+        key, raw_value = arg.split("=", 1)
+        key = key.strip("'\"")
         ray_tune_keys.add(key)
+        _apply_cli_override_to_config(key, raw_value)
 
 hydra_overrides = CONFIG.get_hydra_overrides(exclude_keys=ray_tune_keys)
 sys.argv = [sys.argv[0]] + hydra_overrides + remaining_argv
@@ -98,9 +133,6 @@ signal.signal(signal.SIGINT, cleanup_pbar)
 
 """Rest everything follows."""
 
-import gymnasium as gym
-import numpy as np
-import os
 import random
 from datetime import datetime
 
@@ -124,25 +156,62 @@ except (ImportError, TypeError, Exception) as e:
     WANDB_AVAILABLE = False
 
 from isaaclab.envs import (
-    DirectMARLEnv,
     DirectMARLEnvCfg,
     DirectRLEnvCfg,
     ManagerBasedRLEnvCfg,
-    multi_agent_to_single_agent,
 )
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
 
-from isaaclab_rl.sb3 import Sb3VecEnvWrapper, process_sb3_cfg
+from isaaclab_rl.sb3 import process_sb3_cfg
 
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import klask_rl.tasks  # noqa: F401
-from klask_rl.tasks.manager_based.klask_rl.wrappers import (
-    Sb3VecHerWrapper,
-    Sb3TwoStageHerWrapper,
+
+from env_utils import (
+    apply_reward_weights,
+    apply_training_normalization,
+    make_env,
+    pop_norm_keys,
+    wrap_env_for_sb3,
 )
+
+
+def build_wandb_config(
+    cfg: ExperimentConfig,
+    remaining_argv: list[str],
+    hydra_overrides: list[str],
+) -> dict:
+    """Build complete config dictionary for wandb logging.
+
+    Captures the three sources of truth for full reproducibility:
+    1. Effective config (YAML base + CLI overrides already merged into CONFIG)
+    2. CLI overrides (e.g., from Ray Tune or command line) for reference
+    3. Hydra overrides (generated from experiment config) for reference
+
+    Note: agent.* CLI overrides (e.g. from Ray Tune) are pre-merged into
+    CONFIG.agent_cfg before this function is called, so the top-level
+    config reflects the actual values used for training.
+
+    Returns a nested dictionary suitable for wandb.init(config=...).
+    """
+    # Start with the base experiment config from YAML (includes ALL fields)
+    wandb_config = cfg.to_dict()
+
+    # Add metadata for easy filtering and identification
+    wandb_config["algorithm"] = "SAC"
+    wandb_config["config_file"] = str(CONFIG_PATH)
+    wandb_config["command"] = " ".join(sys.orig_argv)
+
+    # Add overrides for full reproducibility
+    wandb_config["overrides"] = {
+        "cli": remaining_argv if remaining_argv else [],
+        "hydra": hydra_overrides if hydra_overrides else [],
+    }
+
+    return wandb_config
 
 
 class TwoStageHerMetricsCallback(BaseCallback):
@@ -162,17 +231,15 @@ class TwoStageHerMetricsCallback(BaseCallback):
     def _on_step(self) -> bool:
         if "infos" in self.locals:
             infos = self.locals["infos"]
-            dones = self.locals.get("dones", [])
 
             for i, info in enumerate(infos):
                 if info.get("ball_hit", False) or info.get("terminal_ball_hit", False):
                     self.envs_hit_ball.add(i)
 
-                if dones[i]:
-                    if info.get("ball_hit", False) and not info.get(
-                        "TimeLimit.truncated", False
-                    ):
-                        self.envs_scored_goal.add(i)
+                if info.get("goal_scored", False) or info.get(
+                    "terminal_goal_scored", False
+                ):
+                    self.envs_scored_goal.add(i)
 
         return True
 
@@ -270,57 +337,10 @@ def main(
     env_cfg.log_dir = log_dir
 
     # Apply reward weights from config to environment
-    if cfg.use_her and cfg.her_env_reward_scale is not None:
-        if hasattr(env_cfg, "rewards"):
-            if hasattr(env_cfg.rewards, "collision_player_ball_reward"):
-                print(
-                    f"[INFO] Setting env collision_player_ball_reward weight to {cfg.her_env_reward_scale}"
-                )
-                env_cfg.rewards.collision_player_ball_reward.weight = (
-                    cfg.her_env_reward_scale
-                )
+    apply_reward_weights(cfg, env_cfg)
 
-    if cfg.use_two_stage_her:
-        if cfg.two_stage_ball_hit_env_reward is not None:
-            if hasattr(env_cfg, "rewards") and hasattr(
-                env_cfg.rewards, "collision_player_ball"
-            ):
-                print(
-                    f"[INFO] Setting env collision_player_ball weight to {cfg.two_stage_ball_hit_env_reward}"
-                )
-                env_cfg.rewards.collision_player_ball.weight = (
-                    cfg.two_stage_ball_hit_env_reward
-                )
-        if cfg.two_stage_goal_score_env_reward is not None:
-            if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "goal_scored"):
-                print(
-                    f"[INFO] Setting env goal_scored weight to {cfg.two_stage_goal_score_env_reward}"
-                )
-                env_cfg.rewards.goal_scored.weight = cfg.two_stage_goal_score_env_reward
-
-    # Create isaac environment
-    env = gym.make(
-        cfg.task,
-        cfg=env_cfg,
-        render_mode="rgb_array" if cfg.video else None,
-    )
-
-    # Convert to single-agent instance if required
-    if isinstance(env.unwrapped, DirectMARLEnv):
-        env = multi_agent_to_single_agent(env)
-
-    # Set bounded action space for SAC
-    action_dim = env.unwrapped.single_action_space.shape[-1]
-    max_vel = cfg.max_velocity
-    print(f"[INFO] Setting action space bounds to [-{max_vel}, {max_vel}] m/s")
-    env.unwrapped.single_action_space = gym.spaces.Box(
-        low=-max_vel, high=max_vel, shape=(action_dim,), dtype=np.float32
-    )
-    env.unwrapped.action_space = gym.vector.utils.batch_space(
-        env.unwrapped.single_action_space, env.unwrapped.num_envs
-    )
-
-    # Wrap for video recording
+    # Build video kwargs (training uses periodic recording)
+    video_kwargs = None
     if cfg.video:
         video_kwargs = {
             "video_folder": os.path.join(log_dir, "videos", "train"),
@@ -328,89 +348,23 @@ def main(
             "video_length": cfg.video_length,
             "disable_logger": True,
         }
-        print("[INFO] Recording videos during training.")
-        print_dict(video_kwargs, nesting=4)
-        env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # Wrap around environment for stable baselines
-    env = Sb3VecEnvWrapper(env, fast_variant=True)
+    # Create isaac environment with action space bounds and optional video
+    env = make_env(
+        cfg,
+        env_cfg,
+        render_mode="rgb_array" if cfg.video else None,
+        video_kwargs=video_kwargs,
+    )
 
-    # Wrap with HER wrapper if enabled
-    if cfg.use_two_stage_her:
-        print("[INFO] Wrapping environment with Two-Stage HER wrapper...")
-        player_pos_indices = tuple(cfg.two_stage_player_pos_indices or [0, 2])
-        ball_pos_indices = tuple(cfg.two_stage_ball_pos_indices or [8, 10])
-        goal_pos_indices = tuple(cfg.two_stage_goal_pos_indices or [12, 14])
+    # Wrap for SB3 (VecEnv + HER wrappers)
+    env = wrap_env_for_sb3(env, cfg)
 
-        print(f"[INFO] Two-Stage HER player_pos indices: {player_pos_indices}")
-        print(f"[INFO] Two-Stage HER ball_pos indices: {ball_pos_indices}")
-        print(f"[INFO] Two-Stage HER goal_pos indices: {goal_pos_indices}")
-        print(
-            f"[INFO] Two-Stage HER ball_hit_threshold: {cfg.two_stage_ball_hit_threshold}"
-        )
-        print(
-            f"[INFO] Two-Stage HER goal_score_threshold: {cfg.two_stage_goal_score_threshold}"
-        )
-        print(
-            f"[INFO] Two-Stage HER ball_hit_wrapper_reward: {cfg.two_stage_ball_hit_wrapper_reward}"
-        )
-        print(
-            f"[INFO] Two-Stage HER goal_score_wrapper_reward: {cfg.two_stage_goal_score_wrapper_reward}"
-        )
-
-        env = Sb3TwoStageHerWrapper(
-            env,
-            player_pos_indices=player_pos_indices,
-            ball_pos_indices=ball_pos_indices,
-            goal_pos_indices=goal_pos_indices,
-            ball_hit_threshold=cfg.two_stage_ball_hit_threshold,
-            goal_score_threshold=cfg.two_stage_goal_score_threshold,
-            ball_hit_reward=cfg.two_stage_ball_hit_wrapper_reward,
-            goal_score_reward=cfg.two_stage_goal_score_wrapper_reward,
-        )
-    elif cfg.use_her:
-        print(
-            "[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper..."
-        )
-        achieved_indices = tuple(cfg.her_achieved_goal_indices or [0, 2])
-        desired_indices = tuple(cfg.her_desired_goal_indices or [8, 10])
-
-        print(f"[INFO] HER achieved_goal indices: {achieved_indices}")
-        print(f"[INFO] HER desired_goal indices: {desired_indices}")
-        print(f"[INFO] HER distance threshold: {cfg.her_distance_threshold}")
-        print(f"[INFO] HER wrapper reward scale: {cfg.her_wrapper_reward_scale}")
-
-        env = Sb3VecHerWrapper(
-            env,
-            achieved_goal_indices=achieved_indices,
-            desired_goal_indices=desired_indices,
-            distance_threshold=cfg.her_distance_threshold,
-            reward_scale=cfg.her_wrapper_reward_scale,
-        )
-
-    # Handle normalization settings if present
-    norm_keys = {"normalize_input", "normalize_value", "clip_obs"}
-    norm_args = {}
-    for key in norm_keys:
-        if key in agent_cfg:
-            norm_args[key] = agent_cfg.pop(key)
-
-    if norm_args and norm_args.get("normalize_input"):
-        if cfg.use_her or cfg.use_two_stage_her:
-            print(
-                "[WARNING] VecNormalize is not fully compatible with HER. Disabling observation normalization."
-            )
-        else:
-            print(f"Normalizing input, {norm_args=}")
-            env = VecNormalize(
-                env,
-                training=True,
-                norm_obs=norm_args["normalize_input"],
-                norm_reward=norm_args.get("normalize_value", False),
-                clip_obs=norm_args.get("clip_obs", 100.0),
-                gamma=agent_cfg.get("gamma", 0.99),
-                clip_reward=np.inf,
-            )
+    # Handle normalization
+    norm_args = pop_norm_keys(agent_cfg)
+    env = apply_training_normalization(
+        env, cfg, norm_args, gamma=agent_cfg.get("gamma", 0.99)
+    )
 
     # Configure replay buffer (standard or HER)
     replay_buffer_class = None
@@ -471,20 +425,21 @@ def main(
                 print(
                     "[WARNING] WANDB_API_KEY not set. If you are not already logged in, wandb may fail to init."
                 )
+
+            # Build complete config for wandb logging (automatically captures all fields)
+            wandb_config = build_wandb_config(
+                cfg=cfg,
+                remaining_argv=remaining_argv,
+                hydra_overrides=hydra_overrides,
+            )
+
             # Initialize wandb
             wandb_run = wandb.init(
                 project=cfg.wandb_project,
                 entity=cfg.wandb_entity,
                 name=cfg.wandb_name or run_info,
                 sync_tensorboard=True,
-                config={
-                    "algorithm": "SAC",
-                    "task": cfg.task,
-                    "num_envs": env_cfg.scene.num_envs,
-                    "policy": policy_arch,
-                    "n_timesteps": n_timesteps,
-                    **agent_cfg,
-                },
+                config=wandb_config,
                 monitor_gym=True,
                 save_code=True,
             )

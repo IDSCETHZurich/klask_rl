@@ -11,6 +11,7 @@ from klask_rl.assets.robots.klask import KLASK_PARAMS
 from ..utils_manager_based import (
     reset_joints_by_offset,
     reset_ball_hit_tracking,
+    reset_ball_hit_timer,
 )
 
 
@@ -149,6 +150,12 @@ class EventCfg:
         params={},
     )
 
+    reset_ball_hit_timer_event = EventTerm(
+        func=reset_ball_hit_timer,
+        mode="reset",
+        params={},
+    )
+
 
 @configclass
 class EventCfgSac(EventCfg):
@@ -167,7 +174,7 @@ class EventCfgSac(EventCfg):
             "asset_cfg": SceneEntityCfg("ball"),
             "pose_range": {
                 "x": KLASK_PARAMS["ball_reset_position_x"],  # Full x range
-                "y": (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
+                "y": (-0.10, -0.02), # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
                 "z": (0.032, 0.032),
             },
             "velocity_range": {

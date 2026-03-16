@@ -9,8 +9,8 @@ from . import agents
 from .klask_rl_env_cfg import (
     ActionsCfgPlayerOnly,
     EventCfgSac,
+    KlaskRlDreamerEnvCfg,
     KlaskRlEnvCfg,
-    KlaskRlGoalEnvCfg,
     KlaskRlHerSacEnvCfg,
     KlaskRlSacEnvCfg,
     KlaskRlTwoStageHerEnvCfg,
@@ -71,5 +71,15 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlTwoStageHerEnvCfg",
         "sb3_sac_cfg_entry_point": f"{agents.__name__}:sb3_sac_cfg.yaml",
+    },
+)
+
+
+gym.register(
+    id="Klask-Rl-Dreamer-v0",
+    entry_point=f"{__name__}.klask_rl_dreamer_env:KlaskRlDreamerEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlDreamerEnvCfg",
     },
 )
