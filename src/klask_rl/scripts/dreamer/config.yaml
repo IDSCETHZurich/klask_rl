@@ -12,7 +12,7 @@ model:
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_vision_rgb_50M_selfplay_new_params_16envs
+wandb_name: dreamer_vision_16envs_big_eval
 seed: 0
 deterministic_run: False
 device: "cuda:0"
@@ -117,7 +117,7 @@ buffer:
 trainer:
   steps: ${env.steps}
   pretrain: 0
-  eval_every: 1e4
+  eval_every: 3e5
   eval_episode_num: ${env.eval_episode_num}
   batch_size: ${batch_size}
   batch_length: ${batch_length}
@@ -127,8 +127,6 @@ trainer:
   update_log_every: 5e3
   action_repeat: ${env.action_repeat}
   save_checkpoint_every: 1000000 # Save checkpoint every N steps (0 = only save at the end)
-  memory_history_snapshot: False # Record full allocation trace for PyTorch Memory Visualizer
-  memory_history_steps: 100 # Number of training steps to record before saving the snapshot
 
 self_play: true
 self_play_config:
