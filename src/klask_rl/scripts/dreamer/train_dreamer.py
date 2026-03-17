@@ -260,7 +260,7 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
         # Set the scale on every JointVelocityAction term in the action manager
         # so that raw_action * scale produces the desired velocity in m/s.
         action_mgr = isaac_env.unwrapped.action_manager
-        for term in action_mgr._terms:
+        for term in action_mgr._terms.values():
             term._scale = vel
 
     # --- 2. Actuator model wrapper ---
