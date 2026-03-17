@@ -249,18 +249,18 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
     isaac_env = OpponentActionWrapper(isaac_env)
 
     # --- 1. Set bounded action space ---
+    # Scale the IsaacLab action terms so that the agent's [-1, 1] output
+    # maps to [-max_velocity, +max_velocity] m/s.  Simply overriding the
+    # gym action-space metadata is NOT enough — Dreamer's actor always
+    # outputs in [-1, 1] regardless of the reported space bounds.
     max_velocity = getattr(config, "max_velocity", None)
     if max_velocity is not None:
-        action_dim = isaac_env.unwrapped.single_action_space.shape[-1]
-        isaac_env.unwrapped.single_action_space = gym.spaces.Box(
-            low=-float(max_velocity),
-            high=float(max_velocity),
-            shape=(action_dim,),
-            dtype=np.float32,
-        )
-        isaac_env.unwrapped.action_space = gym.vector.utils.batch_space(
-            isaac_env.unwrapped.single_action_space, isaac_env.unwrapped.num_envs
-        )
+        vel = float(max_velocity)
+        # Set the scale on every JointVelocityAction term in the action manager
+        # so that raw_action * scale produces the desired velocity in m/s.
+        action_mgr = isaac_env.unwrapped.action_manager
+        for term in action_mgr._terms:
+            term._scale = vel
 
     # --- 2. Actuator model wrapper ---
     if getattr(config, "actuator_model", False):
