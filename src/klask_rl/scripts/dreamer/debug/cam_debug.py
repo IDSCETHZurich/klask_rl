@@ -21,8 +21,14 @@ simulation_app = app_launcher.app
 
 """Rest follows after sim is ready."""
 
+import pathlib
+import sys
+
 import gymnasium as gym
 import torch
+
+# Add r2dreamer to sys.path so the Dreamer gym.register entry_point resolves.
+sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent / "r2dreamer"))
 
 import isaaclab_tasks  # noqa: F401
 import klask_rl.tasks  # noqa: F401
