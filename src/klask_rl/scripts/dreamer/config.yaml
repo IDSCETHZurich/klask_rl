@@ -12,7 +12,7 @@ model:
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_vision_16envs_big_eval
+wandb_name: dreamer_vision_ar1_no_acmodel
 seed: 0
 deterministic_run: False
 device: "cuda:0"
@@ -29,10 +29,11 @@ batch_length: 64
 # ---- Environment (all klask-specific, inlined here) ----
 env:
   task: "isaaclab_Klask-Rl-Dreamer-v0"
-  steps: 2e7
+  steps: 1e7
   env_num: 16
   eval_episode_num: 10
-  action_repeat: 20
+  action_repeat: 1
+  decimation: 20
   train_ratio: 128
   time_limit: 1000
   sim_dt: 0.001
@@ -40,7 +41,7 @@ env:
   device: ${device}
   max_velocity: 0.6 # [m/s] Maximum velocity for player movement
   episode_length_s: 10.0 # [s] Episode length in seconds
-  actuator_model: true
+  actuator_model: False
   size: [64, 64]
   encoder:
     mlp_keys: "policy"
@@ -117,7 +118,7 @@ buffer:
 trainer:
   steps: ${env.steps}
   pretrain: 0
-  eval_every: 3e5
+  eval_every: 4e4
   eval_episode_num: ${env.eval_episode_num}
   batch_size: ${batch_size}
   batch_length: ${batch_length}

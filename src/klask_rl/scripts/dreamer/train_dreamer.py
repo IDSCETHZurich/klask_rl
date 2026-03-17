@@ -221,7 +221,7 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
         env_cfg.sim.dt = float(sim_dt)
 
     env_cfg.scene.num_envs = int(config.env_num)
-    env_cfg.decimation = int(config.action_repeat)
+    env_cfg.decimation = int(config.decimation)
     env_cfg.seed = int(config.seed)
     env_cfg.episode_length_s = config.episode_length_s
 
