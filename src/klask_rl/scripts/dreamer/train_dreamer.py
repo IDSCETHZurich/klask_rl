@@ -81,17 +81,12 @@ from trainer import OnlineTrainer
 
 
 class EpisodeMetricsWrapper(Wrapper):
-    """Captures episode-level metrics from the IsaacLab info dict and logs them.
+    """Logs per-term episode rewards and termination rates.
 
-    IsaacLab populates ``info["log"]`` with per-step scalars such as
-    ``Episode_Termination/goal_scored`` (fraction of envs where that
-    termination fired).  The generic ``IsaacLabVecEnv`` adapter discards
-    the info dict, so this wrapper sits just below it and forwards
-    the metrics to a logger.
-
-    Metrics are accumulated over a sliding window of recent episodes
-    (default 100) so that logged values represent a meaningful rate
-    rather than a single episode's binary indicator.
+    Reads directly from the reward and termination managers so that
+    logged values are in the **same scale** as ``episode/score`` (the raw
+    cumulative return the optimizer trains on).  A sliding window of
+    recent episodes (default 100) smooths the logged values.
 
     Call :meth:`set_logger` after construction to enable logging.
     """
@@ -100,54 +95,60 @@ class EpisodeMetricsWrapper(Wrapper):
         super().__init__(env)
         self._logger = None
         self._window_size = window_size
-        # Per-episode accumulators: key -> running sum for the current episode
-        self._ep_sums: dict[str, float] = {}
-        self._ep_counts: dict[str, int] = {}
-        # Sliding window of completed episode means: key -> deque of floats
         from collections import deque
 
-        self._history: dict[str, deque] = {}
         self._deque_factory = lambda: deque(maxlen=self._window_size)
+        self._reward_history: dict[str, deque] = {}
+        self._term_history: dict[str, deque] = {}
 
     def set_logger(self, logger):
         """Attach a :class:`tools.Logger` for autonomous metric logging."""
         self._logger = logger
 
     def step(self, actions):
-        obs, rew, terminated, truncated, info = self.env.step(actions)
-        if self._logger is not None:
-            # Accumulate per-step values for the current episode
-            for key, val in info.get("log", {}).items():
-                if isinstance(val, torch.Tensor):
-                    val = val.item() if val.ndim == 0 else val.mean().item()
-                val = float(val)
-                self._ep_sums[key] = self._ep_sums.get(key, 0.0) + val
-                self._ep_counts[key] = self._ep_counts.get(key, 0) + 1
+        if self._logger is None:
+            return self.env.step(actions)
 
-            # On episode end, push the per-episode mean into the sliding
-            # window and log the windowed average.
-            if isinstance(terminated, torch.Tensor):
-                done = (terminated | truncated).any().item()
-            else:
-                done = terminated or truncated
-            if done:
-                for key in list(self._ep_sums.keys()):
-                    ep_mean = self._ep_sums[key] / max(self._ep_counts[key], 1)
-                    if key not in self._history:
-                        self._history[key] = self._deque_factory()
-                    self._history[key].append(ep_mean)
-                    # Log the windowed average across recent episodes
-                    window = self._history[key]
-                    windowed_avg = sum(window) / len(window)
-                    key = key.lower()
-                    if key.startswith("episode_"):
-                        key = key.replace("_", "/", 1)
-                    else:
-                        key = f"episode/{key}"
-                    self._logger.scalar(key, windowed_avg)
-                # Reset per-episode accumulators
-                self._ep_sums.clear()
-                self._ep_counts.clear()
+        # Snapshot episode sums BEFORE step — _reset_idx (called inside
+        # step) zeros them for done envs, so they'd be lost afterwards.
+        rm = self.env.unwrapped.reward_manager
+        pre_sums = {name: tensor.clone() for name, tensor in rm._episode_sums.items()}
+
+        obs, rew, terminated, truncated, info = self.env.step(actions)
+
+        done = terminated | truncated
+        done_ids = done.nonzero(as_tuple=False).squeeze(-1)
+
+        if done_ids.numel() > 0:
+            dt = self.env.unwrapped.step_dt
+
+            # Per-term cumulative reward for each done env.
+            # pre_sums has the total through step N-1; _step_reward has
+            # step N's func*weight (without dt), so multiply by dt.
+            for env_id in done_ids.tolist():
+                for term_idx, term_name in enumerate(rm._term_names):
+                    full_sum = (
+                        pre_sums[term_name][env_id].item()
+                        + rm._step_reward[env_id, term_idx].item() * dt
+                    )
+                    if term_name not in self._reward_history:
+                        self._reward_history[term_name] = self._deque_factory()
+                    self._reward_history[term_name].append(full_sum)
+
+            for term_name, window in self._reward_history.items():
+                self._logger.scalar(f"episode/reward/{term_name}", sum(window) / len(window))
+
+            # Termination metrics: which termination fired for each done env.
+            tm = self.env.unwrapped.termination_manager
+            for env_id in done_ids.tolist():
+                for term_idx, term_name in enumerate(tm._term_names):
+                    fired = tm._term_dones[env_id, term_idx].item()
+                    if term_name not in self._term_history:
+                        self._term_history[term_name] = self._deque_factory()
+                    self._term_history[term_name].append(float(fired))
+
+            for term_name, window in self._term_history.items():
+                self._logger.scalar(f"episode/termination/{term_name}", sum(window) / len(window))
 
         return obs, rew, terminated, truncated, info
 
