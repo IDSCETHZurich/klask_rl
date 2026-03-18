@@ -26,9 +26,7 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("ball"),
-                "mass_distribution_params": KLASK_PARAMS["domain_randomization"][
-                    "ball_mass_range"
-                ],
+                "mass_distribution_params": KLASK_PARAMS["domain_randomization"]["ball_mass_range"],
                 "operation": "abs",
             },
         )
@@ -38,15 +36,9 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("ball"),
-                "static_friction_range": KLASK_PARAMS["domain_randomization"][
-                    "static_friction_range"
-                ],
-                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"][
-                    "dynamic_friction_range"
-                ],
-                "restitution_range": KLASK_PARAMS["domain_randomization"][
-                    "restitution_range"
-                ],
+                "static_friction_range": KLASK_PARAMS["domain_randomization"]["static_friction_range"],
+                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"]["dynamic_friction_range"],
+                "restitution_range": KLASK_PARAMS["domain_randomization"]["restitution_range"],
                 "num_buckets": 100,
                 "make_consistent": True,
             },
@@ -57,15 +49,9 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("klask"),
-                "static_friction_range": KLASK_PARAMS["domain_randomization"][
-                    "static_friction_range"
-                ],
-                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"][
-                    "dynamic_friction_range"
-                ],
-                "restitution_range": KLASK_PARAMS["domain_randomization"][
-                    "restitution_range"
-                ],
+                "static_friction_range": KLASK_PARAMS["domain_randomization"]["static_friction_range"],
+                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"]["dynamic_friction_range"],
+                "restitution_range": KLASK_PARAMS["domain_randomization"]["restitution_range"],
                 "num_buckets": 100,
                 "make_consistent": True,
             },
@@ -76,12 +62,8 @@ class EventCfg:
             mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("klask"),
-                "stiffness_distribution_params": KLASK_PARAMS["domain_randomization"][
-                    "stiffness_range"
-                ],
-                "damping_distribution_params": KLASK_PARAMS["domain_randomization"][
-                    "damping_range"
-                ],
+                "stiffness_distribution_params": KLASK_PARAMS["domain_randomization"]["stiffness_range"],
+                "damping_distribution_params": KLASK_PARAMS["domain_randomization"]["damping_range"],
                 "operation": "abs",
             },
         )
@@ -174,7 +156,7 @@ class EventCfgSac(EventCfg):
             "asset_cfg": SceneEntityCfg("ball"),
             "pose_range": {
                 "x": KLASK_PARAMS["ball_reset_position_x"],  # Full x range
-                "y": (-0.10, -0.02), # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
+                "y": (-0.10, -0.02),  # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
                 "z": (0.032, 0.032),
             },
             "velocity_range": {
@@ -184,7 +166,25 @@ class EventCfgSac(EventCfg):
         },
     )
 
-    # Opponent stays at random position (velocity is 0, and no actions control it)
-    # The position is randomized by reset_x_position_peg_2 and reset_y_position_peg_2
-    # inherited from EventCfg, but since ActionsCfgPlayerOnly doesn't include
-    # opponent actions, it will stay at its initial position
+
+@configclass
+class EventCfgDreamer(EventCfg):
+    """Event configuration for Dreamer training."""
+
+    # Override ball reset to spawn only in player's half (y < 0)
+    reset_ball_position = EventTerm(
+        func=mdp.reset_root_state_uniform,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("ball"),
+            "pose_range": {
+                "x": KLASK_PARAMS["ball_reset_position_x"],  # Full x range
+                "y": (-0.10, -0.02),  # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
+                "z": (0.032, 0.032),
+            },
+            "velocity_range": {
+                "x": (0.0, 0.0),
+                "y": (0.0, 0.0),
+            },  # Ball starts stationary
+        },
+    )
