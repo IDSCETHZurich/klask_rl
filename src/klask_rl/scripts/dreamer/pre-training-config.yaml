@@ -120,7 +120,7 @@ buffer:
 
 trainer:
   steps: ${env.steps}
-  pretrain: 400_000
+  pretrain: 0
   eval_every: 4e4
   eval_episode_num: ${env.eval_episode_num}
   batch_size: ${batch_size}
