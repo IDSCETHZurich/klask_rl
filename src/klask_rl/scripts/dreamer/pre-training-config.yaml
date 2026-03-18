@@ -13,7 +13,7 @@ model:
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_pretrained_wm_rest_equal_08mqh219
+wandb_name: dreamer_pretraining_ball_hitting
 seed: 0
 deterministic_run: False
 device: "cuda:0"
@@ -41,7 +41,7 @@ env:
   seed: ${seed}
   device: ${device}
   max_velocity: 0.6 # [m/s] Maximum velocity for player movement
-  episode_length_s: 5.0 # [s] Episode length in seconds
+  episode_length_s: 3.0 # [s] Episode length in seconds
   actuator_model: False
   size: [64, 64]
   encoder:
@@ -63,7 +63,7 @@ env:
       decay_rate: 1.0e-7
     player_in_goal:
       type: static
-      weight: -500.0
+      weight: 0.0
     opponent_in_goal:
       type: static
       weight: 0.0
@@ -72,10 +72,10 @@ env:
       weight: 2500.0
     goal_conceded:
       type: static
-      weight: -500.0
+      weight: 0.0
     distance_player_ball_own_half:
       type: static
-      weight: 0.0
+      weight: 10.0
     distance_ball_opponent_goal:
       type: exponential
       weight: 0.0
@@ -86,11 +86,11 @@ env:
       decay_rate: 1.0e-7
     ball_speed:
       type: exponential
-      weight: 5.0
+      weight: 0.0
       decay_rate: 1.0e-7
     ball_stationary:
       type: static
-      weight: -0.005
+      weight: 0.0
     collision_player_ball:
       type: exponential
       weight: 150.0
