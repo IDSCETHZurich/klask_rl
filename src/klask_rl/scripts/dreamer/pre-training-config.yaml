@@ -130,7 +130,7 @@ trainer:
   params_hist_log: False
   update_log_every: 5e3
   action_repeat: ${env.action_repeat}
-  save_checkpoint_every: 1_000_000 # Save checkpoint every N steps (0 = only save at the end)
+  save_checkpoint_every: 100_000 # Save checkpoint every N steps (0 = only save at the end)
 
 self_play: true
 self_play_config:
