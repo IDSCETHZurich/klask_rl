@@ -326,8 +326,8 @@ def shot_over_middle(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, weight: f
     ball_vel = root_lin_xy_vel_w(env, ball_cfg)  # shape: (num_envs, 2)
 
     # Detect near center line and moving forward in +y direction
-    is_near_center = (ball_pos[:, 1] >= 0.002) & (ball_pos[:, 1] <= 0.005)
-    is_moving_forward = ball_vel[:, 1] > 0.0
+    is_near_center = (ball_pos[:, 1] >= 0.0) & (ball_pos[:, 1] <= 0.02)
+    is_moving_forward = ball_vel[:, 1] > 0.1
     if weight is None:
         return (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
     return weight * (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
