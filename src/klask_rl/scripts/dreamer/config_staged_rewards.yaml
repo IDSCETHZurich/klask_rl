@@ -12,7 +12,7 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_wpt_xxx_xM_staged_rewards
+wandb_name: dreamer_wpt_xxx_xM_staged_rewards_long
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
@@ -68,14 +68,14 @@ env:
       phases:
         - type: static
           weight: 0.0
-          steps: [0, 500_000]
+          steps: [0, 2_000_000]
         - type: sigmoid
           weight: [0.0, -1500.0]
-          steps: [500_000, 1_000_000]
+          steps: [2_000_000, 2_500_000]
           steepness: 6.0
         - type: static
           weight: -1500.0
-          steps: [1_000_000, -1]
+          steps: [2_500_000, -1]
     opponent_in_goal:
       type: static
       weight: 0.0
@@ -87,14 +87,14 @@ env:
       phases:
         - type: static
           weight: 0.0
-          steps: [0, 1_500_000]
+          steps: [0, 2_500_000]
         - type: sigmoid
           weight: [0.0, -1500.0]
-          steps: [1_500_000, 2_000_000]
+          steps: [2_500_000, 3_000_000]
           steepness: 6.0
         - type: static
           weight: -1500.0
-          steps: [2_000_000, -1]
+          steps: [3_000_000, -1]
     distance_player_ball_own_half:
       type: static
       weight: 0.0
