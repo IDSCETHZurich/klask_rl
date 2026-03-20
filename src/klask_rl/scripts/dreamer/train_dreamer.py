@@ -383,6 +383,9 @@ def main(config):
         act_space,
     ).to(config.device)
 
+    # Validate init_checkpoint path early.
+    _init_ckpt = config.init_checkpoint
+
     # Resume from checkpoint if one exists in the logdir.
     _resume_step = 0
     checkpoint_path = logdir / "latest.pt"
@@ -414,6 +417,8 @@ def main(config):
         if "ema_updates" in checkpoint and hasattr(agent, "_ema_updates"):
             agent._ema_updates = checkpoint["ema_updates"]
         print(f"  Restored agent weights, optimizer states, step={_resume_step}, curriculum_step={_curriculum_step}")
+    elif _init_ckpt is not None:
+        tools.load_init_checkpoint(agent, _init_ckpt, config.device)
 
     # Initialise self-play opponent from the (randomly initialised) agent.
     if _self_play_wrapper is not None:

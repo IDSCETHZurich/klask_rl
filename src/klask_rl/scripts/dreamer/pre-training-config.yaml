@@ -10,13 +10,16 @@ model:
   horizon: 500
 
 # Logging
-logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 wandb_project: KLASK_Dreamer
 wandb_entity: null
 wandb_name: dreamer_pretraining_shoot_over_mid
+
+# Initialization
+logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
+init_checkpoint: null # Path to checkpoint for weight-only init (pretrain -> finetune)
 
 hydra:
   run:
