@@ -94,7 +94,7 @@ env:
       weight: 0.0
     collision_player_ball:
       type: exponential
-      weight: 500.0
+      weight: 50.0
       decay_rate: 1.0e-6
     ball_in_own_half:
       type: static
