@@ -17,6 +17,11 @@ class RewardWeightWrapper(Wrapper):
     ``linear``
         ``weight`` is ``[start, end]``; the initial weight is set to ``start``.
         Requires ``num_steps``.
+    ``sigmoid``
+        ``weight`` is ``[start, end]``; the initial weight is set to ``start``.
+        Smoothly transitions from *start* to *end* using a sigmoid (logistic)
+        curve.  Requires ``num_steps``.  Optional ``steepness`` controls how
+        sharp the S-curve is (default 6.0; higher = sharper).
     ``exponential``
         ``weight`` is the initial value; it will be decayed by
         :class:`CurriculumWrapper`.  Requires ``decay_rate``.
@@ -35,6 +40,11 @@ class RewardWeightWrapper(Wrapper):
             type: linear
             weight: [0.0, 1.0]
             num_steps: 10000000
+          ball_proximity:
+            type: sigmoid
+            weight: [0.0, 1.0]
+            num_steps: 10000000
+            steepness: 8.0
           collision_player_ball:
             type: exponential
             weight: 0.5
@@ -90,11 +100,16 @@ class CurriculumWrapper(RewardWeightWrapper):
     ``linear``
         ``weight: [start, end]`` — linearly interpolated from *start* to
         *end* over ``num_steps`` environment steps.
+    ``sigmoid``
+        ``weight: [start, end]`` — smoothly transitions from *start* to
+        *end* using a sigmoid (S-curve) over ``num_steps`` environment steps.
+        Optional ``steepness`` (default 6.0) controls the sharpness of the
+        transition.
     ``exponential``
         ``weight`` decays as ``weight * exp(-decay_rate * step)``.
     ``schedule``
         A list of phases, each with its own ``type`` (``static``,
-        ``linear``, or ``exponential``), a ``steps: [start, end]`` range,
+        ``linear``, ``sigmoid``, or ``exponential``), a ``steps: [start, end]`` range,
         and the corresponding parameters.  The ``steps`` range controls
         when each phase is active and is used as the reference for linear
         interpolation and exponential elapsed time.  The first phase whose
@@ -119,6 +134,12 @@ class CurriculumWrapper(RewardWeightWrapper):
             weight: [0.0, 1.0]
             num_steps: 10000000
 
+          # Sigmoid ramp from 0 to 1 (S-curve, default steepness k=6).
+          ball_proximity:
+            type: sigmoid
+            weight: [0.0, 1.0]
+            num_steps: 10000000
+
           # Exponential decay (starting at step 0).
           # w(t) = weight * exp(-decay_rate * t)
           collision_player_ball:
@@ -135,12 +156,12 @@ class CurriculumWrapper(RewardWeightWrapper):
               - type: static
                 weight: 0.0
                 steps: [0, 1000000]
-              - type: linear
+              - type: sigmoid
                 weight: [0.0, 2.0]
                 steps: [1000000, 5000000]
-              - type: exponential
+                steepness: 10.0
+              - type: static
                 weight: 2.0
-                decay_rate: 1.0e-7
                 steps: [5000000, -1]
     """
 
@@ -185,6 +206,23 @@ class CurriculumWrapper(RewardWeightWrapper):
             progress = (self._step - start_step) / (end_step - start_step)
             progress = min(max(progress, 0.0), 1.0)
             w = phase["weight"][0] + (phase["weight"][1] - phase["weight"][0]) * progress
+            self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = w
+
+        elif phase_type == "sigmoid":
+            end_step = phase["steps"][1] if "steps" in phase else phase["num_steps"]
+            progress = (self._step - start_step) / (end_step - start_step)
+            progress = min(max(progress, 0.0), 1.0)
+            k = phase.get("steepness", 6.0)
+            x = torch.tensor(
+                k * (2.0 * progress - 1.0),
+                device=self.env.unwrapped.device,
+                dtype=torch.float32,
+            )
+            raw = torch.sigmoid(x)
+            sig_0 = torch.sigmoid(torch.tensor(-k, device=self.env.unwrapped.device, dtype=torch.float32))
+            sig_1 = torch.sigmoid(torch.tensor(k, device=self.env.unwrapped.device, dtype=torch.float32))
+            normalized = (raw - sig_0) / (sig_1 - sig_0)
+            w = phase["weight"][0] + (phase["weight"][1] - phase["weight"][0]) * normalized
             self.env.unwrapped.reward_manager._term_cfgs[term_idx].weight = w
 
         elif phase_type == "exponential":
