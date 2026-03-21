@@ -12,14 +12,24 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_wpt_xxx_xM_staged_rewards_long
+wandb_name: dreamer_wpt_bqvln4el_5.1M_staged_rewards_long
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
-init_checkpoint: /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_2200016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+init_checkpoint: /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_5100016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+
+# Good Checkpoints
+# dreamer_pretraining_ball_hitting_fix_shoot_over_mid (bqvln4el)
+#   M5.1 Very high shot over middle line score (passing with other player and shooting hard against the back boarder)
+#   /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_5100016.pt
+#   M4 Good goal scoring ratio, a lot of passing between players
+#   /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_4000016.pt
+#
+# dreamer_pretraining_ball_hitting_with_time_penalty (u37qg98t)
+#   M2.5 it looks like the shooting behavior starts to emerge from here. maybe wait a few more iterations but then there shoudl eb a good pretraining checkpoint
 
 hydra:
   run:
@@ -81,7 +91,7 @@ env:
       weight: 0.0
     goal_scored:
       type: static
-      weight: 2500.0
+      weight: 5000.0
     goal_conceded:
       type: schedule
       phases:
@@ -114,7 +124,7 @@ env:
       weight: 0.0
     collision_player_ball:
       type: exponential
-      weight: 50.0
+      weight: 0.0
       decay_rate: 1.0e-6
     ball_in_own_half:
       type: static
