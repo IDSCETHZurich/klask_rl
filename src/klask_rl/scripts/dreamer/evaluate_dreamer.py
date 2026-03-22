@@ -57,6 +57,13 @@ parser.add_argument(
     default=None,
     help="Override episode length in seconds.",
 )
+parser.add_argument(
+    "--opponent_type",
+    type=str,
+    default="dreamer",
+    choices=["dreamer", "ppo"],
+    help="Type of opponent agent: 'dreamer' or 'ppo' (rl_games).",
+)
 
 args_cli = parser.parse_args()
 
@@ -100,7 +107,10 @@ from dreamer_self_play import DreamerSelfPlayWrapper
 from envs.isaaclab import IsaacLabVecEnv
 from isaaclab.sim import RenderCfg
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
-from klask_rl.tasks.manager_based.klask_rl.wrappers import OpponentActionWrapper
+from klask_rl.tasks.manager_based.klask_rl.wrappers import (
+    KlaskRlAgentOpponentWrapper,
+    OpponentActionWrapper,
+)
 
 
 # =============================================================================
@@ -123,17 +133,17 @@ def _load_config(config_path, device):
     return cfg
 
 
-def _make_eval_env(env_config, num_envs, episode_length_s=None):
-    """Create an evaluation env with DreamerSelfPlayWrapper for the opponent.
+def _make_eval_env(env_config, num_envs, episode_length_s=None, opponent_type="dreamer"):
+    """Create an evaluation env with the appropriate opponent wrapper.
 
     Simplified wrapper chain (no curriculum/logging):
       1. OpponentActionWrapper — negate opponent actions for coordinate frame
       2. ActuatorModelWrapper (if config.actuator_model)
       3. max_velocity scaling
-      4. DreamerSelfPlayWrapper(eval_mode=True) — opponent RSSM + actions
+      4. Opponent wrapper (DreamerSelfPlayWrapper or KlaskRlAgentOpponentWrapper)
       5. IsaacLabVecEnv — r2dreamer adapter
 
-    Returns (vec_env, self_play_wrapper).
+    Returns (vec_env, opponent_wrapper).
     """
     _, task_name = env_config.task.split("_", 1)
 
@@ -186,14 +196,83 @@ def _make_eval_env(env_config, num_envs, episode_length_s=None):
     if getattr(env_config, "actuator_model", False):
         isaac_env = ActuatorModelWrapper(isaac_env)
 
-    # --- 4. Self-play wrapper (opponent) ---
-    self_play_wrapper = DreamerSelfPlayWrapper(isaac_env, eval_mode=True)
-    isaac_env = self_play_wrapper
+    # --- 4. Opponent wrapper ---
+    if opponent_type == "dreamer":
+        opponent_wrapper = DreamerSelfPlayWrapper(isaac_env, eval_mode=True)
+    elif opponent_type == "ppo":
+        opponent_wrapper = KlaskRlAgentOpponentWrapper(isaac_env, is_deterministic=True)
+    else:
+        raise ValueError(f"Unknown opponent type: {opponent_type}")
+    isaac_env = opponent_wrapper
 
     # --- 5. IsaacLabVecEnv adapter ---
     vec_env = IsaacLabVecEnv(isaac_env, simulation_app=simulation_app)
 
-    return vec_env, self_play_wrapper
+    return vec_env, opponent_wrapper
+
+
+def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device):
+    """Load a PPO opponent agent from an rl_games checkpoint.
+
+    Mirrors the loading pattern from play_klask.py.
+    """
+    import yaml
+    from isaaclab_rl.rl_games import RlGamesGpuEnv
+    from isaaclab_tasks.utils import load_cfg_from_registry
+    from rl_games.algos_torch import torch_ext
+    from rl_games.common import env_configurations, vecenv
+    from rl_games.common.player import BasePlayer
+    from rl_games.torch_runner import Runner
+
+    # Load base config from registry, then override with user YAML.
+    agent_cfg = load_cfg_from_registry("Klask-Rl-v0", "rl_games_cfg_entry_point")
+    if config_path is not None:
+        with open(config_path, "r") as f:
+            user_cfg = yaml.safe_load(f)
+        agent_cfg.update(user_cfg)
+
+    agent_cfg["params"]["load_checkpoint"] = True
+    agent_cfg["params"]["load_path"] = checkpoint_path
+    agent_cfg["params"]["config"]["num_actors"] = num_envs
+
+    # Register a dummy rl_games env so Runner.create_player() works.
+    vecenv.register(
+        "IsaacRlgWrapper",
+        lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(
+            config_name, num_actors, **kwargs
+        ),
+    )
+    env_configurations.register(
+        "rlgpu",
+        {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: None},
+    )
+
+    runner = Runner()
+    runner.load(agent_cfg)
+    opponent: BasePlayer = runner.create_player()
+
+    # Monkey-patch safe_load for device mapping (same as play_klask.py).
+    _original_safe_load = torch_ext.safe_load
+
+    def _safe_load_mapped(filename):
+        return torch_ext.safe_filesystem_op(
+            torch.load, filename, map_location=device, weights_only=False
+        )
+
+    torch_ext.safe_load = _safe_load_mapped
+    opponent.restore(checkpoint_path)
+    torch_ext.safe_load = _original_safe_load
+
+    opponent.reset()
+    opponent.device = torch.device(device)
+    opponent.model.to(device)
+    opponent.actions_low = opponent.actions_low.to(device)
+    opponent.actions_high = opponent.actions_high.to(device)
+
+    if opponent.is_rnn:
+        opponent.init_rnn()
+
+    return opponent
 
 
 def _load_dreamer_agent(model_config, obs_space, act_space, checkpoint_path, device):
@@ -212,16 +291,15 @@ def _load_dreamer_agent(model_config, obs_space, act_space, checkpoint_path, dev
 
 def main():
     device = args_cli.device
+    opponent_type = args_cli.opponent_type
 
-    # --- Load configs ---
+    # --- Load player config ---
     player_cfg = _load_config(args_cli.config, device)
-    opp_config_path = args_cli.opponent_config or args_cli.config
-    opp_cfg = _load_config(opp_config_path, device)
 
     # --- Create evaluation environment ---
     num_envs = args_cli.num_envs
-    vec_env, self_play_wrapper = _make_eval_env(
-        player_cfg.env, num_envs, args_cli.episode_length_s
+    vec_env, opponent_wrapper = _make_eval_env(
+        player_cfg.env, num_envs, args_cli.episode_length_s, opponent_type=opponent_type
     )
     obs_space = vec_env.observation_space
     act_space = vec_env.action_space
@@ -232,13 +310,21 @@ def main():
         player_cfg.model, obs_space, act_space, args_cli.checkpoint, device
     )
 
-    # --- Load opponent agent and set in self-play wrapper ---
-    print(f"[INFO] Loading opponent checkpoint: {args_cli.opponent_checkpoint}")
-    opp_agent = _load_dreamer_agent(
-        opp_cfg.model, obs_space, act_space, args_cli.opponent_checkpoint, device
-    )
-    self_play_wrapper.set_opponent(opp_agent)
-    del opp_agent  # Wrapper deep-copied the needed modules.
+    # --- Load opponent agent ---
+    print(f"[INFO] Loading {opponent_type} opponent checkpoint: {args_cli.opponent_checkpoint}")
+    if opponent_type == "dreamer":
+        opp_config_path = args_cli.opponent_config or args_cli.config
+        opp_cfg = _load_config(opp_config_path, device)
+        opp_agent = _load_dreamer_agent(
+            opp_cfg.model, obs_space, act_space, args_cli.opponent_checkpoint, device
+        )
+        opponent_wrapper.set_opponent(opp_agent)
+        del opp_agent  # Wrapper deep-copied the needed modules.
+    elif opponent_type == "ppo":
+        ppo_opponent = _load_ppo_opponent(
+            args_cli.opponent_config, args_cli.opponent_checkpoint, num_envs, device
+        )
+        opponent_wrapper.add_opponent(ppo_opponent)
 
     # --- Termination tracking (same as play_klask.py) ---
     term_counts = {
@@ -268,7 +354,7 @@ def main():
 
     while total_games < args_cli.num_games and simulation_app.is_running():
         with torch.inference_mode():
-            # Step env (opponent actions generated inside DreamerSelfPlayWrapper).
+            # Step env (opponent actions generated inside the opponent wrapper).
             trans, done = vec_env.step(act.detach(), done.detach())
 
             # Player agent inference (deterministic).
@@ -309,7 +395,8 @@ def main():
         "\n" + "=" * 50,
         "  HEAD-TO-HEAD EVALUATION RESULTS",
         "=" * 50,
-        f"  Player checkpoint : {args_cli.checkpoint}",
+        f"  Player checkpoint  : {args_cli.checkpoint}",
+        f"  Opponent type      : {opponent_type}",
         f"  Opponent checkpoint: {args_cli.opponent_checkpoint}",
         f"  Total games played : {total_games}",
         "-" * 50,
