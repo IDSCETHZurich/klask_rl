@@ -12,14 +12,14 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_pretraining_ball_hitting_with_time_penalty
+wandb_name: dreamer_pretraining_M6.7_transition_actor_model_32envs
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: 'cuda:0'
-init_checkpoint: null # Path to checkpoint for weight-only init (pretrain -> finetune)
+init_checkpoint: /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_6700016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
 
 hydra:
   run:
@@ -34,7 +34,7 @@ batch_length: 128
 env:
   task: 'isaaclab_Klask-Rl-Dreamer-v0'
   steps: 1e7
-  env_num: 16
+  env_num: 32
   eval_episode_num: 10
   action_repeat: 1
   decimation: 20
@@ -45,7 +45,7 @@ env:
   device: ${device}
   max_velocity: 0.6 # [m/s] Maximum velocity for player movement
   episode_length_s: 3.0 # [s] Episode length in seconds
-  actuator_model: False
+  actuator_model: True
   size: [64, 64]
   encoder:
     mlp_keys: 'policy'
