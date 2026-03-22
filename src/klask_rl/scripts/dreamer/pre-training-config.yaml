@@ -56,7 +56,7 @@ env:
   rewards:
     time_punishment:
       type: static
-      weight: -5.0
+      weight: -0.025
     time_out_punishment:
       type: static
       weight: 0.0
