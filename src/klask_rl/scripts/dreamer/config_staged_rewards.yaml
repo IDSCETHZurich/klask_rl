@@ -27,9 +27,9 @@ init_checkpoint: /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_51000
 #   /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_5100016.pt
 #   M4 Good goal scoring ratio, a lot of passing between players
 #   /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_4000016.pt
-#
-# dreamer_pretraining_ball_hitting_with_time_penalty (u37qg98t)
-#   M2.5 it looks like the shooting behavior starts to emerge from here. maybe wait a few more iterations but then there shoudl eb a good pretraining checkpoint
+#   M6.7 Highest shot over middle line score (similar to M5.1 but 1.5 times higher reward)
+#   /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_6700016.pt
+
 
 hydra:
   run:
@@ -165,5 +165,5 @@ trainer:
 
 self_play: true
 self_play_config:
-  update_score: 0.2 # opponent updated only when rolling mean score > this
+  update_score: 0.3 # opponent updated only when rolling mean score > this
   games_to_track: 4096 # rolling window size for score averaging
