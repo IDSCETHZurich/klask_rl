@@ -12,14 +12,14 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_wpt_bqvln4el_5.1M_staged_rewards_long
+wandb_name: dreamer_wpt_bqvln4el_6.7M_with_AM_0.4m/s
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
-init_checkpoint: /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_5100016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+init_checkpoint: /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_6700016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
 
 # Good Checkpoints
 # dreamer_pretraining_ball_hitting_fix_shoot_over_mid (bqvln4el)
@@ -29,7 +29,6 @@ init_checkpoint: /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_51000
 #   /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_4000016.pt
 #   M6.7 Highest shot over middle line score (similar to M5.1 but 1.5 times higher reward)
 #   /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_6700016.pt
-
 
 hydra:
   run:
@@ -44,7 +43,7 @@ batch_length: 128
 env:
   task: "isaaclab_Klask-Rl-Dreamer-v0"
   steps: 1e7
-  env_num: 16
+  env_num: 32
   eval_episode_num: 10
   action_repeat: 1
   decimation: 20
@@ -53,9 +52,9 @@ env:
   sim_dt: 0.001
   seed: ${seed}
   device: ${device}
-  max_velocity: 0.6 # [m/s] Maximum velocity for player movement
+  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
   episode_length_s: 5.0 # [s] Episode length in seconds
-  actuator_model: False
+  actuator_model: True
   size: [64, 64]
   encoder:
     mlp_keys: "policy"
