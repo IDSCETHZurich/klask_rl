@@ -13,13 +13,18 @@ if "--enable_cameras" not in sys.argv:
 
 from isaaclab.app import AppLauncher
 
-parser = argparse.ArgumentParser(description="Head-to-head evaluation of two Dreamer agents.")
+parser = argparse.ArgumentParser(
+    description="Head-to-head evaluation of Dreamer agents. Supports glob patterns in "
+    "--checkpoint to evaluate multiple player checkpoints against the same opponent."
+)
 AppLauncher.add_app_launcher_args(parser)
 parser.add_argument(
     "--checkpoint",
     type=str,
     required=True,
-    help="Path to the player agent checkpoint (.pt).",
+    help="Path (or glob pattern) to the player agent checkpoint(s) (.pt). "
+    "Supports wildcards such as 'runs/*/checkpoint_*.pt' to evaluate "
+    "multiple checkpoints sequentially against the same opponent.",
 )
 parser.add_argument(
     "--config",
@@ -74,6 +79,7 @@ simulation_app = app_launcher.app
 # Phase 2: Everything else — safe to import now that the sim is running.
 # =============================================================================
 
+import glob as glob_module
 import importlib
 import os
 import signal
@@ -290,13 +296,37 @@ def _load_dreamer_agent(model_config, obs_space, act_space, checkpoint_path, dev
 
 
 def main():
+    """Run head-to-head evaluation of one or more player checkpoints vs. a fixed opponent.
+
+    When ``--checkpoint`` contains glob characters (``*``, ``?``, ``[``), all
+    matching paths are resolved and each checkpoint is evaluated sequentially
+    against the same opponent. The environment and opponent are created once and
+    reused across all player checkpoints. Per-checkpoint results are printed and
+    saved individually; when multiple checkpoints are evaluated an aggregate
+    summary table is printed at the end.
+    """
     device = args_cli.device
     opponent_type = args_cli.opponent_type
+
+    # --- Resolve checkpoint glob pattern ---
+    checkpoint_pattern = args_cli.checkpoint
+    if any(c in checkpoint_pattern for c in ("*", "?", "[")):
+        checkpoint_paths = sorted(glob_module.glob(checkpoint_pattern, recursive=True))
+        if not checkpoint_paths:
+            raise FileNotFoundError(
+                f"No checkpoints matched pattern: {checkpoint_pattern}"
+            )
+        print(
+            f"[INFO] Found {len(checkpoint_paths)} checkpoints matching"
+            f" '{checkpoint_pattern}'"
+        )
+    else:
+        checkpoint_paths = [checkpoint_pattern]
 
     # --- Load player config ---
     player_cfg = _load_config(args_cli.config, device)
 
-    # --- Create evaluation environment ---
+    # --- Create evaluation environment (shared across all player checkpoints) ---
     num_envs = args_cli.num_envs
     vec_env, opponent_wrapper = _make_eval_env(
         player_cfg.env, num_envs, args_cli.episode_length_s, opponent_type=opponent_type
@@ -304,13 +334,7 @@ def main():
     obs_space = vec_env.observation_space
     act_space = vec_env.action_space
 
-    # --- Load player agent ---
-    print(f"[INFO] Loading player checkpoint: {args_cli.checkpoint}")
-    player = _load_dreamer_agent(
-        player_cfg.model, obs_space, act_space, args_cli.checkpoint, device
-    )
-
-    # --- Load opponent agent ---
+    # --- Load opponent agent (once) ---
     print(f"[INFO] Loading {opponent_type} opponent checkpoint: {args_cli.opponent_checkpoint}")
     if opponent_type == "dreamer":
         opp_config_path = args_cli.opponent_config or args_cli.config
@@ -326,14 +350,6 @@ def main():
         )
         opponent_wrapper.add_opponent(ppo_opponent)
 
-    # --- Termination tracking (same as play_klask.py) ---
-    term_counts = {
-        "player_scored": 0,
-        "opponent_scored": 0,
-        "player_in_goal": 0,
-        "opponent_in_goal": 0,
-        "time_expired": 0,
-    }
     TERM_NAME_MAP = {
         "goal_scored": "player_scored",
         "goal_conceded": "opponent_scored",
@@ -342,89 +358,162 @@ def main():
         "time_out": "time_expired",
     }
     term_manager = vec_env._env.unwrapped.termination_manager
-    total_games = 0
 
-    # --- Game loop ---
-    pbar = tqdm(total=args_cli.num_games, desc="Games")
+    # Collect per-checkpoint results for aggregate summary.
+    all_results = []
 
-    vec_env.reset()
-    done = torch.ones(num_envs, dtype=torch.bool, device=device)
-    agent_state = player.get_initial_state(num_envs)
-    act = agent_state["prev_action"].clone()
+    # --- Evaluate each player checkpoint ---
+    for ckpt_idx, ckpt_path in enumerate(checkpoint_paths):
+        if len(checkpoint_paths) > 1:
+            print(
+                f"\n{'#' * 60}\n"
+                f"  Checkpoint {ckpt_idx + 1}/{len(checkpoint_paths)}: {ckpt_path}\n"
+                f"{'#' * 60}"
+            )
 
-    while total_games < args_cli.num_games and simulation_app.is_running():
-        with torch.inference_mode():
-            # Step env (opponent actions generated inside the opponent wrapper).
-            trans, done = vec_env.step(act.detach(), done.detach())
+        # --- Load player agent ---
+        print(f"[INFO] Loading player checkpoint: {ckpt_path}")
+        player = _load_dreamer_agent(
+            player_cfg.model, obs_space, act_space, ckpt_path, device
+        )
 
-            # Player agent inference (deterministic).
-            act, agent_state = player.act(trans, agent_state, eval=True)
+        # --- Reset tracking state ---
+        term_counts = {
+            "player_scored": 0,
+            "opponent_scored": 0,
+            "player_in_goal": 0,
+            "opponent_in_goal": 0,
+            "time_expired": 0,
+        }
+        total_games = 0
 
-            # Track terminations.
-            if done.any():
-                num_done = int(done.sum().item())
-                total_games += num_done
+        # --- Game loop ---
+        pbar = tqdm(total=args_cli.num_games, desc="Games")
 
-                done_mask = done.bool().to(term_manager._term_dones.device)
-                for i, term_name in enumerate(term_manager._term_names):
-                    if term_name in TERM_NAME_MAP:
-                        count_key = TERM_NAME_MAP[term_name]
-                        term_counts[count_key] += int(
-                            term_manager._term_dones[done_mask, i].sum().item()
-                        )
+        vec_env.reset()
+        done = torch.ones(num_envs, dtype=torch.bool, device=device)
+        agent_state = player.get_initial_state(num_envs)
+        act = agent_state["prev_action"].clone()
 
-                # Update tqdm with live stats.
-                pbar.update(min(num_done, args_cli.num_games - pbar.n))
-                p_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
-                o_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
-                pbar.set_postfix(
-                    P_wins=p_wins,
-                    O_wins=o_wins,
-                    Draws=term_counts["time_expired"],
-                    P_wr=f"{p_wins / total_games * 100:.1f}%",
-                )
+        while total_games < args_cli.num_games and simulation_app.is_running():
+            with torch.inference_mode():
+                # Step env (opponent actions generated inside the opponent wrapper).
+                trans, done = vec_env.step(act.detach(), done.detach())
 
-    pbar.close()
+                # Player agent inference (deterministic).
+                act, agent_state = player.act(trans, agent_state, eval=True)
 
-    # --- Print and save results ---
-    player_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
-    opponent_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
-    draws = term_counts["time_expired"]
+                # Track terminations.
+                if done.any():
+                    num_done = int(done.sum().item())
+                    total_games += num_done
 
-    summary_lines = [
-        "\n" + "=" * 50,
-        "  HEAD-TO-HEAD EVALUATION RESULTS",
-        "=" * 50,
-        f"  Player checkpoint  : {args_cli.checkpoint}",
-        f"  Opponent type      : {opponent_type}",
-        f"  Opponent checkpoint: {args_cli.opponent_checkpoint}",
-        f"  Total games played : {total_games}",
-        "-" * 50,
-        f"  Player scored (goal_scored)      : {term_counts['player_scored']}",
-        f"  Opponent scored (goal_conceded)   : {term_counts['opponent_scored']}",
-        f"  Player fell in goal (player_in)   : {term_counts['player_in_goal']}",
-        f"  Opponent fell in goal (opp_in)    : {term_counts['opponent_in_goal']}",
-        f"  Time expired (time_out)           : {term_counts['time_expired']}",
-        "-" * 50,
-        f"  Player wins  : {player_wins}",
-        f"  Opponent wins: {opponent_wins}",
-        f"  Draws        : {draws}",
-    ]
-    if total_games > 0:
-        summary_lines.append(f"  Player win rate: {player_wins / total_games * 100:.1f}%")
-    summary_lines.append("=" * 50 + "\n")
+                    done_mask = done.bool().to(term_manager._term_dones.device)
+                    for i, term_name in enumerate(term_manager._term_names):
+                        if term_name in TERM_NAME_MAP:
+                            count_key = TERM_NAME_MAP[term_name]
+                            term_counts[count_key] += int(
+                                term_manager._term_dones[done_mask, i].sum().item()
+                            )
 
-    summary_text = "\n".join(summary_lines)
-    print(summary_text)
+                    # Update tqdm with live stats.
+                    pbar.update(min(num_done, args_cli.num_games - pbar.n))
+                    p_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
+                    o_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
+                    pbar.set_postfix(
+                        P_wins=p_wins,
+                        O_wins=o_wins,
+                        Draws=term_counts["time_expired"],
+                        P_wr=f"{p_wins / total_games * 100:.1f}%",
+                    )
 
-    # Save to timestamped file.
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_dir = os.path.join("logs", "dreamer", "head_to_head_results")
-    os.makedirs(results_dir, exist_ok=True)
-    results_file = os.path.join(results_dir, f"h2h_results_{timestamp}.txt")
-    with open(results_file, "w") as f:
-        f.write(summary_text)
-    print(f"[INFO] Head-to-head results saved to: {results_file}")
+        pbar.close()
+
+        # --- Print and save results ---
+        player_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
+        opponent_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
+        draws = term_counts["time_expired"]
+
+        all_results.append(
+            {
+                "checkpoint": ckpt_path,
+                "total_games": total_games,
+                "player_wins": player_wins,
+                "opponent_wins": opponent_wins,
+                "draws": draws,
+                "term_counts": dict(term_counts),
+            }
+        )
+
+        summary_lines = [
+            "\n" + "=" * 50,
+            "  HEAD-TO-HEAD EVALUATION RESULTS",
+            "=" * 50,
+            f"  Player checkpoint  : {ckpt_path}",
+            f"  Opponent type      : {opponent_type}",
+            f"  Opponent checkpoint: {args_cli.opponent_checkpoint}",
+            f"  Total games played : {total_games}",
+            "-" * 50,
+            f"  Player scored (goal_scored)      : {term_counts['player_scored']}",
+            f"  Opponent scored (goal_conceded)   : {term_counts['opponent_scored']}",
+            f"  Player fell in goal (player_in)   : {term_counts['player_in_goal']}",
+            f"  Opponent fell in goal (opp_in)    : {term_counts['opponent_in_goal']}",
+            f"  Time expired (time_out)           : {term_counts['time_expired']}",
+            "-" * 50,
+            f"  Player wins  : {player_wins}",
+            f"  Opponent wins: {opponent_wins}",
+            f"  Draws        : {draws}",
+        ]
+        if total_games > 0:
+            summary_lines.append(
+                f"  Player win rate: {player_wins / total_games * 100:.1f}%"
+            )
+        summary_lines.append("=" * 50 + "\n")
+
+        summary_text = "\n".join(summary_lines)
+        print(summary_text)
+
+        # Save to timestamped file.
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_dir = os.path.join("logs", "dreamer", "head_to_head_results")
+        os.makedirs(results_dir, exist_ok=True)
+        results_file = os.path.join(results_dir, f"h2h_results_{timestamp}.txt")
+        with open(results_file, "w") as f:
+            f.write(summary_text)
+        print(f"[INFO] Head-to-head results saved to: {results_file}")
+
+        # Free player model before loading the next one.
+        del player
+
+    # --- Aggregate summary (when multiple checkpoints) ---
+    if len(all_results) > 1:
+        agg_lines = [
+            "\n" + "=" * 70,
+            "  AGGREGATE RESULTS ACROSS ALL CHECKPOINTS",
+            "=" * 70,
+            f"  {'Checkpoint':<45} {'Win%':>6}  {'W':>5}  {'L':>5}  {'D':>5}",
+            "-" * 70,
+        ]
+        for r in all_results:
+            ckpt_name = os.path.basename(r["checkpoint"])
+            wr = (
+                f"{r['player_wins'] / r['total_games'] * 100:.1f}%"
+                if r["total_games"] > 0
+                else "N/A"
+            )
+            agg_lines.append(
+                f"  {ckpt_name:<45} {wr:>6}"
+                f"  {r['player_wins']:>5}  {r['opponent_wins']:>5}  {r['draws']:>5}"
+            )
+        agg_lines.append("=" * 70 + "\n")
+        agg_text = "\n".join(agg_lines)
+        print(agg_text)
+
+        # Save aggregate results.
+        agg_file = os.path.join(results_dir, f"h2h_aggregate_{timestamp}.txt")
+        with open(agg_file, "w") as f:
+            f.write(agg_text)
+        print(f"[INFO] Aggregate results saved to: {agg_file}")
 
     # Cleanup.
     vec_env._env.close()
