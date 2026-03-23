@@ -3,7 +3,10 @@
 # =============================================================================
 
 import argparse
+import cProfile
+import os
 import pathlib
+import pstats
 import sys
 
 # Auto-detect vision env from CLI and enable cameras before AppLauncher
@@ -508,12 +511,29 @@ def main(config):
     finally:
         _save_checkpoint(policy_trainer._step)
 
+        # Dump cProfile data before simulation_app.close() kills the process.
+        if _PROFILER is not None:
+            _PROFILER.disable()
+            prof_path = os.environ.get("PROFILE_OUTPUT", "train_profile.prof")
+            _PROFILER.dump_stats(prof_path)
+            stats = pstats.Stats(_PROFILER)
+            stats.sort_stats("cumulative")
+            stats.print_stats(40)
+            print(f"\nFull profile saved to: {prof_path}")
+
         logger.close(exit_code=exit_code)
         vec_env._env.close()
         simulation_app.close()
 
 
+_PROFILER = None
+
 if __name__ == "__main__":
     # Forward only the Hydra-style args (everything after AppLauncher args).
     sys.argv = [sys.argv[0]] + hydra_args
+
+    if os.environ.get("PROFILE", ""):
+        _PROFILER = cProfile.Profile()
+        _PROFILER.enable()
+
     main()
