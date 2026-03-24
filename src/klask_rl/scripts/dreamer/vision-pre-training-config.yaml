@@ -6,13 +6,11 @@ defaults:
 
 model:
   rep_loss: 'dreamer'
-  imag_horizon: 50
-  horizon: 500
 
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_pretraining_ball_hitting_vision
+wandb_name: dreamer_pretraining_vision
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
@@ -43,9 +41,9 @@ env:
   sim_dt: 0.001
   seed: ${seed}
   device: ${device}
-  max_velocity: 0.6 # [m/s] Maximum velocity for player movement
+  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
   episode_length_s: 3.0 # [s] Episode length in seconds
-  actuator_model: False
+  actuator_model: True
   size: [64, 64]
   encoder:
     mlp_keys: '$^'
@@ -56,7 +54,7 @@ env:
   rewards:
     time_punishment:
       type: static
-      weight: -0.025
+      weight: 0.0
     time_out_punishment:
       type: static
       weight: 0.0
@@ -77,8 +75,14 @@ env:
       type: static
       weight: 0.0
     distance_player_ball_own_half:
-      type: static
-      weight: 10.0
+      type: schedule
+      phases:
+        - type: static
+          weight: 100.0
+          steps: [0, 200_000]
+        - type: static
+          weight: 10.0
+          steps: [200_000, -1]
     distance_ball_opponent_goal:
       type: exponential
       weight: 0.0
@@ -95,9 +99,17 @@ env:
       type: static
       weight: 0.0
     collision_player_ball:
-      type: exponential
-      weight: 150.0
-      decay_rate: 1.0e-07
+      type: schedule
+      phases:
+        - type: static
+          weight: 300.0
+          steps: [0, 500_000]
+        - type: static
+          weight: 150.0
+          steps: [500_000, 1_000_000]
+        - type: static
+          weight: 50.0
+          steps: [1_000_000, -1]
     ball_in_own_half:
       type: static
       weight: 0.0
