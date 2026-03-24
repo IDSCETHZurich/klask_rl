@@ -91,6 +91,7 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     OpponentActionWrapper,
     OpponentObservationWrapper,
     RlGamesGpuEnvSelfPlay,
+    configure_domain_randomization,
 )
 from klask_rl_games import KlaskRlAlgoObserver, KlaskRlRunner
 from rl_games.common import env_configurations, vecenv
@@ -178,49 +179,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 setattr(env_cfg.terminations, term, None)
 
     # Configure domain randomization events from YAML BEFORE env construction.
-    # Events are always defined in EventCfg with placeholder ranges. Here we either
-    # set the actual ranges from YAML or disable events (set to None).
-    _DR_EVENTS = ["add_ball_mass", "randomize_material_ball", "randomize_material_klask", "randomize_actuator"]
-    if "domain_randomization" not in agent_cfg:
-        # No DR config in YAML → disable all DR events
-        for _term in _DR_EVENTS:
-            if hasattr(env_cfg.events, _term):
-                setattr(env_cfg.events, _term, None)
-    else:
-        dr_cfg = agent_cfg["domain_randomization"]
-
-        # Ball mass
-        ball_mass_cfg = dr_cfg.get("ball_mass", {})
-        if ball_mass_cfg.get("enable", False):
-            env_cfg.events.add_ball_mass.params["mass_distribution_params"] = tuple(ball_mass_cfg["range"])
-        else:
-            env_cfg.events.add_ball_mass = None
-
-        # Material: ball
-        mat_ball_cfg = dr_cfg.get("material_ball", {})
-        if mat_ball_cfg.get("enable", False):
-            env_cfg.events.randomize_material_ball.params["static_friction_range"] = tuple(mat_ball_cfg["static_friction_range"])
-            env_cfg.events.randomize_material_ball.params["dynamic_friction_range"] = tuple(mat_ball_cfg["dynamic_friction_range"])
-            env_cfg.events.randomize_material_ball.params["restitution_range"] = tuple(mat_ball_cfg["restitution_range"])
-        else:
-            env_cfg.events.randomize_material_ball = None
-
-        # Material: klask (paddles)
-        mat_klask_cfg = dr_cfg.get("material_klask", {})
-        if mat_klask_cfg.get("enable", False):
-            env_cfg.events.randomize_material_klask.params["static_friction_range"] = tuple(mat_klask_cfg["static_friction_range"])
-            env_cfg.events.randomize_material_klask.params["dynamic_friction_range"] = tuple(mat_klask_cfg["dynamic_friction_range"])
-            env_cfg.events.randomize_material_klask.params["restitution_range"] = tuple(mat_klask_cfg["restitution_range"])
-        else:
-            env_cfg.events.randomize_material_klask = None
-
-        # Actuator gains
-        actuator_cfg = dr_cfg.get("actuator", {})
-        if actuator_cfg.get("enable", False):
-            env_cfg.events.randomize_actuator.params["stiffness_distribution_params"] = tuple(actuator_cfg["stiffness_range"])
-            env_cfg.events.randomize_actuator.params["damping_distribution_params"] = tuple(actuator_cfg["damping_range"])
-        else:
-            env_cfg.events.randomize_actuator = None
+    configure_domain_randomization(env_cfg, agent_cfg.get("domain_randomization"))
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)

@@ -79,6 +79,7 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     CurriculumWrapper,
     KlaskRlRandomOpponentWrapper,
     OpponentActionWrapper,
+    configure_domain_randomization,
 )
 from trainer import OnlineTrainer
 
@@ -245,6 +246,15 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
         for term, active in term_dict.items():
             if not active and hasattr(env_cfg.terminations, term):
                 setattr(env_cfg.terminations, term, None)
+
+    # Configure domain randomization events from YAML BEFORE env construction.
+    _dr_cfg_raw = getattr(config, "domain_randomization", None)
+    _dr_dict = (
+        OmegaConf.to_container(_dr_cfg_raw, resolve=True)
+        if _dr_cfg_raw is not None and OmegaConf.is_config(_dr_cfg_raw)
+        else _dr_cfg_raw
+    )
+    configure_domain_randomization(env_cfg, _dr_dict)
 
     # --- Create the base gymnasium env ---
     isaac_env = gym.make(gym_id, cfg=env_cfg, render_mode=render_mode)

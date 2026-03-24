@@ -101,6 +101,7 @@ from isaaclab_tasks.utils import (
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
+    configure_domain_randomization,
     ActionHistoryWrapper,
     RewardWeightWrapper,
     KlaskRlAgentOpponentWrapper,
@@ -167,6 +168,9 @@ def main():
         for term, active in agent_cfg["terminations"].items():
             if not active and hasattr(env_cfg.terminations, term):
                 setattr(env_cfg.terminations, term, None)
+
+    # Configure domain randomization events from YAML BEFORE env construction.
+    configure_domain_randomization(env_cfg, agent_cfg.get("domain_randomization"))
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
