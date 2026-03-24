@@ -79,10 +79,14 @@ env:
       phases:
         - type: static
           weight: 100.0
-          steps: [0, 200_000]
+          steps: [0, 500_000]
+        - type: sigmoid
+          weight: [100.0, 10.0]
+          steps: [500_000, 1_000_000]
+          steepness: 6.0
         - type: static
           weight: 10.0
-          steps: [200_000, -1]
+          steps: [1_000_000, -1]
     distance_ball_opponent_goal:
       type: exponential
       weight: 0.0
@@ -103,13 +107,21 @@ env:
       phases:
         - type: static
           weight: 300.0
-          steps: [0, 500_000]
+          steps: [0, 1_000_000]
+        - type: sigmoid
+          weight: [300.0, 150.0]
+          steps: [1_500_000, 2_000_000]
+          steepness: 6.0
         - type: static
           weight: 150.0
-          steps: [500_000, 1_000_000]
+          steps: [2_000_000, 3_000_000]
+        - type: sigmoid
+          weight: [150.0, 50.0]
+          steps: [3_000_000, 3_500_000]
+          steepness: 6.0
         - type: static
           weight: 50.0
-          steps: [1_000_000, -1]
+          steps: [3_500_000, -1]
     ball_in_own_half:
       type: static
       weight: 0.0
