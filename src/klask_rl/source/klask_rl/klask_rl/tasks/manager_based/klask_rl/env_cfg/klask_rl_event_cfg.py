@@ -17,57 +17,63 @@ from ..utils_manager_based import (
 
 @configclass
 class EventCfg:
-    """Configuration for events."""
+    """Configuration for events.
 
-    if KLASK_PARAMS["domain_randomization"]["use_domain_randomization"]:
-        # on reset
-        add_ball_mass = EventTerm(
-            func=mdp.randomize_rigid_body_mass,
-            mode="reset",
-            params={
-                "asset_cfg": SceneEntityCfg("ball"),
-                "mass_distribution_params": KLASK_PARAMS["domain_randomization"]["ball_mass_range"],
-                "operation": "abs",
-            },
-        )
+    Domain randomization events are always defined with placeholder ranges.
+    The training script configures them at runtime from agent_cfg YAML:
+    - Sets actual ranges from the YAML config
+    - Disables events (sets to None) when enable=false or no DR config present
+    """
 
-        randomize_material_ball = EventTerm(
-            func=mdp.randomize_rigid_body_material,
-            mode="reset",
-            params={
-                "asset_cfg": SceneEntityCfg("ball"),
-                "static_friction_range": KLASK_PARAMS["domain_randomization"]["static_friction_range"],
-                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"]["dynamic_friction_range"],
-                "restitution_range": KLASK_PARAMS["domain_randomization"]["restitution_range"],
-                "num_buckets": 100,
-                "make_consistent": True,
-            },
-        )
+    # -- domain randomization (configured at runtime from YAML) --
+    add_ball_mass: EventTerm | None = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("ball"),
+            "mass_distribution_params": (0.0, 0.0),  # overridden from YAML
+            "operation": "abs",
+        },
+    )
 
-        randomize_material_klask = EventTerm(
-            func=mdp.randomize_rigid_body_material,
-            mode="reset",
-            params={
-                "asset_cfg": SceneEntityCfg("klask"),
-                "static_friction_range": KLASK_PARAMS["domain_randomization"]["static_friction_range"],
-                "dynamic_friction_range": KLASK_PARAMS["domain_randomization"]["dynamic_friction_range"],
-                "restitution_range": KLASK_PARAMS["domain_randomization"]["restitution_range"],
-                "num_buckets": 100,
-                "make_consistent": True,
-            },
-        )
+    randomize_material_ball: EventTerm | None = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("ball"),
+            "static_friction_range": (0.0, 0.0),  # overridden from YAML
+            "dynamic_friction_range": (0.0, 0.0),  # overridden from YAML
+            "restitution_range": (0.0, 0.0),  # overridden from YAML
+            "num_buckets": 100,
+            "make_consistent": True,
+        },
+    )
 
-        randomize_actuator = EventTerm(
-            func=mdp.randomize_actuator_gains,
-            mode="reset",
-            params={
-                "asset_cfg": SceneEntityCfg("klask"),
-                "stiffness_distribution_params": KLASK_PARAMS["domain_randomization"]["stiffness_range"],
-                "damping_distribution_params": KLASK_PARAMS["domain_randomization"]["damping_range"],
-                "operation": "abs",
-            },
-        )
+    randomize_material_klask: EventTerm | None = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("klask"),
+            "static_friction_range": (0.0, 0.0),  # overridden from YAML
+            "dynamic_friction_range": (0.0, 0.0),  # overridden from YAML
+            "restitution_range": (0.0, 0.0),  # overridden from YAML
+            "num_buckets": 100,
+            "make_consistent": True,
+        },
+    )
 
+    randomize_actuator: EventTerm | None = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("klask"),
+            "stiffness_distribution_params": (0.0, 0.0),  # overridden from YAML
+            "damping_distribution_params": (0.0, 0.0),  # overridden from YAML
+            "operation": "abs",
+        },
+    )
+
+    # -- non-DR reset events (always active) --
     reset_x_position_peg_1 = EventTerm(
         func=reset_joints_by_offset,
         mode="reset",

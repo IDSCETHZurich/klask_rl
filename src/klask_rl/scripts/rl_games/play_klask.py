@@ -202,7 +202,11 @@ def main():
 
     obs_noise = agent_cfg["env"].get("obs_noise", 0.0)
     if obs_noise > 0.0:
-        env = ObservationNoiseWrapper(env, obs_noise)
+        env = ObservationNoiseWrapper(
+            env, obs_noise,
+            own_goal=KLASK_PARAMS["player_goal"],
+            other_goal=KLASK_PARAMS["opponent_goal"],
+        )
 
     head_to_head = args_cli.opponent_checkpoint is not None
     if agent_cfg["params"]["config"].get("self_play", False) or head_to_head:

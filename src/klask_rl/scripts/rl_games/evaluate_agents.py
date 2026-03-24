@@ -61,6 +61,7 @@ import torch
 import yaml
 from isaaclab_rl.rl_games import RlGamesVecEnvWrapper
 from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg
+from klask_rl.assets.robots.klask import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     ObservationNoiseWrapper,
     OpponentObservationWrapper,
@@ -142,7 +143,12 @@ def main():
     #    env = multi_agent_to_single_agent(env)
 
     obs_noise = agent_cfg["env"].get("obs_noise", 0.0)
-    env = ObservationNoiseWrapper(env, obs_noise)
+    if obs_noise > 0.0:
+        env = ObservationNoiseWrapper(
+            env, obs_noise,
+            own_goal=KLASK_PARAMS["player_goal"],
+            other_goal=KLASK_PARAMS["opponent_goal"],
+        )
     env = OpponentObservationWrapper(env)
     if "rewards" in agent_cfg.keys():
         env = RewardWeightWrapper(env, agent_cfg["rewards"])

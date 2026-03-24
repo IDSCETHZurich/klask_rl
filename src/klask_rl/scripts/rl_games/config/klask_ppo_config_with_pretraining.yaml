@@ -2,7 +2,7 @@ params:
   seed: 3
   env:
     clip_observations: 10.0
-    clip_actions: 0.6
+    clip_actions: 0.2
   algo:
     name: a2c_continuous
   model:
@@ -32,9 +32,9 @@ params:
       regularizer:
         name: None
   load_checkpoint: true
-  load_path: /workspace/klask_rl/logs/rl_games/klask/pretrained_agent/nn/last_klask_ep_2730_rew_1.8527617.pth
+  load_path: /workspace/klask_rl/logs/rl_games/klask/pretrained_agent_action_1.0/nn/last_klask_ep_35_rew_3.9405801.pth
   config:
-    full_experiment_name: new_agent_from_new_pretrained/
+    full_experiment_name: new_agent_from_pretrained/v_0.2_no_AM/
     name: klask
     env_name: rlgpu
     device: cuda:0
@@ -72,13 +72,13 @@ params:
     games_to_track: 4096
     self_play_config:
       check_scores: true
-      update_score: 0.3
+      update_score: 0.7
       games_to_check: 1
       env_update_num: 4096
     train_dir: /home/student/klask_rl/IsaacLab/logs/rl_games/klask
 env:
   obs_noise: 0.0
-  actuator_model: true
+  actuator_model: false
   collision_avoidance: false
 rewards:
   time_punishment:
@@ -144,3 +144,21 @@ terminations:
   goal_conceded: true
   player_in_goal: true
   opponent_in_goal: true
+domain_randomization:
+  ball_mass:
+    enable: false
+    range: [0.0013, 0.0021]
+  material_ball:
+    enable: false
+    static_friction_range: [0.1, 0.28] # [0.2, 0.5] # s2r: [0.1, 0.5]
+    dynamic_friction_range: [0.06, 0.2] # [0.3, 0.45] # s2r: [0.2, 0.4]
+    restitution_range: [0.25, 0.6] # [0.95, 0.99] # s2r: [0.25, 0.4]
+  material_klask:
+    enable: false
+    static_friction_range: [0.04, 0.14] # [0.2, 0.5] # s2r: [0.1, 0.5]
+    dynamic_friction_range: [0.02, 0.1] # [0.3, 0.45] # s2r: [0.2, 0.4]
+    restitution_range: [0.05, 0.3] # [0.95, 0.99] # s2r: [0.25, 0.4]
+  actuator:
+    enable: false
+    stiffness_range: [0.0, 0.0]
+    damping_range: [10.0, 10.0]

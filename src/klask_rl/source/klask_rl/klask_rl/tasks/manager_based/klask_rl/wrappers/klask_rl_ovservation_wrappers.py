@@ -1,6 +1,6 @@
 import gymnasium as gym
 import torch
-from gymnasium import ObservationWrapper, Wrapper
+from gymnasium import Wrapper
 
 
 class OpponentActionWrapper(Wrapper):
@@ -17,23 +17,123 @@ class OpponentActionWrapper(Wrapper):
         return self.env.step(actions, *args, **kwargs)
 
 
-class ObservationNoiseWrapper(ObservationWrapper):
-    def __init__(self, env, noise_std, indices=None):
+class ObservationNoiseWrapper(Wrapper):
+    """Adds Gaussian noise to base observations and recomputes derived observations.
+
+    When extended observations (angles, distances) are present (obs dim >= 20),
+    they are recomputed from the noisy base observations to ensure consistency.
+    This means noise in position measurements properly propagates to angles and
+    distances, rather than those being computed from clean simulation state.
+
+    Base observation layout (first 12 dims):
+        [own_pos_x, own_pos_y, own_vel_x, own_vel_y,
+         other_pos_x, other_pos_y, other_vel_x, other_vel_y,
+         ball_pos_x, ball_pos_y, ball_vel_x, ball_vel_y]
+
+    Extended observations (dims 12-19, recomputed when present):
+        [angle_own_ball_goal, angle_other_ball_goal,
+         angle_own_ball_other, angle_other_ball_own,
+         distance_ball_own_goal, distance_ball_other_goal,
+         distance_ball_own, distance_ball_other]
+
+    The board is symmetric: opponent observations are 180°-rotated (positions negated).
+    Since angles and distances are invariant under simultaneous negation of all points,
+    the same goal positions work for both player and opponent observation keys.
+    """
+
+    BASE_DIM = 12
+    EXTENDED_DIM = 8
+    OWN_POS = slice(0, 2)
+    OTHER_POS = slice(4, 6)
+    BALL_POS = slice(8, 10)
+
+    def __init__(self, env, noise_std, own_goal, other_goal):
         super().__init__(env)
         self.noise_std = noise_std
-        self.indices = indices
-        if self.indices is None:
-            self.indices = env.unwrapped.single_action_space.shape[-1]
+        # Store goal xy tuples; tensors created lazily on correct device
+        self._own_goal_xy = (own_goal[0], own_goal[1])
+        self._other_goal_xy = (other_goal[0], other_goal[1])
+        self._own_goal = None
+        self._other_goal = None
 
-    def observation(self, observation):
-        if type(observation) is dict:
-            for k, v in observation.items():
-                noise = self.noise_std * torch.randn_like(v)
-                observation[k][:, self.indices] += noise[:, self.indices]
+        # Detect whether extended observations are present
+        obs_space = env.observation_space
+        if isinstance(obs_space, gym.spaces.Dict):
+            sample_dim = next(iter(obs_space.spaces.values())).shape[-1]
         else:
-            noise = self.noise_std * torch.randn_like(observation)
-            observation[:, self.indices] += noise[:, self.indices]
-        return observation
+            sample_dim = obs_space.shape[-1]
+        self.has_extended = sample_dim >= self.BASE_DIM + self.EXTENDED_DIM
+
+    def _ensure_goals(self, device):
+        """Lazily create goal tensors on the correct device."""
+        if self._own_goal is None or self._own_goal.device != device:
+            self._own_goal = torch.tensor(self._own_goal_xy, dtype=torch.float32, device=device)
+            self._other_goal = torch.tensor(self._other_goal_xy, dtype=torch.float32, device=device)
+
+    @staticmethod
+    def _angle(A, B, C):
+        """Angle at point A between vectors A->B and A->C. Returns shape (N, 1)."""
+        vec_ab = B - A
+        vec_ac = C - A
+        dot = (vec_ab * vec_ac).sum(dim=1)
+        cos_theta = dot / (vec_ab.norm(dim=1) * vec_ac.norm(dim=1) + 1e-8)
+        return torch.acos(cos_theta.clamp(-1.0, 1.0)).unsqueeze(-1)
+
+    @staticmethod
+    def _distance(A, B):
+        """Euclidean distance between A and B. Returns shape (N, 1)."""
+        return (A - B).norm(dim=1).unsqueeze(-1)
+
+    def _recompute_extended(self, obs):
+        """Recompute extended observations (dims 12:20) from (noisy) base positions."""
+        own = obs[:, self.OWN_POS]
+        other = obs[:, self.OTHER_POS]
+        ball = obs[:, self.BALL_POS]
+        og = self._own_goal
+        tg = self._other_goal
+
+        extended = torch.cat([
+            self._angle(own, ball, tg),      # angle_own_ball_goal
+            self._angle(other, ball, og),     # angle_other_ball_goal
+            self._angle(own, ball, other),    # angle_own_ball_other
+            self._angle(other, ball, own),    # angle_other_ball_own
+            self._distance(ball, og),         # distance_ball_own_goal
+            self._distance(ball, tg),         # distance_ball_other_goal
+            self._distance(ball, own),        # distance_ball_own
+            self._distance(ball, other),      # distance_ball_other
+        ], dim=-1)
+
+        # Preserve any dims beyond 20 (action history, goal position, etc.)
+        parts = [obs[:, :self.BASE_DIM], extended]
+        tail_start = self.BASE_DIM + self.EXTENDED_DIM
+        if obs.shape[-1] > tail_start:
+            parts.append(obs[:, tail_start:])
+        return torch.cat(parts, dim=-1)
+
+    def _apply_noise(self, obs):
+        """Add noise to base dims and recompute extended if present."""
+        obs = obs.clone()
+        noise = self.noise_std * torch.randn(obs.shape[0], self.BASE_DIM, device=obs.device)
+        obs[:, :self.BASE_DIM] += noise
+        if self.has_extended:
+            obs = self._recompute_extended(obs)
+        return obs
+
+    def _process_obs(self, observation):
+        """Apply noise to observation (dict or flat tensor)."""
+        device = next(iter(observation.values())).device if isinstance(observation, dict) else observation.device
+        self._ensure_goals(device)
+        if isinstance(observation, dict):
+            return {k: self._apply_noise(v) for k, v in observation.items()}
+        return self._apply_noise(observation)
+
+    def step(self, actions, *args, **kwargs):
+        obs, rew, terminated, truncated, extras = self.env.step(actions, *args, **kwargs)
+        return self._process_obs(obs), rew, terminated, truncated, extras
+
+    def reset(self, *args, **kwargs):
+        obs, extras = self.env.reset(*args, **kwargs)
+        return self._process_obs(obs), extras
 
 
 class OpponentObservationWrapper(Wrapper):
