@@ -1,4 +1,10 @@
+import multiprocessing as mp
+import random
+import threading
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from queue import Empty
 
 import numpy as np
 import torch
@@ -7,6 +13,7 @@ import torch.optim as optim
 from actuator_network import ActuatorNetwork
 from sklearn.model_selection import TimeSeriesSplit
 from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
 
 
 class ActuatorDataset(Dataset):
@@ -34,6 +41,74 @@ def smoothness_loss(preds, batch_y_prev):
     return torch.mean(torch.abs(diff))
 
 
+def set_seed_everywhere(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def run_seed_training(
+    seed,
+    data_path,
+    run_name,
+    n_splits,
+    epochs,
+    lr,
+    batch_size,
+    smoothness_weight,
+    hidden_dim,
+    verbose,
+    detect_anomaly,
+    checkpoints_dir,
+    log_dir,
+    progress_queue,
+):
+    set_seed_everywhere(seed)
+    data = np.load(data_path)
+    X_commands, Y, Y_prev, commands = data["X_commands"], data["Y"], data["Y_prev"], data["commands"]
+    X_states = data["X_states"] if "X_states" in data.keys() else None
+
+    log_dir = Path(log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"seed_{seed}.log"
+
+    with log_path.open("w", encoding="utf-8", buffering=1) as log_file, redirect_stdout(log_file), redirect_stderr(
+        log_file
+    ):
+        best_state, cv_losses, best_fold_loss = train_model_with_cv(
+            X_commands,
+            X_states,
+            Y,
+            Y_prev,
+            commands,
+            n_splits=n_splits,
+            epochs=epochs,
+            lr=lr,
+            batch_size=batch_size,
+            smoothness_weight=smoothness_weight,
+            hidden_dim=hidden_dim,
+            verbose=verbose,
+            detect_anomaly=detect_anomaly,
+            progress_queue=progress_queue,
+            seed=seed,
+        )
+
+    checkpoints_dir = Path(checkpoints_dir)
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    model_path = checkpoints_dir / f"model_{run_name}_seed{seed}.pt"
+    torch.save(best_state, model_path)
+
+    return {
+        "seed": seed,
+        "model_path": str(model_path),
+        "log_path": str(log_path),
+        "best_fold_loss": float(best_fold_loss),
+        "avg_cv_loss": float(np.mean(cv_losses)),
+    }
+
+
 def train_model_with_cv(
     X_commands,
     X_states,
@@ -50,6 +125,8 @@ def train_model_with_cv(
     device=None,
     num_workers=0,
     detect_anomaly=False,
+    progress_queue=None,
+    seed=None,
 ):
     device = torch.device(device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu"))
     use_cuda = device.type == "cuda"
@@ -152,7 +229,16 @@ def train_model_with_cv(
                 epoch_loss = epoch_loss + loss.item() * batch_x_commands.size(0)
             epoch_loss /= len(train_dataset)
             if verbose:
-                print(f"  Epoch {epoch+1}/{epochs}, Train Loss: {1000*epoch_loss:.4f}")
+                print(f"  Epoch {epoch+1}/{epochs}, Train Loss: {epoch_loss:.6f}", flush=True)
+            if progress_queue is not None and seed is not None:
+                progress_queue.put({
+                    "seed": seed,
+                    "phase": "cv",
+                    "fold": cv_fold,
+                    "epoch": epoch + 1,
+                    "total_epochs": epochs,
+                    "loss": float(epoch_loss),
+                })
 
         # Validate
         model.eval()
@@ -198,8 +284,9 @@ def train_model_with_cv(
         val_loss_smoothness /= len(val_dataset)
         if verbose:
             print(
-                f"  Fold {cv_fold} Validation Loss: {1000*val_loss:.4f}, MSE loss: {val_loss_mse:.4f}, smoothness loss:"
-                f" {val_loss_smoothness:.4f}"
+                f"  Fold {cv_fold} Validation Loss: {val_loss:.6f}, MSE loss: {val_loss_mse:.4f}, smoothness loss:"
+                f" {val_loss_smoothness:.4f}",
+                flush=True,
             )
         fold_val_losses.append(val_loss)
 
@@ -211,7 +298,7 @@ def train_model_with_cv(
 
     avg_val_loss = np.mean(fold_val_losses)
     if verbose:
-        print(f"\nAverage Validation Loss across folds: {avg_val_loss:.4f}")
+        print(f"\nAverage Validation Loss across folds: {avg_val_loss:.4f}", flush=True)
 
     full_dataset = ActuatorDataset(
         torch.from_numpy(X_commands),
@@ -263,48 +350,122 @@ def train_model_with_cv(
             epoch_loss += loss.item() * batch_x_commands.size(0)
 
         epoch_loss /= len(full_dataset)
-        print(f"  Final Training Epoch {epoch+1}/{epochs}, Loss: {1000*epoch_loss:.4f}")
+        print(f"  Final Training Epoch {epoch+1}/{epochs}, Loss: {epoch_loss:.6f}", flush=True)
+        if progress_queue is not None and seed is not None:
+            progress_queue.put({
+                "seed": seed,
+                "phase": "full",
+                "fold": None,
+                "epoch": epoch + 1,
+                "total_epochs": epochs,
+                "loss": float(epoch_loss),
+            })
 
-    print("Training on full dataset completed.")
+    print("Training on full dataset completed.", flush=True)
     return model.state_dict(), fold_val_losses, best_fold_loss
 
 
 if __name__ == "__main__":
 
     data_file = "data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states.npz"
-    best_val_loss = 10000.0
 
     run_name = data_file[5:-4]
     data_file = Path(__file__).parent.resolve() / "data" / data_file
 
-    data = np.load(data_file)
-    X_commands, Y, Y_prev, commands = data["X_commands"], data["Y"], data["Y_prev"], data["commands"]
-    if "X_states" in data.keys():
-        X_states = data["X_states"]
-    else:
-        X_states = None
+    seed_start = 0
+    seed_count = 8
+    seed_workers = 4
+    logs_dir = Path(__file__).parent.resolve() / "logs" / "seed_runs"
 
-    best_state, cv_losses, best_fold_loss = train_model_with_cv(
-        X_commands,
-        X_states,
-        Y,
-        Y_prev,
-        commands,
-        n_splits=5,
-        epochs=20,
-        lr=1e-3,
-        batch_size=512,
-        smoothness_weight=0.0,
-        hidden_dim=64,
-        verbose=True,
-        detect_anomaly=False,
-    )
-    if best_fold_loss < best_val_loss:
-        best_val_loss = best_fold_loss
-        best_run = run_name
-        print(f"New best run: {best_run}, val loss {best_val_loss}")
+    checkpoints_dir = Path(__file__).parent.resolve() / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save best model state from cross-validation
-    model_path = Path(__file__).parent.resolve() / "checkpoints" / f"model_{run_name}.pt"
-    torch.save(best_state, model_path)
-    print(f"Best model state saved to {model_path}")
+    ctx = mp.get_context("spawn")
+    seeds = list(range(seed_start, seed_start + seed_count))
+    results = []
+    total_epochs = (5 + 1) * 20
+
+    manager = mp.Manager()
+    progress_queue = manager.Queue()
+    stop_event = threading.Event()
+    progress_bars = {
+        seed: tqdm(total=total_epochs, position=index, desc=f"seed {seed}", leave=True)
+        for index, seed in enumerate(seeds)
+    }
+
+    def consume_progress():
+        while not stop_event.is_set() or not progress_queue.empty():
+            try:
+                message = progress_queue.get(timeout=0.1)
+            except Empty:
+                continue
+
+            seed = message.get("seed")
+            bar = progress_bars.get(seed)
+            if bar is None:
+                continue
+
+            bar.update(1)
+            phase = message.get("phase")
+            fold = message.get("fold")
+            epoch = message.get("epoch")
+            loss = message.get("loss")
+            if phase == "cv":
+                bar.set_postfix_str(f"cv f{fold} e{epoch} loss={loss:.6f}")
+            else:
+                bar.set_postfix_str(f"full e{epoch} loss={loss:.6f}")
+
+    progress_thread = threading.Thread(target=consume_progress, daemon=True)
+    progress_thread.start()
+
+    with ProcessPoolExecutor(max_workers=seed_workers, mp_context=ctx) as executor:
+        futures = [
+            executor.submit(
+                run_seed_training,
+                seed,
+                data_file,
+                run_name,
+                5,
+                20,
+                1e-3,
+                512,
+                0.0,
+                64,
+                True,
+                True,
+                str(checkpoints_dir),
+                str(logs_dir),
+                progress_queue,
+            )
+            for seed in seeds
+        ]
+
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            print(
+                f"Seed {result['seed']} done | best_fold_loss={result['best_fold_loss']:.6f},"
+                f" avg_cv_loss={result['avg_cv_loss']:.6f} | log={result['log_path']}",
+                flush=True,
+            )
+
+    stop_event.set()
+    progress_thread.join()
+    for seed, bar in progress_bars.items():
+        if bar.n < bar.total:
+            bar.n = bar.total
+            bar.refresh()
+        bar.close()
+
+    results = sorted(results, key=lambda item: item["seed"])
+    print("\n=== Summary ===", flush=True)
+    for result in results:
+        print(
+            f"Seed {result['seed']}: best_fold_loss={result['best_fold_loss']:.6f},"
+            f" avg_cv_loss={result['avg_cv_loss']:.6f}, checkpoint={result['model_path']}",
+            flush=True,
+        )
+
+    avg_best = np.mean([item["best_fold_loss"] for item in results])
+    avg_cv = np.mean([item["avg_cv_loss"] for item in results])
+    print(f"\nMean best_fold_loss={avg_best:.6f}, Mean avg_cv_loss={avg_cv:.6f}", flush=True)
