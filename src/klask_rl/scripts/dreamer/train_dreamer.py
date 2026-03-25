@@ -421,7 +421,8 @@ def main(config):
             agent._ema_updates = checkpoint["ema_updates"]
         print(f"  Restored agent weights, optimizer states, step={_resume_step}, curriculum_step={_curriculum_step}")
     elif _init_ckpt is not None:
-        tools.load_init_checkpoint(agent, _init_ckpt, config.device)
+        _wm_only = getattr(config, "load_world_model_only", False)
+        tools.load_init_checkpoint(agent, _init_ckpt, config.device, world_model_only=_wm_only)
 
     # Initialise self-play opponent from the (randomly initialised) agent.
     if _self_play_wrapper is not None:
