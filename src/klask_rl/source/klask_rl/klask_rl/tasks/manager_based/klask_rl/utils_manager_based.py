@@ -392,9 +392,16 @@ def ball_speed(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg) -> torch.Tensor
     return speed(vel)
 
 
-def player_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torch.Tensor:
+def peg_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torch.Tensor:
     vel = body_lin_xy_vel_w(env, player_cfg)
     return speed(vel)
+
+
+def peg_speed_exp(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, sigma: float = 0.3) -> torch.Tensor:
+    """Exponential saturation reward for peg speed. Returns ~1.0 when moving, ~0.0 when stationary."""
+    vel = body_lin_xy_vel_w(env, player_cfg)
+    spd = speed(vel)
+    return 1.0 - torch.exp(-spd / sigma)
 
 
 def difference_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg):

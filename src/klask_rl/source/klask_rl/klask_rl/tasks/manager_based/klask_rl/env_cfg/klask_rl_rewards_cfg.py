@@ -20,6 +20,8 @@ from ..utils_manager_based import (
     distance_to_wall,
     in_goal,
     peg_in_defense_line_with_rebounds,
+    peg_speed,
+    peg_speed_exp,
     shot_over_middle,
     termination_reward_time_decay,
 )
@@ -130,6 +132,23 @@ class RewardsCfg:
     )
 
     ball_in_own_half = RewTerm(func=ball_in_own_half, params={"ball_cfg": SceneEntityCfg("ball")}, weight=0.0)
+
+    player_speed = RewTerm(
+        func=peg_speed,
+        params={
+            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+        },
+        weight=0.0,
+    )
+
+    player_speed_exp = RewTerm(
+        func=peg_speed_exp,
+        params={
+            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+            "sigma": 0.3,
+        },
+        weight=0.0,
+    )
 
     close_to_boundaries = RewTerm(
         func=distance_to_wall,
