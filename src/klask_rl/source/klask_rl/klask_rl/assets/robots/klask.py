@@ -10,6 +10,11 @@ KLASK_PARAMS = {
     "decimation": 20,  # system is running at 50Hz (night shift with 100Hz)
     "physics_dt": 0.001,
     "actuator_delay": (0.0, 0.0),
+    "actuator_x_damping": 10.0,
+    "actuator_y_damping": 100.0,
+    "actuator_velocity_limit": 3.0,
+    "actuator_x_effort_limit": 30.0,
+    "actuator_y_effort_limit": 300.0,
     "player_goal": (0.0, -0.17, 0.01905),
     "opponent_goal": (0.0, 0.17, 0.01905),
     "ball_mass_initial": 0.0017,
@@ -22,7 +27,6 @@ KLASK_PARAMS = {
     "ball_dynamic_friction": 0.12,  # 0.03,  # s2r: 0.6
     "max_ball_vel": 5.0,            # 100.0 # s2r: 5.0
     "edge": (-0.16, 0.16, -0.21, -0.02),
-    "additional_observations": False,
 }
 
 KLASK_CFG = ArticulationCfg(
@@ -41,36 +45,36 @@ KLASK_CFG = ArticulationCfg(
         "peg_1x_actuator": DelayedPDActuatorCfg(
             joint_names_expr=["slider_to_peg_1"],
             stiffness=0.0,
-            damping=10.0,
-            velocity_limit=3.0,
-            effort_limit=30.0,
+            damping=KLASK_PARAMS["actuator_x_damping"],
+            velocity_limit=KLASK_PARAMS["actuator_velocity_limit"],
+            effort_limit=KLASK_PARAMS["actuator_x_effort_limit"],
             min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
             max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
         ),
         "peg_1y_actuator": DelayedPDActuatorCfg(
             joint_names_expr=["ground_to_slider_1"],
             stiffness=0.0,
-            damping=100.0,
-            velocity_limit=3.0,
-            effort_limit=300.0,
+            damping=KLASK_PARAMS["actuator_y_damping"],
+            velocity_limit=KLASK_PARAMS["actuator_velocity_limit"],
+            effort_limit=KLASK_PARAMS["actuator_y_effort_limit"],
             min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
             max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
         ),
         "peg_2x_actuator": DelayedPDActuatorCfg(
             joint_names_expr=["slider_to_peg_2"],
             stiffness=0.0,
-            damping=10.0,
-            velocity_limit=3.0,
-            effort_limit=30.0,
+            damping=KLASK_PARAMS["actuator_x_damping"],
+            velocity_limit=KLASK_PARAMS["actuator_velocity_limit"],
+            effort_limit=KLASK_PARAMS["actuator_x_effort_limit"],
             min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
             max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
         ),
         "peg_2y_actuator": DelayedPDActuatorCfg(
             joint_names_expr=["ground_to_slider_2"],
             stiffness=0.0,
-            damping=100.0,
-            velocity_limit=3.0,
-            effort_limit=300.0,
+            damping=KLASK_PARAMS["actuator_y_damping"],
+            velocity_limit=KLASK_PARAMS["actuator_velocity_limit"],
+            effort_limit=KLASK_PARAMS["actuator_y_effort_limit"],
             min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
             max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
         ),
