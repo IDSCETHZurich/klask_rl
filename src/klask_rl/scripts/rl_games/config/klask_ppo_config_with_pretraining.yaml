@@ -153,12 +153,17 @@ domain_randomization:
     static_friction_range: [0.1, 0.28] # [0.2, 0.5] # s2r: [0.1, 0.5]
     dynamic_friction_range: [0.06, 0.2] # [0.3, 0.45] # s2r: [0.2, 0.4]
     restitution_range: [0.25, 0.6] # [0.95, 0.99] # s2r: [0.25, 0.4]
-  material_klask:
+  material_board:
     enable: false
-    static_friction_range: [0.04, 0.14] # [0.2, 0.5] # s2r: [0.1, 0.5]
-    dynamic_friction_range: [0.02, 0.1] # [0.3, 0.45] # s2r: [0.2, 0.4]
-    restitution_range: [0.05, 0.3] # [0.95, 0.99] # s2r: [0.25, 0.4]
+    static_friction_range: [0.04, 0.14]
+    dynamic_friction_range: [0.02, 0.1]
+    restitution_range: [0.05, 0.3]
+  material_peg:
+    enable: false
+    static_friction_range: [0.04, 0.14]
+    dynamic_friction_range: [0.02, 0.1]
+    restitution_range: [0.05, 0.3]
   actuator:
     enable: false
-    stiffness_range: [0.0, 0.0]
-    damping_range: [10.0, 10.0]
+    x_damping_range: [10.0, 10.0]
+    y_damping_range: [100.0, 100.0]

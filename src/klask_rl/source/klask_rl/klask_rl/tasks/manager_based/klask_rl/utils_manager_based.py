@@ -58,6 +58,43 @@ def padded_image_rotated(
     return _pad_image_to_target(images, target_h, target_w)
 
 
+def set_rigid_body_material(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    static_friction: float,
+    dynamic_friction: float,
+    restitution: float,
+):
+    """Set rigid body material properties to fixed values.
+
+    Unlike ``randomize_rigid_body_material``, this simply writes the given
+    values to the PhysX material buffer — no sampling, no buckets.
+    Respects ``asset_cfg.body_ids`` so it can target a subset of bodies.
+    """
+    asset: Articulation | RigidObject = env.scene[asset_cfg.name]
+    materials = asset.root_physx_view.get_material_properties()
+    all_ids = torch.arange(env.scene.num_envs, device="cpu")
+
+    if isinstance(asset, Articulation) and asset_cfg.body_ids != slice(None):
+        num_shapes_per_body = []
+        for link_path in asset.root_physx_view.link_paths[0]:
+            link_view = asset._physics_sim_view.create_rigid_body_view(link_path)
+            num_shapes_per_body.append(link_view.max_shapes)
+        for body_id in asset_cfg.body_ids:
+            start_idx = sum(num_shapes_per_body[:body_id])
+            end_idx = start_idx + num_shapes_per_body[body_id]
+            materials[:, start_idx:end_idx, 0] = static_friction
+            materials[:, start_idx:end_idx, 1] = dynamic_friction
+            materials[:, start_idx:end_idx, 2] = restitution
+    else:
+        materials[:, :, 0] = static_friction
+        materials[:, :, 1] = dynamic_friction
+        materials[:, :, 2] = restitution
+
+    asset.root_physx_view.set_material_properties(materials, all_ids)
+
+
 def reset_ball_hit_tracking(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,

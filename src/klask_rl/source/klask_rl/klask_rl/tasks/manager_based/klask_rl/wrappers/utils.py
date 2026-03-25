@@ -22,7 +22,8 @@ def configure_domain_randomization(env_cfg, dr_cfg):
         resolved to a plain dict.  ``None`` disables all DR events.
     """
     event_names = ["add_ball_mass", "randomize_material_ball",
-                   "randomize_material_klask", "randomize_actuator"]
+                   "randomize_material_board", "randomize_material_peg",
+                   "randomize_actuator_x", "randomize_actuator_y"]
 
     if dr_cfg is None:
         for name in event_names:
@@ -46,19 +47,29 @@ def configure_domain_randomization(env_cfg, dr_cfg):
     else:
         env_cfg.events.randomize_material_ball = None
 
-    # Material: klask
-    mk = dr_cfg.get("material_klask", {})
-    if mk.get("enable", False):
-        env_cfg.events.randomize_material_klask.params["static_friction_range"] = tuple(mk["static_friction_range"])
-        env_cfg.events.randomize_material_klask.params["dynamic_friction_range"] = tuple(mk["dynamic_friction_range"])
-        env_cfg.events.randomize_material_klask.params["restitution_range"] = tuple(mk["restitution_range"])
+    # Material: board (walls, ground, sliders)
+    mb2 = dr_cfg.get("material_board", {})
+    if mb2.get("enable", False):
+        env_cfg.events.randomize_material_board.params["static_friction_range"] = tuple(mb2["static_friction_range"])
+        env_cfg.events.randomize_material_board.params["dynamic_friction_range"] = tuple(mb2["dynamic_friction_range"])
+        env_cfg.events.randomize_material_board.params["restitution_range"] = tuple(mb2["restitution_range"])
     else:
-        env_cfg.events.randomize_material_klask = None
+        env_cfg.events.randomize_material_board = None
 
-    # Actuator gains
+    # Material: peg
+    mp = dr_cfg.get("material_peg", {})
+    if mp.get("enable", False):
+        env_cfg.events.randomize_material_peg.params["static_friction_range"] = tuple(mp["static_friction_range"])
+        env_cfg.events.randomize_material_peg.params["dynamic_friction_range"] = tuple(mp["dynamic_friction_range"])
+        env_cfg.events.randomize_material_peg.params["restitution_range"] = tuple(mp["restitution_range"])
+    else:
+        env_cfg.events.randomize_material_peg = None
+
+    # Actuator gains (x and y have separate damping ranges; stiffness stays 0)
     ac = dr_cfg.get("actuator", {})
     if ac.get("enable", False):
-        env_cfg.events.randomize_actuator.params["stiffness_distribution_params"] = tuple(ac["stiffness_range"])
-        env_cfg.events.randomize_actuator.params["damping_distribution_params"] = tuple(ac["damping_range"])
+        env_cfg.events.randomize_actuator_x.params["damping_distribution_params"] = tuple(ac["x_damping_range"])
+        env_cfg.events.randomize_actuator_y.params["damping_distribution_params"] = tuple(ac["y_damping_range"])
     else:
-        env_cfg.events.randomize_actuator = None
+        env_cfg.events.randomize_actuator_x = None
+        env_cfg.events.randomize_actuator_y = None
