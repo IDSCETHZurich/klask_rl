@@ -26,7 +26,7 @@ hydra:
   searchpath:
     - file://${script_dir:}/r2dreamer/configs
 
-batch_size: 8
+batch_size: 4
 batch_length: 128
 micro_batch_size: 2
 
@@ -34,7 +34,7 @@ micro_batch_size: 2
 env:
   task: 'isaaclab_Klask-Rl-Dreamer-v0'
   steps: 1e7
-  env_num: 16
+  env_num: 8
   eval_episode_num: 10
   action_repeat: 1
   decimation: 20
