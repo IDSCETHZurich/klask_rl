@@ -1,3 +1,5 @@
+import math
+
 import torch
 from gymnasium import Wrapper
 
@@ -327,6 +329,126 @@ class KlaskRlCollisionAvoidanceWrapper(Wrapper):
 
     def interpolate_vel(self, distance):
         return (self.MAX_VEL / self.DEACCELERATION_DISTANCE) * distance
+
+
+class InitializationWrapper(Wrapper):
+    """Overrides the reset state with configurable initialization helpers.
+
+    Currently supports setting the player's initial velocity toward the ball
+    with optional annealing over training.  Additional reset-time overrides
+    (e.g. opponent position) can be added here in the future.
+
+    The ``init_velocity`` config key accepts the same schedule types as
+    :class:`CurriculumWrapper` (``static``, ``linear``, ``sigmoid``,
+    ``exponential``, ``schedule``), using ``speed`` instead of ``weight``.
+
+    Example config::
+
+        init_velocity:
+          type: linear
+          speed: [0.6, 0.0]
+          num_steps: 5_000_000
+    """
+
+    def __init__(self, env, cfg: dict):
+        super().__init__(env)
+        self.cfg = cfg
+        self._step = 0
+        self._x_joint_id: int | None = None  # lazily resolved on first reset
+        self._y_joint_id: int | None = None
+
+    def _resolve_joint_ids(self):
+        klask_art = self.env.unwrapped.scene["klask"]
+        x_ids, _ = klask_art.find_joints(["slider_to_peg_1"])
+        y_ids, _ = klask_art.find_joints(["ground_to_slider_1"])
+        self._x_joint_id = x_ids[0]
+        self._y_joint_id = y_ids[0]
+
+    def _compute_speed(self, spec: dict, step: int) -> float:
+        """Return the current speed scalar from a schedule spec."""
+        # Resolve active phase for 'schedule' type.
+        if spec["type"] == "schedule":
+            active = spec["phases"][-1]
+            for phase in spec["phases"]:
+                start, end = phase["steps"]
+                if start <= step and (end == -1 or step <= end):
+                    active = phase
+                    break
+        else:
+            active = spec
+
+        phase_type = active["type"]
+        raw = active["speed"]
+
+        if phase_type == "static":
+            return float(raw)
+
+        start_step = active["steps"][0] if "steps" in active else 0
+
+        if phase_type == "linear":
+            end_step = active["steps"][1] if "steps" in active else active["num_steps"]
+            progress = min(max((step - start_step) / (end_step - start_step), 0.0), 1.0)
+            return float(raw[0] + (raw[1] - raw[0]) * progress)
+
+        if phase_type == "sigmoid":
+            end_step = active["steps"][1] if "steps" in active else active["num_steps"]
+            progress = min(max((step - start_step) / (end_step - start_step), 0.0), 1.0)
+            k = active.get("steepness", 6.0)
+
+            def _sig(x):
+                return 1.0 / (1.0 + math.exp(-x))
+
+            normalized = (_sig(k * (2.0 * progress - 1.0)) - _sig(-k)) / (_sig(k) - _sig(-k))
+            return float(raw[0] + (raw[1] - raw[0]) * normalized)
+
+        if phase_type == "exponential":
+            elapsed = max(step - start_step, 0)
+            return float(raw) * math.exp(-elapsed * active["decay_rate"])
+
+        return 0.0
+
+    def reset(self, *args, **kwargs):
+        obs, info = self.env.reset(*args, **kwargs)
+
+        init_vel_spec = self.cfg.get("init_velocity")
+        if init_vel_spec is None:
+            return obs, info
+
+        speed = self._compute_speed(init_vel_spec, self._step)
+        if speed <= 0.0:
+            return obs, info
+
+        if self._x_joint_id is None:
+            self._resolve_joint_ids()
+
+        # Observation layout (policy group, player perspective):
+        #   0:2  own position XY
+        #   2    own X velocity  (slider_to_peg_1)
+        #   3    own Y velocity  (ground_to_slider_1)
+        #   8:10 ball position XY
+        player_pos = obs["policy"][:, 0:2]
+        ball_pos = obs["policy"][:, 8:10]
+        direction = ball_pos - player_pos
+        norm = direction.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+        velocity = (direction / norm) * speed  # [num_envs, 2]
+
+        # Write directly to the physics simulation.
+        klask_art = self.env.unwrapped.scene["klask"]
+        num_envs = self.env.unwrapped.num_envs
+        vel_2d = torch.zeros(num_envs, 2, device=velocity.device)
+        vel_2d[:, 0] = velocity[:, 0]  # x → slider_to_peg_1
+        vel_2d[:, 1] = velocity[:, 1]  # y → ground_to_slider_1
+        klask_art.write_joint_velocity_to_sim(vel_2d, joint_ids=[self._x_joint_id, self._y_joint_id])
+
+        # Patch the returned obs so the first observation is self-consistent.
+        obs["policy"][:, 2] = velocity[:, 0]
+        obs["policy"][:, 3] = velocity[:, 1]
+
+        return obs, info
+
+    def step(self, actions):
+        self._step += self.env.unwrapped.num_envs
+        return self.env.step(actions)
 
 
 class ActionHistoryWrapper(Wrapper):

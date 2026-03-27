@@ -11,6 +11,7 @@ from .klask_rl_ovservation_wrappers import (
 from .klask_rl_training_wrappers import (
     ActionHistoryWrapper,
     CurriculumWrapper,
+    InitializationWrapper,
     KlaskRlCollisionAvoidanceWrapper,
     RewardWeightWrapper,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "KlaskRlAgentOpponentWrapper",
     "RewardWeightWrapper",
     "CurriculumWrapper",
+    "InitializationWrapper",
     "KlaskRlCollisionAvoidanceWrapper",
     "ActionHistoryWrapper",
     "Sb3VecHerWrapper",
