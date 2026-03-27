@@ -145,6 +145,21 @@ env:
     player_in_goal: true
     opponent_in_goal: true
 
+  initialization:
+    init_velocity:
+      type: schedule
+      phases:
+        - type: static
+          speed: 1.0
+          steps: [0, 1_000_000]
+        - type: sigmoid
+          speed: [1.0, 0.0]
+          steps: [1_000_000, 3_000_000]
+          steepness: 6.0
+        - type: static
+          speed: 0.0
+          steps: [3_000_000, -1]
+
 buffer:
   batch_size: ${batch_size}
   batch_length: ${batch_length}
