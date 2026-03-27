@@ -10,15 +10,15 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_pretraining_vision_pretrain+speed_1.0
+wandb_name: dreamer_pretraining_vision_size128
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: 'cuda:0'
-init_checkpoint: /workspace/klask_rl/logdir/2026-03-24/11-50-33/checkpoint_3000016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
-load_world_model_only: true
+init_checkpoint: null # Path to checkpoint for weight-only init (pretrain -> finetune)
+load_world_model_only: false
 
 hydra:
   run:
@@ -46,7 +46,7 @@ env:
   max_velocity: 1.0 # [m/s] Maximum velocity for player movement
   episode_length_s: 3.0 # [s] Episode length in seconds
   actuator_model: True
-  size: [64, 64]
+  size: [128, 128]
   encoder:
     mlp_keys: '$^'
     cnn_keys: 'image'
