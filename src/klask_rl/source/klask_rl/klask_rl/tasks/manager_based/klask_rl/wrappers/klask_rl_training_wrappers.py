@@ -332,11 +332,14 @@ class KlaskRlCollisionAvoidanceWrapper(Wrapper):
 
 
 class InitializationWrapper(Wrapper):
-    """Overrides the reset state with configurable initialization helpers.
+    """Manages reset-time initialization helpers via a configurable schedule.
 
-    Currently supports setting the player's initial velocity toward the ball
-    with optional annealing over training.  Additional reset-time overrides
-    (e.g. opponent position) can be added here in the future.
+    Sets ``env.unwrapped._init_velocity_speed`` before every ``reset()`` and
+    ``step()`` call.  The event function ``reset_player_velocity_toward_ball``
+    registered in ``EventCfgDreamer`` reads this attribute and writes the
+    corresponding velocity into the physics simulation *inside* the event
+    manager — ensuring that observations (and ``ActuatorModelWrapper``'s state
+    history) see the correct non-zero velocity from the very first step.
 
     The ``init_velocity`` config key accepts the same schedule types as
     :class:`CurriculumWrapper` (``static``, ``linear``, ``sigmoid``,
@@ -344,29 +347,29 @@ class InitializationWrapper(Wrapper):
 
     Example config::
 
-        init_velocity:
-          type: linear
-          speed: [0.6, 0.0]
-          num_steps: 5_000_000
+        initialization:
+          init_velocity:
+            type: schedule
+            phases:
+              - type: static
+                speed: 1.0
+                steps: [0, 1_000_000]
+              - type: sigmoid
+                speed: [1.0, 0.0]
+                steps: [1_000_000, 3_000_000]
+                steepness: 6.0
+              - type: static
+                speed: 0.0
+                steps: [3_000_000, -1]
     """
 
     def __init__(self, env, cfg: dict):
         super().__init__(env)
         self.cfg = cfg
         self._step = 0
-        self._x_joint_id: int | None = None  # lazily resolved on first reset
-        self._y_joint_id: int | None = None
-
-    def _resolve_joint_ids(self):
-        klask_art = self.env.unwrapped.scene["klask"]
-        x_ids, _ = klask_art.find_joints(["slider_to_peg_1"])
-        y_ids, _ = klask_art.find_joints(["ground_to_slider_1"])
-        self._x_joint_id = x_ids[0]
-        self._y_joint_id = y_ids[0]
 
     def _compute_speed(self, spec: dict, step: int) -> float:
         """Return the current speed scalar from a schedule spec."""
-        # Resolve active phase for 'schedule' type.
         if spec["type"] == "schedule":
             active = spec["phases"][-1]
             for phase in spec["phases"]:
@@ -407,47 +410,21 @@ class InitializationWrapper(Wrapper):
 
         return 0.0
 
-    def reset(self, *args, **kwargs):
-        obs, info = self.env.reset(*args, **kwargs)
-
+    def _set_env_speed(self):
         init_vel_spec = self.cfg.get("init_velocity")
-        if init_vel_spec is None:
-            return obs, info
+        speed = self._compute_speed(init_vel_spec, self._step) if init_vel_spec else 0.0
+        self.env.unwrapped._init_velocity_speed = speed
 
-        speed = self._compute_speed(init_vel_spec, self._step)
-        if speed <= 0.0:
-            return obs, info
-
-        if self._x_joint_id is None:
-            self._resolve_joint_ids()
-
-        # Observation layout (policy group, player perspective):
-        #   0:2  own position XY
-        #   2    own X velocity  (slider_to_peg_1)
-        #   3    own Y velocity  (ground_to_slider_1)
-        #   8:10 ball position XY
-        player_pos = obs["policy"][:, 0:2]
-        ball_pos = obs["policy"][:, 8:10]
-        direction = ball_pos - player_pos
-        norm = direction.norm(dim=-1, keepdim=True).clamp(min=1e-6)
-        velocity = (direction / norm) * speed  # [num_envs, 2]
-
-        # Write directly to the physics simulation.
-        klask_art = self.env.unwrapped.scene["klask"]
-        num_envs = self.env.unwrapped.num_envs
-        vel_2d = torch.zeros(num_envs, 2, device=velocity.device)
-        vel_2d[:, 0] = velocity[:, 0]  # x → slider_to_peg_1
-        vel_2d[:, 1] = velocity[:, 1]  # y → ground_to_slider_1
-        klask_art.write_joint_velocity_to_sim(vel_2d, joint_ids=[self._x_joint_id, self._y_joint_id])
-
-        # Patch the returned obs so the first observation is self-consistent.
-        obs["policy"][:, 2] = velocity[:, 0]
-        obs["policy"][:, 3] = velocity[:, 1]
-
-        return obs, info
+    def reset(self, *args, **kwargs):
+        # Set speed BEFORE env.reset() so the event manager reads the correct value.
+        self._set_env_speed()
+        return self.env.reset(*args, **kwargs)
 
     def step(self, actions):
         self._step += self.env.unwrapped.num_envs
+        # Update speed BEFORE env.step() so partial resets triggered inside
+        # env.step() also see the current scheduled speed.
+        self._set_env_speed()
         return self.env.step(actions)
 
 
