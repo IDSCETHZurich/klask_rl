@@ -8,7 +8,7 @@ from klask_rl.assets.robots.klask import KLASK_PARAMS
 from .env_cfg import KlaskRlSceneCfg, KlaskRlDreamerSceneCfg
 from .env_cfg import ActionsCfg, ActionsCfgPlayerOnly
 from .env_cfg import ObservationsCfg, ObservationsExtendedCfg, TwoStageHerObservationsCfg, DreamerObservationsCfg
-from .env_cfg import EventCfg, EventCfgSac
+from .env_cfg import EventCfg, EventCfgSac, EventCfgDreamer
 from .env_cfg import (
     RewardsCfg,
     RewardsCfgDenseBallHit,
@@ -143,7 +143,7 @@ class KlaskRlDreamerEnvCfg(ManagerBasedRLEnvCfg):
     # Basic settings
     observations = DreamerObservationsCfg()
     actions = ActionsCfg()
-    events = EventCfg()
+    events = EventCfgDreamer()
     rewards = RewardsCfg()
     terminations = TerminationsCfg()
     episode_length_s = KLASK_PARAMS["timeout"]

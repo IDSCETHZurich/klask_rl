@@ -3,7 +3,10 @@
 # =============================================================================
 
 import argparse
+import cProfile
+import os
 import pathlib
+import pstats
 import sys
 
 # Auto-detect vision env from CLI and enable cameras before AppLauncher
@@ -72,7 +75,6 @@ from envs.isaaclab import IsaacLabVecEnv
 from gymnasium import Wrapper
 from isaaclab.sim import RenderCfg
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
-from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     CurriculumWrapper,
     KlaskRlRandomOpponentWrapper,
@@ -82,17 +84,12 @@ from trainer import OnlineTrainer
 
 
 class EpisodeMetricsWrapper(Wrapper):
-    """Captures episode-level metrics from the IsaacLab info dict and logs them.
+    """Logs per-term episode rewards and termination rates.
 
-    IsaacLab populates ``info["log"]`` with per-step scalars such as
-    ``Episode_Termination/goal_scored`` (fraction of envs where that
-    termination fired).  The generic ``IsaacLabVecEnv`` adapter discards
-    the info dict, so this wrapper sits just below it and forwards
-    the metrics to a logger.
-
-    Metrics are accumulated over a sliding window of recent episodes
-    (default 100) so that logged values represent a meaningful rate
-    rather than a single episode's binary indicator.
+    Reads directly from the reward and termination managers so that
+    logged values are in the **same scale** as ``episode/score`` (the raw
+    cumulative return the optimizer trains on).  A sliding window of
+    recent episodes (default 100) smooths the logged values.
 
     Call :meth:`set_logger` after construction to enable logging.
     """
@@ -101,54 +98,60 @@ class EpisodeMetricsWrapper(Wrapper):
         super().__init__(env)
         self._logger = None
         self._window_size = window_size
-        # Per-episode accumulators: key -> running sum for the current episode
-        self._ep_sums: dict[str, float] = {}
-        self._ep_counts: dict[str, int] = {}
-        # Sliding window of completed episode means: key -> deque of floats
         from collections import deque
 
-        self._history: dict[str, deque] = {}
         self._deque_factory = lambda: deque(maxlen=self._window_size)
+        self._reward_history: dict[str, deque] = {}
+        self._term_history: dict[str, deque] = {}
 
     def set_logger(self, logger):
         """Attach a :class:`tools.Logger` for autonomous metric logging."""
         self._logger = logger
 
     def step(self, actions):
-        obs, rew, terminated, truncated, info = self.env.step(actions)
-        if self._logger is not None:
-            # Accumulate per-step values for the current episode
-            for key, val in info.get("log", {}).items():
-                if isinstance(val, torch.Tensor):
-                    val = val.item() if val.ndim == 0 else val.mean().item()
-                val = float(val)
-                self._ep_sums[key] = self._ep_sums.get(key, 0.0) + val
-                self._ep_counts[key] = self._ep_counts.get(key, 0) + 1
+        if self._logger is None:
+            return self.env.step(actions)
 
-            # On episode end, push the per-episode mean into the sliding
-            # window and log the windowed average.
-            if isinstance(terminated, torch.Tensor):
-                done = (terminated | truncated).any().item()
-            else:
-                done = terminated or truncated
-            if done:
-                for key in list(self._ep_sums.keys()):
-                    ep_mean = self._ep_sums[key] / max(self._ep_counts[key], 1)
-                    if key not in self._history:
-                        self._history[key] = self._deque_factory()
-                    self._history[key].append(ep_mean)
-                    # Log the windowed average across recent episodes
-                    window = self._history[key]
-                    windowed_avg = sum(window) / len(window)
-                    key = key.lower()
-                    if key.startswith("episode_"):
-                        key = key.replace("_", "/", 1)
-                    else:
-                        key = f"episode/{key}"
-                    self._logger.scalar(key, windowed_avg)
-                # Reset per-episode accumulators
-                self._ep_sums.clear()
-                self._ep_counts.clear()
+        # Snapshot episode sums BEFORE step — _reset_idx (called inside
+        # step) zeros them for done envs, so they'd be lost afterwards.
+        rm = self.env.unwrapped.reward_manager
+        pre_sums = {name: tensor.clone() for name, tensor in rm._episode_sums.items()}
+
+        obs, rew, terminated, truncated, info = self.env.step(actions)
+
+        done = terminated | truncated
+        done_ids = done.nonzero(as_tuple=False).squeeze(-1)
+
+        if done_ids.numel() > 0:
+            dt = self.env.unwrapped.step_dt
+
+            # Per-term cumulative reward for each done env.
+            # pre_sums has the total through step N-1; _step_reward has
+            # step N's func*weight (without dt), so multiply by dt.
+            for env_id in done_ids.tolist():
+                for term_idx, term_name in enumerate(rm._term_names):
+                    full_sum = (
+                        pre_sums[term_name][env_id].item()
+                        + rm._step_reward[env_id, term_idx].item() * dt
+                    )
+                    if term_name not in self._reward_history:
+                        self._reward_history[term_name] = self._deque_factory()
+                    self._reward_history[term_name].append(full_sum)
+
+            for term_name, window in self._reward_history.items():
+                self._logger.scalar(f"episode/reward/{term_name}", sum(window) / len(window))
+
+            # Termination metrics: which termination fired for each done env.
+            tm = self.env.unwrapped.termination_manager
+            for env_id in done_ids.tolist():
+                for term_idx, term_name in enumerate(tm._term_names):
+                    fired = tm._term_dones[env_id, term_idx].item()
+                    if term_name not in self._term_history:
+                        self._term_history[term_name] = self._deque_factory()
+                    self._term_history[term_name].append(float(fired))
+
+            for term_name, window in self._term_history.items():
+                self._logger.scalar(f"episode/termination/{term_name}", sum(window) / len(window))
 
         return obs, rew, terminated, truncated, info
 
@@ -222,13 +225,26 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
         env_cfg.sim.dt = float(sim_dt)
 
     env_cfg.scene.num_envs = int(config.env_num)
-    env_cfg.decimation = int(config.action_repeat)
+    env_cfg.decimation = int(config.decimation)
     env_cfg.seed = int(config.seed)
     env_cfg.episode_length_s = config.episode_length_s
 
     # IsaacLab defaults to DLSS which smooths the image significantly
     # so we disable the antialiasing for a more pixelated (and hence more realistic) image.
     env_cfg.sim.render = RenderCfg(antialiasing_mode="Off")
+
+    # Null out disabled termination terms on env_cfg BEFORE construction so
+    # IsaacLab's TerminationManager never registers them (_prepare_terms skips None).
+    terminations_cfg = getattr(config, "terminations", None)
+    if terminations_cfg is not None and hasattr(env_cfg, "terminations"):
+        term_dict = (
+            OmegaConf.to_container(terminations_cfg, resolve=True)
+            if OmegaConf.is_config(terminations_cfg)
+            else dict(terminations_cfg)
+        )
+        for term, active in term_dict.items():
+            if not active and hasattr(env_cfg.terminations, term):
+                setattr(env_cfg.terminations, term, None)
 
     # --- Create the base gymnasium env ---
     isaac_env = gym.make(gym_id, cfg=env_cfg, render_mode=render_mode)
@@ -237,18 +253,18 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
     isaac_env = OpponentActionWrapper(isaac_env)
 
     # --- 1. Set bounded action space ---
+    # Scale the IsaacLab action terms so that the agent's [-1, 1] output
+    # maps to [-max_velocity, +max_velocity] m/s.  Simply overriding the
+    # gym action-space metadata is NOT enough — Dreamer's actor always
+    # outputs in [-1, 1] regardless of the reported space bounds.
     max_velocity = getattr(config, "max_velocity", None)
     if max_velocity is not None:
-        action_dim = isaac_env.unwrapped.single_action_space.shape[-1]
-        isaac_env.unwrapped.single_action_space = gym.spaces.Box(
-            low=-float(max_velocity),
-            high=float(max_velocity),
-            shape=(action_dim,),
-            dtype=np.float32,
-        )
-        isaac_env.unwrapped.action_space = gym.vector.utils.batch_space(
-            isaac_env.unwrapped.single_action_space, isaac_env.unwrapped.num_envs
-        )
+        vel = float(max_velocity)
+        # Set the scale on every JointVelocityAction term in the action manager
+        # so that raw_action * scale produces the desired velocity in m/s.
+        action_mgr = isaac_env.unwrapped.action_manager
+        for term in action_mgr._terms.values():
+            term._scale = vel
 
     # --- 2. Actuator model wrapper ---
     if getattr(config, "actuator_model", False):
@@ -262,15 +278,6 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
         else:
             rewards_dict = dict(rewards_cfg)
         isaac_env = CurriculumWrapper(isaac_env, rewards_dict)
-
-    # --- 4. Termination filtering ---
-    terminations_cfg = getattr(config, "terminations", None)
-    if terminations_cfg is not None:
-        if OmegaConf.is_config(terminations_cfg):
-            term_dict = OmegaConf.to_container(terminations_cfg, resolve=True)
-        else:
-            term_dict = dict(terminations_cfg)
-        set_terminations(isaac_env, term_dict)
 
     # --- 5. Opponent wrapper ---
     if self_play:
@@ -379,6 +386,9 @@ def main(config):
         act_space,
     ).to(config.device)
 
+    # Validate init_checkpoint path early.
+    _init_ckpt = config.init_checkpoint
+
     # Resume from checkpoint if one exists in the logdir.
     _resume_step = 0
     checkpoint_path = logdir / "latest.pt"
@@ -410,6 +420,9 @@ def main(config):
         if "ema_updates" in checkpoint and hasattr(agent, "_ema_updates"):
             agent._ema_updates = checkpoint["ema_updates"]
         print(f"  Restored agent weights, optimizer states, step={_resume_step}, curriculum_step={_curriculum_step}")
+    elif _init_ckpt is not None:
+        _wm_only = getattr(config, "load_world_model_only", False)
+        tools.load_init_checkpoint(agent, _init_ckpt, config.device, world_model_only=_wm_only)
 
     # Initialise self-play opponent from the (randomly initialised) agent.
     if _self_play_wrapper is not None:
@@ -499,12 +512,29 @@ def main(config):
     finally:
         _save_checkpoint(policy_trainer._step)
 
+        # Dump cProfile data before simulation_app.close() kills the process.
+        if _PROFILER is not None:
+            _PROFILER.disable()
+            prof_path = os.environ.get("PROFILE_OUTPUT", "train_profile.prof")
+            _PROFILER.dump_stats(prof_path)
+            stats = pstats.Stats(_PROFILER)
+            stats.sort_stats("cumulative")
+            stats.print_stats(40)
+            print(f"\nFull profile saved to: {prof_path}")
+
         logger.close(exit_code=exit_code)
         vec_env._env.close()
         simulation_app.close()
 
 
+_PROFILER = None
+
 if __name__ == "__main__":
     # Forward only the Hydra-style args (everything after AppLauncher args).
     sys.argv = [sys.argv[0]] + hydra_args
+
+    if os.environ.get("PROFILE", ""):
+        _PROFILER = cProfile.Profile()
+        _PROFILER.enable()
+
     main()

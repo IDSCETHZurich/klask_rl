@@ -82,7 +82,6 @@ from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
-from klask_rl.tasks.manager_based.klask_rl.utils_manager_based import set_terminations
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     ActionHistoryWrapper,
     CurriculumWrapper,
@@ -172,6 +171,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     clip_actions = agent_cfg["params"]["env"].get("clip_actions", math.inf)
     clip_obs = agent_cfg["params"]["env"].get("clip_observations", math.inf)
 
+    # Null out disabled termination terms on env_cfg BEFORE construction.
+    if "terminations" in agent_cfg and hasattr(env_cfg, "terminations"):
+        for term, active in agent_cfg["terminations"].items():
+            if not active and hasattr(env_cfg.terminations, term):
+                setattr(env_cfg.terminations, term, None)
+
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     # wrap for video recording
@@ -244,10 +249,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(config_name, num_actors, **kwargs),
         )
         env_configurations.register("rlgpu", {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: env})
-
-    # set active termination terms specified in agent_cfg:
-    if "terminations" in agent_cfg.keys():
-        set_terminations(env, agent_cfg["terminations"])
 
     # set number of actors into agent config
     agent_cfg["params"]["config"]["num_actors"] = env.unwrapped.num_envs

@@ -326,8 +326,8 @@ def shot_over_middle(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, weight: f
     ball_vel = root_lin_xy_vel_w(env, ball_cfg)  # shape: (num_envs, 2)
 
     # Detect near center line and moving forward in +y direction
-    is_near_center = (ball_pos[:, 1] >= 0.002) & (ball_pos[:, 1] <= 0.005)
-    is_moving_forward = ball_vel[:, 1] > 0.0
+    is_near_center = (ball_pos[:, 1] >= 0.0) & (ball_pos[:, 1] <= 0.02)
+    is_moving_forward = ball_vel[:, 1] > 0.1
     if weight is None:
         return (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
     return weight * (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
@@ -392,9 +392,16 @@ def ball_speed(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg) -> torch.Tensor
     return speed(vel)
 
 
-def player_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torch.Tensor:
+def peg_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torch.Tensor:
     vel = body_lin_xy_vel_w(env, player_cfg)
     return speed(vel)
+
+
+def peg_speed_exp(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, sigma: float = 0.3) -> torch.Tensor:
+    """Exponential saturation reward for peg speed. Returns ~1.0 when moving, ~0.0 when stationary."""
+    vel = body_lin_xy_vel_w(env, player_cfg)
+    spd = speed(vel)
+    return 1.0 - torch.exp(-spd / sigma)
 
 
 def difference_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg):
@@ -731,20 +738,3 @@ def distance_ball_to_player(
     return dist.unsqueeze(-1)
 
 
-def set_terminations(env, cfg):
-    """
-    Removes active termination terms from the environment according
-    to specified terms in cfg.
-
-    param cfg: dict {term: active} containing term name to active bool mappings
-    """
-    manager = env.unwrapped.termination_manager
-    for term, active in cfg.items():
-        if not active:
-            try:
-                idx = manager._term_names.index(term)
-                manager._term_names.pop(idx)
-                manager._term_cfgs.pop(idx)
-                manager._term_dones.pop(term)
-            except ValueError:
-                continue

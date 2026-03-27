@@ -6,7 +6,7 @@ from .klask_rl_observations_cfg import (
     TwoStageHerObservationsCfg,
     DreamerObservationsCfg,
 )
-from .klask_rl_event_cfg import EventCfg, EventCfgSac
+from .klask_rl_event_cfg import EventCfg, EventCfgSac, EventCfgDreamer
 from .klask_rl_rewards_cfg import (
     RewardsCfg,
     RewardsCfgDenseBallHit,
@@ -30,6 +30,7 @@ __all__ = [
     "DreamerObservationsCfg",
     "EventCfg",
     "EventCfgSac",
+    "EventCfgDreamer",
     "RewardsCfg",
     "RewardsCfgSparseHer",
     "RewardsCfgDenseBallHit",

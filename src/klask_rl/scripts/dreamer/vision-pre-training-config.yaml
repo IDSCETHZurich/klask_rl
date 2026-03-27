@@ -5,22 +5,20 @@ defaults:
   - _self_
 
 model:
-  rep_loss: "dreamer"
-  imag_horizon: 50
-  horizon: 500
+  rep_loss: 'dreamer'
 
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_no_acmodel_wpt_bqvln4el_2.2M
+wandb_name: dreamer_pretraining_vision_pretrain+speed
 
 # Initialization
-logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
+logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
-device: "cuda:0"
-init_checkpoint: /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_2200016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
-load_world_model_only: false # When true + init_checkpoint set: load only world model weights (encoder/rssm/reward/cont/decoder), skip actor/critic
+device: 'cuda:0'
+init_checkpoint: /workspace/klask_rl/logdir/2026-03-24/11-50-33/checkpoint_3000016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+load_world_model_only: true
 
 hydra:
   run:
@@ -33,7 +31,7 @@ batch_length: 128
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
-  task: "isaaclab_Klask-Rl-Dreamer-v0"
+  task: 'isaaclab_Klask-Rl-Dreamer-v0'
   steps: 1e7
   env_num: 16
   eval_episode_num: 10
@@ -44,16 +42,16 @@ env:
   sim_dt: 0.001
   seed: ${seed}
   device: ${device}
-  max_velocity: 0.6 # [m/s] Maximum velocity for player movement
-  episode_length_s: 5.0 # [s] Episode length in seconds
-  actuator_model: False
+  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
+  episode_length_s: 3.0 # [s] Episode length in seconds
+  actuator_model: True
   size: [64, 64]
   encoder:
-    mlp_keys: "policy"
-    cnn_keys: "image"
+    mlp_keys: '$^'
+    cnn_keys: 'image'
   decoder:
-    mlp_keys: "policy"
-    cnn_keys: "image"
+    mlp_keys: '$^'
+    cnn_keys: 'image'
   rewards:
     time_punishment:
       type: static
@@ -62,11 +60,12 @@ env:
       type: static
       weight: 0.0
     shot_over_middle_line:
-      type: static
-      weight: 0.0
+      type: exponential
+      weight: 5000.0
+      decay_rate: 1.0e-07
     player_in_goal:
       type: static
-      weight: -1500.0
+      weight: 0.0
     opponent_in_goal:
       type: static
       weight: 0.0
@@ -75,28 +74,55 @@ env:
       weight: 2500.0
     goal_conceded:
       type: static
-      weight: -1500.0
-    distance_player_ball_own_half:
-      type: static
       weight: 0.0
+    distance_player_ball_own_half:
+      type: schedule
+      phases:
+        - type: static
+          weight: 100.0
+          steps: [0, 500_000]
+        - type: sigmoid
+          weight: [100.0, 10.0]
+          steps: [500_000, 1_000_000]
+          steepness: 6.0
+        - type: static
+          weight: 10.0
+          steps: [1_000_000, -1]
     distance_ball_opponent_goal:
       type: exponential
       weight: 0.0
-      decay_rate: 1.0e-6
+      decay_rate: 1.0e-07
     distance_ball_own_goal:
       type: exponential
       weight: 0.0
-      decay_rate: 1.0e-6
+      decay_rate: 1.0e-07
     ball_speed:
-      type: static
+      type: exponential
       weight: 0.0
+      decay_rate: 1.0e-07
     ball_stationary:
       type: static
       weight: 0.0
     collision_player_ball:
-      type: exponential
-      weight: 50.0
-      decay_rate: 1.0e-6
+      type: schedule
+      phases:
+        - type: static
+          weight: 300.0
+          steps: [0, 1_000_000]
+        - type: sigmoid
+          weight: [300.0, 150.0]
+          steps: [1_000_000, 1_500_000]
+          steepness: 6.0
+        - type: static
+          weight: 150.0
+          steps: [1_500_000, 2_500_000]
+        - type: sigmoid
+          weight: [150.0, 50.0]
+          steps: [2_500_000, 3_000_000]
+          steepness: 6.0
+        - type: static
+          weight: 50.0
+          steps: [3_000_000, -1]
     ball_in_own_half:
       type: static
       weight: 0.0
@@ -104,6 +130,12 @@ env:
       type: static
       weight: 0.0
     player_strategically_positioned:
+      type: static
+      weight: 0.0
+    player_speed:
+      type: static
+      weight: 10.0
+    player_speed_exp:
       type: static
       weight: 0.0
   terminations:
@@ -118,7 +150,7 @@ buffer:
   batch_length: ${batch_length}
   max_size: 5e5
   device: ${device}
-  storage_device: "cpu"
+  storage_device: 'cpu'
 
 trainer:
   steps: ${env.steps}
