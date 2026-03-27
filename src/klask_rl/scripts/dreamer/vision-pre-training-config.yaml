@@ -28,6 +28,7 @@ hydra:
 
 batch_size: 8
 batch_length: 128
+micro_batch_size: 2
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
