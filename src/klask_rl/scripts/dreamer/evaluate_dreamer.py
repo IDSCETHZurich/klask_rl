@@ -217,13 +217,12 @@ def _make_eval_env(env_config, num_envs, episode_length_s=None, opponent_type="d
     return vec_env, opponent_wrapper
 
 
-def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device):
+def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device, ppo_obs_space, max_velocity):
     """Load a PPO opponent agent from an rl_games checkpoint.
 
     Mirrors the loading pattern from play_klask.py.
     """
     import yaml
-    from isaaclab_rl.rl_games import RlGamesGpuEnv
     from isaaclab_tasks.utils import load_cfg_from_registry
     from rl_games.algos_torch import torch_ext
     from rl_games.common import env_configurations, vecenv
@@ -237,37 +236,41 @@ def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device):
             user_cfg = yaml.safe_load(f)
         agent_cfg.update(user_cfg)
 
+    # Action space bounded by the player's max_velocity (the eval env's action scale).
+    ppo_act_space = gym.spaces.Box(
+        low=-max_velocity, high=max_velocity, shape=(2,), dtype=np.float32
+    )
+
+    # Minimal stub env so rl_games can query observation/action spaces
+    # without creating a full Isaac environment.
+    class _StubEnv:
+        def __init__(self):
+            self.observation_space = ppo_obs_space
+            self.action_space = ppo_act_space
+            self.num_envs = num_envs
+            self.num_agents = 1
+
     agent_cfg["params"]["load_checkpoint"] = True
     agent_cfg["params"]["load_path"] = checkpoint_path
     agent_cfg["params"]["config"]["num_actors"] = num_envs
 
-    # Register a dummy rl_games env so Runner.create_player() works.
+    # Register a stub rl_games env so Runner.create_player() can query spaces.
     vecenv.register(
         "IsaacRlgWrapper",
-        lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(
-            config_name, num_actors, **kwargs
-        ),
+        lambda config_name, num_actors, **kwargs: _StubEnv(),
     )
     env_configurations.register(
         "rlgpu",
-        {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: None},
+        {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: _StubEnv()},
     )
 
     runner = Runner()
     runner.load(agent_cfg)
     opponent: BasePlayer = runner.create_player()
 
-    # Monkey-patch safe_load for device mapping (same as play_klask.py).
-    _original_safe_load = torch_ext.safe_load
-
-    def _safe_load_mapped(filename):
-        return torch_ext.safe_filesystem_op(
-            torch.load, filename, map_location=device, weights_only=False
-        )
-
-    torch_ext.safe_load = _safe_load_mapped
-    opponent.restore(checkpoint_path)
-    torch_ext.safe_load = _original_safe_load
+    # Use set_weights (not restore) to properly load running_mean_std state.
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    opponent.set_weights(ckpt)
 
     opponent.reset()
     opponent.device = torch.device(device)
@@ -283,7 +286,8 @@ def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device):
 
 def _load_dreamer_agent(model_config, obs_space, act_space, checkpoint_path, device):
     """Create a Dreamer agent and load checkpoint weights."""
-    agent = Dreamer(model_config, obs_space, act_space).to(device)
+    import copy
+    agent = Dreamer(copy.deepcopy(model_config), obs_space, act_space).to(device)
     ckpt = torch.load(checkpoint_path, map_location=device)
     agent.load_state_dict(ckpt["agent_state_dict"])
     agent.eval()
@@ -318,8 +322,10 @@ def main():
             )
         print(
             f"[INFO] Found {len(checkpoint_paths)} checkpoints matching"
-            f" '{checkpoint_pattern}'"
+            f" '{checkpoint_pattern}':"
         )
+        for i, cp in enumerate(checkpoint_paths, 1):
+            print(f"  {i}. {os.path.basename(cp)}")
     else:
         checkpoint_paths = [checkpoint_pattern]
 
@@ -345,8 +351,12 @@ def main():
         opponent_wrapper.set_opponent(opp_agent)
         del opp_agent  # Wrapper deep-copied the needed modules.
     elif opponent_type == "ppo":
+        base_env = opponent_wrapper.env.unwrapped
+        ppo_obs_space = base_env.single_observation_space["opponent"]
+        max_velocity = float(getattr(player_cfg.env, "max_velocity", 1.0))
         ppo_opponent = _load_ppo_opponent(
-            args_cli.opponent_config, args_cli.opponent_checkpoint, num_envs, device
+            args_cli.opponent_config, args_cli.opponent_checkpoint, num_envs, device,
+            ppo_obs_space, max_velocity,
         )
         opponent_wrapper.add_opponent(ppo_opponent)
 
@@ -390,13 +400,13 @@ def main():
         # --- Game loop ---
         pbar = tqdm(total=args_cli.num_games, desc="Games")
 
-        vec_env.reset()
-        done = torch.ones(num_envs, dtype=torch.bool, device=device)
-        agent_state = player.get_initial_state(num_envs)
-        act = agent_state["prev_action"].clone()
+        with torch.inference_mode():
+            vec_env.reset()
+            done = torch.ones(num_envs, dtype=torch.bool, device=device)
+            agent_state = player.get_initial_state(num_envs)
+            act = agent_state["prev_action"].clone()
 
-        while total_games < args_cli.num_games and simulation_app.is_running():
-            with torch.inference_mode():
+            while total_games < args_cli.num_games and simulation_app.is_running():
                 # Step env (opponent actions generated inside the opponent wrapper).
                 trans, done = vec_env.step(act.detach(), done.detach())
 
