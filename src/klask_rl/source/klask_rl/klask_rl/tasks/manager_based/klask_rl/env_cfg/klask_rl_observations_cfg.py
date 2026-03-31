@@ -327,7 +327,13 @@ class DreamerObservationsCfg:
         # TODO: change padding to transform once it is working.
         image = ObsTerm(
             func=padded_image,
-            params={"sensor_cfg": SceneEntityCfg("camera"), "data_type": "rgb", "target_h": 128, "target_w": 128},
+            params={
+                "sensor_cfg": SceneEntityCfg("camera"),
+                "data_type": "rgb",
+                # Defaults for env.size=[128,128]. Overridden by train_dreamer.py.
+                "target_h": 128,
+                "target_w": 128,
+            },
         )
 
         def __post_init__(self) -> None:
@@ -338,7 +344,13 @@ class DreamerObservationsCfg:
     class OpponentImageObsGroup(ObsGroup):
         image = ObsTerm(
             func=padded_image_rotated,
-            params={"sensor_cfg": SceneEntityCfg("camera"), "data_type": "rgb", "target_h": 128, "target_w": 128},
+            params={
+                "sensor_cfg": SceneEntityCfg("camera"),
+                "data_type": "rgb",
+                # Defaults for env.size=[128,128]. Overridden by train_dreamer.py.
+                "target_h": 128,
+                "target_w": 128,
+            },
         )
 
         def __post_init__(self) -> None:

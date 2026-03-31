@@ -130,7 +130,8 @@ class KlaskRlDreamerSceneCfg(InteractiveSceneCfg):
             horizontal_aperture=20.955,
             clipping_range=(0.01, 100.0),
         ),
-        # 21x16, 42x32, 63x48, 84x64, 105x80, 126x96, 147x112, 168x128 are exact divisors of 420mmx320mm
+        # Default resolution for env.size=[128,128] (scale 6). Overridden by train_dreamer.py.
+        # Valid ratios (HxW): 21x16, 42x32, 63x48, 84x64, 105x80, 126x96, 147x112, 168x128
         width=96,
         height=126,
         data_types=["rgb"],
