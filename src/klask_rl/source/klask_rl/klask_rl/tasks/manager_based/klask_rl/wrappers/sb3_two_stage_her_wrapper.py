@@ -356,6 +356,45 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
 
         return reward.astype(np.float32)
 
+    def compute_terminated(
+        self,
+        achieved_goal: np.ndarray,
+        desired_goal: np.ndarray,
+        info: dict[str, Any],
+    ) -> np.ndarray:
+        """Whether the relabeled goal is achieved (episode should terminate).
+
+        Used by HerReplayBufferWithDone to recompute the done flag for
+        virtual transitions after goal relabeling.
+
+        Phase-aware termination:
+            Pre-hit  (achieved[4]==0): stage 1 success → player reached ball
+            Post-hit (achieved[4]==1): stage 2 success → ball reached goal
+
+        Args:
+            achieved_goal: shape (..., 5) = [player_xy, ball_xy, hit_flag]
+            desired_goal:  shape (..., 5) = [target_xy, target_xy, flag]
+            info: Additional info (unused)
+
+        Returns:
+            1.0 if goal achieved, 0.0 otherwise
+        """
+        is_post_hit = achieved_goal[..., 4] > 0.5
+
+        stage1_dist = np.linalg.norm(achieved_goal[..., :2] - desired_goal[..., :2], axis=-1)
+        stage1_success = stage1_dist < self.ball_hit_threshold
+
+        stage2_dist = np.linalg.norm(achieved_goal[..., 2:4] - desired_goal[..., 2:4], axis=-1)
+        stage2_success = stage2_dist < self.goal_score_threshold
+
+        terminated = np.where(
+            is_post_hit,
+            stage2_success,
+            stage1_success,
+        )
+
+        return terminated.astype(np.float32)
+
     def env_method(
         self,
         method_name: str,
@@ -369,5 +408,7 @@ class Sb3TwoStageHerWrapper(VecEnvWrapper):
         """
         if method_name == "compute_reward":
             return [self.compute_reward(*method_args, **method_kwargs)]
+        elif method_name == "compute_terminated":
+            return [self.compute_terminated(*method_args, **method_kwargs)]
         else:
             return self.venv.env_method(method_name, *method_args, indices=indices, **method_kwargs)

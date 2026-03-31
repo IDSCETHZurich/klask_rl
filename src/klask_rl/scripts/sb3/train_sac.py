@@ -141,7 +141,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import VecNormalize
-from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
+from klask_rl.tasks.manager_based.klask_rl.wrappers import HerReplayBufferWithDone
 
 # Optional wandb import
 try:
@@ -371,10 +371,10 @@ def main(
     replay_buffer_kwargs = None
 
     if cfg.use_her or cfg.use_two_stage_her:
-        print("[INFO] Configuring HER replay buffer...")
+        print("[INFO] Configuring HER replay buffer (with done recomputation)...")
         print(f"[INFO] HER goal selection strategy: {cfg.her_goal_selection_strategy}")
         print(f"[INFO] HER n_sampled_goal: {cfg.her_n_sampled_goal}")
-        replay_buffer_class = HerReplayBuffer
+        replay_buffer_class = HerReplayBufferWithDone
         replay_buffer_kwargs = {
             "n_sampled_goal": cfg.her_n_sampled_goal,
             "goal_selection_strategy": cfg.her_goal_selection_strategy,

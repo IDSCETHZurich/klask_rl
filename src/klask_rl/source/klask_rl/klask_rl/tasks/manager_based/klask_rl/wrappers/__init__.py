@@ -15,6 +15,7 @@ from .klask_rl_training_wrappers import (
     KlaskRlCollisionAvoidanceWrapper,
     RewardWeightWrapper,
 )
+from .her_replay_buffer import HerReplayBufferWithDone
 from .sb3_her_wrapper import Sb3VecHerWrapper
 from .sb3_two_stage_her_wrapper import Sb3TwoStageHerWrapper
 from .utils import find_wrapper
@@ -34,4 +35,5 @@ __all__ = [
     "ActionHistoryWrapper",
     "Sb3VecHerWrapper",
     "Sb3TwoStageHerWrapper",
+    "HerReplayBufferWithDone",
 ]

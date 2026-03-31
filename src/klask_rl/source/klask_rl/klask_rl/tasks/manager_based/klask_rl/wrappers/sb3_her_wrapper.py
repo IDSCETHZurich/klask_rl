@@ -176,6 +176,28 @@ class Sb3VecHerWrapper(VecEnvWrapper):
             np.float32
         ) * self.reward_scale
 
+    def compute_terminated(
+        self,
+        achieved_goal: np.ndarray,
+        desired_goal: np.ndarray,
+        info: dict[str, Any],
+    ) -> np.ndarray:
+        """Whether the relabeled goal is achieved (episode should terminate).
+
+        Used by HerReplayBufferWithDone to recompute the done flag for
+        virtual transitions after goal relabeling.
+
+        Args:
+            achieved_goal: The goal that was actually achieved (player position)
+            desired_goal: The goal that was desired (ball position)
+            info: Additional info (unused)
+
+        Returns:
+            1.0 if goal achieved (distance < threshold), 0.0 otherwise
+        """
+        distance = np.linalg.norm(achieved_goal - desired_goal, axis=-1)
+        return (distance < self.distance_threshold).astype(np.float32)
+
     def env_method(
         self,
         method_name: str,
@@ -201,6 +223,8 @@ class Sb3VecHerWrapper(VecEnvWrapper):
             # Handle compute_reward directly - HER needs this for goal relabeling
             # The args are (achieved_goal, desired_goal, info)
             return [self.compute_reward(*method_args, **method_kwargs)]
+        elif method_name == "compute_terminated":
+            return [self.compute_terminated(*method_args, **method_kwargs)]
         else:
             # Pass through to underlying environment
             return self.venv.env_method(
