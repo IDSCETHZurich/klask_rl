@@ -1,12 +1,12 @@
 import os
+
 import isaaclab.sim as sim_utils
-from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.actuators import DelayedPDActuatorCfg
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
-from isaaclab.sensors import TiledCameraCfg
+from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import TiledCameraCfg
 from isaaclab.utils import configclass
-
 from klask_rl.assets.robots.klask import KLASK_CFG, KLASK_PARAMS
 
 
@@ -130,8 +130,10 @@ class KlaskRlDreamerSceneCfg(InteractiveSceneCfg):
             horizontal_aperture=20.955,
             clipping_range=(0.01, 100.0),
         ),
-        width=48,
-        height=63,
+        # Default resolution for env.size=[128,128] (scale 6). Overridden by train_dreamer.py.
+        # Valid ratios (HxW): 21x16, 42x32, 63x48, 84x64, 105x80, 126x96, 147x112, 168x128
+        width=96,
+        height=126,
         data_types=["rgb"],
         update_period=0.0,
         offset=TiledCameraCfg.OffsetCfg(
