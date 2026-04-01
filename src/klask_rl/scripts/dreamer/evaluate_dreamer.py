@@ -110,6 +110,7 @@ import isaaclab_tasks  # noqa: F401
 import klask_rl.tasks  # noqa: F401
 from dreamer import Dreamer
 from dreamer_self_play import DreamerSelfPlayWrapper
+from env_cfg_utils import apply_camera_size_to_env_cfg
 from envs.isaaclab import IsaacLabVecEnv
 from isaaclab.sim import RenderCfg
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
@@ -171,6 +172,9 @@ def _make_eval_env(env_config, num_envs, episode_length_s=None, opponent_type="d
     env_cfg.seed = int(env_config.seed)
     env_cfg.episode_length_s = float(episode_length_s or env_config.episode_length_s)
     env_cfg.sim.render = RenderCfg(antialiasing_mode="Off")
+
+    # --- Camera resolution & padding derived from env.size ---
+    apply_camera_size_to_env_cfg(env_cfg, getattr(env_config, "size", None))
 
     # Null out disabled termination terms.
     terminations_cfg = getattr(env_config, "terminations", None)

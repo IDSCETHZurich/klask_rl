@@ -81,22 +81,8 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     KlaskRlRandomOpponentWrapper,
     OpponentActionWrapper,
 )
+from env_cfg_utils import apply_camera_size_to_env_cfg
 from trainer import OnlineTrainer
-
-# Board aspect ratio: 420mm x 320mm = 21:16 base ratio.
-# Valid camera resolutions are multiples of (21, 16).
-_BOARD_BASE_H = 21  # maps to the 420mm dimension
-_BOARD_BASE_W = 16  # maps to the 320mm dimension
-
-
-def _camera_params_from_size(image_size: int) -> tuple[int, int]:
-    """Derive camera resolution from a square image size.
-
-    Returns the largest (cam_height, cam_width) that is an exact multiple of
-    the 21x16 board ratio and fits within image_size x image_size.
-    """
-    scale = min(image_size // _BOARD_BASE_H, image_size // _BOARD_BASE_W)
-    return scale * _BOARD_BASE_H, scale * _BOARD_BASE_W
 
 
 class EpisodeMetricsWrapper(Wrapper):
@@ -257,17 +243,7 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
     env_cfg.sim.render = RenderCfg(antialiasing_mode="Off")
 
     # --- Camera resolution & padding derived from env.size ---
-    image_size = int(config.size[0])
-    cam_h, cam_w = _camera_params_from_size(image_size)
-    env_cfg.scene.camera.width = cam_w
-    env_cfg.scene.camera.height = cam_h
-    for group_attr in ("image", "opponent_image"):
-        group = getattr(env_cfg.observations, group_attr, None)
-        if group is not None:
-            image_term = getattr(group, "image", None)
-            if image_term is not None and isinstance(getattr(image_term, "params", None), dict):
-                image_term.params["target_h"] = image_size
-                image_term.params["target_w"] = image_size
+    apply_camera_size_to_env_cfg(env_cfg, getattr(config, "size", None))
 
     # Null out disabled termination terms on env_cfg BEFORE construction so
     # IsaacLab's TerminationManager never registers them (_prepare_terms skips None).
