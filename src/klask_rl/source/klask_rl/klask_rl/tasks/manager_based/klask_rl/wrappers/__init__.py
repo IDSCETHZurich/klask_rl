@@ -16,9 +16,10 @@ from .klask_rl_training_wrappers import (
 )
 from .sb3_her_wrapper import Sb3VecHerWrapper
 from .sb3_two_stage_her_wrapper import Sb3TwoStageHerWrapper
-from .utils import find_wrapper
+from .utils import configure_domain_randomization, find_wrapper
 
 __all__ = [
+    "configure_domain_randomization",
     "find_wrapper",
     "ObservationNoiseWrapper",
     "OpponentObservationWrapper",

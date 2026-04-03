@@ -103,3 +103,12 @@ terminations:
   goal_conceded: true
   player_in_goal: true
   opponent_in_goal: true
+domain_randomization:
+  ball_mass:
+    enable: false
+  material_ball:
+    enable: false
+  material_klask:
+    enable: false
+  actuator:
+    enable: false

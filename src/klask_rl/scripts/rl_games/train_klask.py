@@ -91,6 +91,7 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     OpponentActionWrapper,
     OpponentObservationWrapper,
     RlGamesGpuEnvSelfPlay,
+    configure_domain_randomization,
 )
 from klask_rl_games import KlaskRlAlgoObserver, KlaskRlRunner
 from rl_games.common import env_configurations, vecenv
@@ -177,6 +178,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if not active and hasattr(env_cfg.terminations, term):
                 setattr(env_cfg.terminations, term, None)
 
+    # Configure domain randomization events from YAML BEFORE env construction.
+    configure_domain_randomization(env_cfg, agent_cfg.get("domain_randomization"))
+
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     # wrap for video recording
@@ -210,7 +214,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     obs_noise = agent_cfg["env"].get("obs_noise", 0.0)
     if obs_noise > 0.0:
-        env = ObservationNoiseWrapper(env, obs_noise, list(range(12)))
+        env = ObservationNoiseWrapper(
+            env, obs_noise,
+            own_goal=KLASK_PARAMS["player_goal"],
+            other_goal=KLASK_PARAMS["opponent_goal"],
+        )
 
     # configure active reward terms and curricula as specified in agent_cfg:
     if "rewards" in agent_cfg.keys():

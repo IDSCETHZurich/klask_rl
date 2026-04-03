@@ -116,6 +116,7 @@ from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWr
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     KlaskRlAgentOpponentWrapper,
     OpponentActionWrapper,
+    configure_domain_randomization,
 )
 
 
@@ -183,6 +184,15 @@ def _make_eval_env(env_config, num_envs, episode_length_s=None, opponent_type="d
         for term, active in term_dict.items():
             if not active and hasattr(env_cfg.terminations, term):
                 setattr(env_cfg.terminations, term, None)
+
+    # Configure domain randomization events from YAML BEFORE env construction.
+    _dr_cfg_raw = getattr(env_config, "domain_randomization", None)
+    _dr_dict = (
+        OmegaConf.to_container(_dr_cfg_raw, resolve=True)
+        if _dr_cfg_raw is not None and OmegaConf.is_config(_dr_cfg_raw)
+        else _dr_cfg_raw
+    )
+    configure_domain_randomization(env_cfg, _dr_dict)
 
     # --- Create base env ---
     isaac_env = gym.make(task_name, cfg=env_cfg)
