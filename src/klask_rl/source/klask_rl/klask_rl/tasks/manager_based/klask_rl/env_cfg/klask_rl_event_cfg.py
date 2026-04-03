@@ -180,7 +180,7 @@ class EventCfgDreamer(EventCfg):
             "asset_cfg": SceneEntityCfg("ball"),
             "pose_range": {
                 "x": KLASK_PARAMS["ball_reset_position_x"],  # Full x range
-                "y": (-0.10, -0.02),  # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
+                "y": KLASK_PARAMS["ball_reset_position_y"], # (-0.10, -0.02),  # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
                 "z": (0.032, 0.032),
             },
             "velocity_range": {

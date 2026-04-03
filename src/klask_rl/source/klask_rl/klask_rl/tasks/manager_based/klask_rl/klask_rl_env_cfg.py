@@ -151,7 +151,7 @@ class KlaskRlDreamerEnvCfg(ManagerBasedRLEnvCfg):
     # Configurable ball reset area — override from yaml config to change
     # where the ball spawns at the start of each episode.
     ball_reset_position_x: tuple = KLASK_PARAMS["ball_reset_position_x"]
-    ball_reset_position_y: tuple = (-0.10, -0.02)
+    ball_reset_position_y: tuple = KLASK_PARAMS["ball_reset_position_y"]
 
     def __post_init__(self):
         """Post initialization."""
