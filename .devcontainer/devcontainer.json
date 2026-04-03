@@ -24,6 +24,8 @@
         "source=isaac-lab-klask-rl-devcontainer_logs,target=/root/.nvidia-omniverse/logs,type=volume",
         "source=isaac-lab-klask-rl-devcontainer_data,target=/root/.local/share/ov/data,type=volume",
         "source=isaac-lab-klask-rl-devcontainer_documents,target=/root/Documents,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_claude,target=/root/.claude,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_shell_history,target=/root/.bash_history,type=volume",
         "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",
         "source=${localWorkspaceFolder}/third_party/dreamerv3-torch,target=/workspace/klask_rl/scripts/dreamer/dreamerv3torch,type=bind",
         "source=${localWorkspaceFolder}/third_party/r2dreamer,target=/workspace/klask_rl/scripts/dreamer/r2dreamer,type=bind"
