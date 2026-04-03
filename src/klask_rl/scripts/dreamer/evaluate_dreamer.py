@@ -140,7 +140,12 @@ def _load_config(config_path, device):
     return cfg
 
 
-def _make_eval_env(env_config, num_envs, episode_length_s=None, opponent_type="dreamer"):
+def _make_eval_env(
+    env_config,
+    num_envs,
+    episode_length_s=None,
+    opponent_type="dreamer",
+):
     """Create an evaluation env with the appropriate opponent wrapper.
 
     Simplified wrapper chain (no curriculum/logging):
@@ -208,7 +213,10 @@ def _make_eval_env(env_config, num_envs, episode_length_s=None, opponent_type="d
 
     # --- 4. Opponent wrapper ---
     if opponent_type == "dreamer":
-        opponent_wrapper = DreamerSelfPlayWrapper(isaac_env, eval_mode=True)
+        opponent_wrapper = DreamerSelfPlayWrapper(
+            isaac_env,
+            eval_mode=True,
+        )
     elif opponent_type == "ppo":
         opponent_wrapper = KlaskRlAgentOpponentWrapper(isaac_env, is_deterministic=True)
     else:
@@ -339,7 +347,10 @@ def main():
     # --- Create evaluation environment (shared across all player checkpoints) ---
     num_envs = args_cli.num_envs
     vec_env, opponent_wrapper = _make_eval_env(
-        player_cfg.env, num_envs, args_cli.episode_length_s, opponent_type=opponent_type
+        player_cfg.env,
+        num_envs,
+        args_cli.episode_length_s,
+        opponent_type=opponent_type,
     )
     obs_space = vec_env.observation_space
     act_space = vec_env.action_space
