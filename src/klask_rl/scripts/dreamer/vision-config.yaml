@@ -10,14 +10,14 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_wpt_chcj0m6t_4M_with_AM_0.4m/s
+wandb_name: dreamer_wpt_hootbdk4_6M_with_AM_0.4m/s_128
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
-init_checkpoint: /workspace/klask_rl/logdir/2026-03-26/20-42-39/checkpoint_4000016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+init_checkpoint: /workspace/klask_rl/logdir/2026-03-27/23-23-41/checkpoint_6000008.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
 
 hydra:
   run:
@@ -25,14 +25,15 @@ hydra:
   searchpath:
     - file://${script_dir:}/r2dreamer/configs
 
-batch_size: 8
+batch_size: 4
 batch_length: 128
+micro_batch_size: 2
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
   task: "isaaclab_Klask-Rl-Dreamer-v0"
   steps: 1e7
-  env_num: 16
+  env_num: 8
   eval_episode_num: 10
   action_repeat: 1
   decimation: 20
@@ -44,7 +45,7 @@ env:
   max_velocity: 0.4 # [m/s] Maximum velocity for player movement
   episode_length_s: 5.0 # [s] Episode length in seconds
   actuator_model: True
-  size: [64, 64]
+  size: [128, 128]
   encoder:
     mlp_keys: "$^"
     cnn_keys: "image"
