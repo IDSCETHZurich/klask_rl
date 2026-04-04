@@ -15,7 +15,7 @@ wandb_entity: null
 wandb_name: dreamer_wpt_bqvln4el_6.7M_with_AM_0.4m/s
 
 # Initialization
-logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
+logdir: /workspace/klask_rl/logdir/2026-03-23/11-38-51 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
@@ -42,7 +42,7 @@ batch_length: 128
 # ---- Environment (all klask-specific, inlined here) ----
 env:
   task: "isaaclab_Klask-Rl-Dreamer-v0"
-  steps: 1e7
+  steps: 2e7
   env_num: 32
   eval_episode_num: 10
   action_repeat: 1

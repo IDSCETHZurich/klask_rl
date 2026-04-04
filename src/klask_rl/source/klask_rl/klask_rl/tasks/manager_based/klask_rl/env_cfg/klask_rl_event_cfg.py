@@ -11,6 +11,7 @@ from ..utils_manager_based import (
     reset_joints_by_absolute,
     set_joint_position_limits,
     set_rigid_body_material,
+    reset_player_velocity_toward_ball,
 )
 
 
@@ -258,7 +259,7 @@ class EventCfgDreamer(EventCfg):
             "asset_cfg": SceneEntityCfg("ball"),
             "pose_range": {
                 "x": KLASK_PARAMS["ball_reset_position_x"],  # Full x range
-                "y": (-0.10, -0.02),  # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
+                "y": KLASK_PARAMS["ball_reset_position_y"], # (-0.10, -0.02),  # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
                 "z": (0.032, 0.032),
             },
             "velocity_range": {
@@ -266,4 +267,12 @@ class EventCfgDreamer(EventCfg):
                 "y": (0.0, 0.0),
             },  # Ball starts stationary
         },
+    )
+
+    # Apply scheduled player init velocity (no-op when InitializationWrapper is absent).
+    # Runs last so that ball and player positions are already finalized.
+    reset_player_velocity = EventTerm(
+        func=reset_player_velocity_toward_ball,
+        mode="reset",
+        params={},
     )

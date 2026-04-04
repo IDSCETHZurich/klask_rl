@@ -10,7 +10,7 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_pretraining_vision
+wandb_name: dreamer_pretraining_vision_size128
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
@@ -18,6 +18,7 @@ seed: 0
 deterministic_run: False
 device: 'cuda:0'
 init_checkpoint: null # Path to checkpoint for weight-only init (pretrain -> finetune)
+load_world_model_only: false
 
 hydra:
   run:
@@ -25,14 +26,15 @@ hydra:
   searchpath:
     - file://${script_dir:}/r2dreamer/configs
 
-batch_size: 8
+batch_size: 4
 batch_length: 128
+micro_batch_size: 2
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
   task: 'isaaclab_Klask-Rl-Dreamer-v0'
   steps: 1e7
-  env_num: 16
+  env_num: 8
   eval_episode_num: 10
   action_repeat: 1
   decimation: 20
@@ -41,10 +43,10 @@ env:
   sim_dt: 0.001
   seed: ${seed}
   device: ${device}
-  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
+  max_velocity: 1.0 # [m/s] Maximum velocity for player movement
   episode_length_s: 3.0 # [s] Episode length in seconds
   actuator_model: True
-  size: [64, 64]
+  size: [128, 128]
   encoder:
     mlp_keys: '$^'
     cnn_keys: 'image'
@@ -110,18 +112,18 @@ env:
           steps: [0, 1_000_000]
         - type: sigmoid
           weight: [300.0, 150.0]
-          steps: [1_500_000, 2_000_000]
+          steps: [1_000_000, 1_500_000]
           steepness: 6.0
         - type: static
           weight: 150.0
-          steps: [2_000_000, 3_000_000]
+          steps: [1_500_000, 2_500_000]
         - type: sigmoid
           weight: [150.0, 50.0]
-          steps: [3_000_000, 3_500_000]
+          steps: [2_500_000, 3_000_000]
           steepness: 6.0
         - type: static
           weight: 50.0
-          steps: [3_500_000, -1]
+          steps: [3_000_000, -1]
     ball_in_own_half:
       type: static
       weight: 0.0
@@ -131,12 +133,33 @@ env:
     player_strategically_positioned:
       type: static
       weight: 0.0
+    player_speed:
+      type: static
+      weight: 10.0
+    player_speed_exp:
+      type: static
+      weight: 0.0
   terminations:
     time_out: true
     goal_scored: true
     goal_conceded: true
     player_in_goal: true
     opponent_in_goal: true
+
+  initialization:
+    init_velocity:
+      type: schedule
+      phases:
+        - type: static
+          speed: 1.0
+          steps: [0, 1_000_000]
+        - type: sigmoid
+          speed: [1.0, 0.0]
+          steps: [1_000_000, 3_000_000]
+          steepness: 6.0
+        - type: static
+          speed: 0.0
+          steps: [3_000_000, -1]
 
 buffer:
   batch_size: ${batch_size}

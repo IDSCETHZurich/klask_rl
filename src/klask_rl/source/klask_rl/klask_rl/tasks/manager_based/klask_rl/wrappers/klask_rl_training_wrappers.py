@@ -1,3 +1,5 @@
+import math
+
 import torch
 from gymnasium import Wrapper
 from klask_rl.assets.robots.klask import KLASK_PARAMS
@@ -304,6 +306,103 @@ class KlaskRlCollisionAvoidanceWrapper(Wrapper):
 
     def interpolate_vel(self, distance):
         return (self.MAX_VEL / self.DEACCELERATION_DISTANCE) * distance
+
+
+class InitializationWrapper(Wrapper):
+    """Manages reset-time initialization helpers via a configurable schedule.
+
+    Sets ``env.unwrapped._init_velocity_speed`` before every ``reset()`` and
+    ``step()`` call.  The event function ``reset_player_velocity_toward_ball``
+    registered in ``EventCfgDreamer`` reads this attribute and writes the
+    corresponding velocity into the physics simulation *inside* the event
+    manager — ensuring that observations (and ``ActuatorModelWrapper``'s state
+    history) see the correct non-zero velocity from the very first step.
+
+    The ``init_velocity`` config key accepts the same schedule types as
+    :class:`CurriculumWrapper` (``static``, ``linear``, ``sigmoid``,
+    ``exponential``, ``schedule``), using ``speed`` instead of ``weight``.
+
+    Example config::
+
+        initialization:
+          init_velocity:
+            type: schedule
+            phases:
+              - type: static
+                speed: 1.0
+                steps: [0, 1_000_000]
+              - type: sigmoid
+                speed: [1.0, 0.0]
+                steps: [1_000_000, 3_000_000]
+                steepness: 6.0
+              - type: static
+                speed: 0.0
+                steps: [3_000_000, -1]
+    """
+
+    def __init__(self, env, cfg: dict):
+        super().__init__(env)
+        self.cfg = cfg
+        self._step = 0
+
+    def _compute_speed(self, spec: dict, step: int) -> float:
+        """Return the current speed scalar from a schedule spec."""
+        if spec["type"] == "schedule":
+            active = spec["phases"][-1]
+            for phase in spec["phases"]:
+                start, end = phase["steps"]
+                if start <= step and (end == -1 or step <= end):
+                    active = phase
+                    break
+        else:
+            active = spec
+
+        phase_type = active["type"]
+        raw = active["speed"]
+
+        if phase_type == "static":
+            return float(raw)
+
+        start_step = active["steps"][0] if "steps" in active else 0
+
+        if phase_type == "linear":
+            end_step = active["steps"][1] if "steps" in active else active["num_steps"]
+            progress = min(max((step - start_step) / (end_step - start_step), 0.0), 1.0)
+            return float(raw[0] + (raw[1] - raw[0]) * progress)
+
+        if phase_type == "sigmoid":
+            end_step = active["steps"][1] if "steps" in active else active["num_steps"]
+            progress = min(max((step - start_step) / (end_step - start_step), 0.0), 1.0)
+            k = active.get("steepness", 6.0)
+
+            def _sig(x):
+                return 1.0 / (1.0 + math.exp(-x))
+
+            normalized = (_sig(k * (2.0 * progress - 1.0)) - _sig(-k)) / (_sig(k) - _sig(-k))
+            return float(raw[0] + (raw[1] - raw[0]) * normalized)
+
+        if phase_type == "exponential":
+            elapsed = max(step - start_step, 0)
+            return float(raw) * math.exp(-elapsed * active["decay_rate"])
+
+        return 0.0
+
+    def _set_env_speed(self):
+        init_vel_spec = self.cfg.get("init_velocity")
+        speed = self._compute_speed(init_vel_spec, self._step) if init_vel_spec else 0.0
+        self.env.unwrapped._init_velocity_speed = speed
+
+    def reset(self, *args, **kwargs):
+        # Set speed BEFORE env.reset() so the event manager reads the correct value.
+        self._set_env_speed()
+        return self.env.reset(*args, **kwargs)
+
+    def step(self, actions):
+        self._step += self.env.unwrapped.num_envs
+        # Update speed BEFORE env.step() so partial resets triggered inside
+        # env.step() also see the current scheduled speed.
+        self._set_env_speed()
+        return self.env.step(actions)
 
 
 class ActionHistoryWrapper(Wrapper):

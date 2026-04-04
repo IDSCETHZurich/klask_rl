@@ -113,6 +113,56 @@ def set_rigid_body_material(
 
     asset.root_physx_view.set_material_properties(materials, all_ids)
 
+    
+def reset_player_velocity_toward_ball(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+):
+    """Initialize player velocity toward the ball at episode reset.
+
+    Reads ``env._init_velocity_speed`` (set by ``InitializationWrapper`` before
+    calling ``env.reset()``) and writes the computed velocity into the physics
+    simulation for the environments being reset.
+
+    Running inside the event manager guarantees that the velocity is written
+    *before* observations are read, so ``ActuatorModelWrapper`` sees the correct
+    non-zero velocity in its state history buffer.
+
+    If ``_init_velocity_speed`` is 0.0 (the default when the wrapper is absent),
+    this function is a no-op.
+    """
+    speed = getattr(env, "_init_velocity_speed", 0.0)
+    if speed <= 0.0:
+        return
+
+    klask_art: Articulation = env.scene["klask"]
+    ball: RigidObject = env.scene["ball"]
+
+    # Cache joint IDs lazily on first call.
+    if not hasattr(env, "_init_vel_joint_ids"):
+        x_ids, _ = klask_art.find_joints(["slider_to_peg_1"])
+        y_ids, _ = klask_art.find_joints(["ground_to_slider_1"])
+        env._init_vel_joint_ids = (x_ids[0], y_ids[0])
+    x_id, y_id = env._init_vel_joint_ids
+
+    # Player XY position from joint positions (prismatic joints; default = 0 = board centre).
+    # joint_pos is updated by write_joint_state_to_sim in the earlier position-reset events.
+    player_x = klask_art.data.joint_pos[env_ids, x_id]  # slider_to_peg_1 → X
+    player_y = klask_art.data.joint_pos[env_ids, y_id]  # ground_to_slider_1 → Y
+
+    # Ball XY relative to the environment origin.
+    # root_pos_w is updated by mdp.reset_root_state_uniform in the ball-reset event.
+    ball_xy = ball.data.root_pos_w[env_ids, :2] - env.scene.env_origins[env_ids, :2]
+
+    direction_x = ball_xy[:, 0] - player_x
+    direction_y = ball_xy[:, 1] - player_y
+    norm = torch.sqrt(direction_x**2 + direction_y**2).clamp(min=1e-6)
+
+    vel_2d = torch.stack(
+        [(direction_x / norm) * speed, (direction_y / norm) * speed], dim=1
+    )  # [len(env_ids), 2]
+    klask_art.write_joint_velocity_to_sim(vel_2d, joint_ids=[x_id, y_id], env_ids=env_ids)
+
 
 def reset_ball_hit_tracking(
     env: ManagerBasedRLEnv,
@@ -475,9 +525,16 @@ def ball_speed(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg) -> torch.Tensor
     return speed(vel)
 
 
-def player_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torch.Tensor:
+def peg_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torch.Tensor:
     vel = body_lin_xy_vel_w(env, player_cfg)
     return speed(vel)
+
+
+def peg_speed_exp(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, sigma: float = 0.3) -> torch.Tensor:
+    """Exponential saturation reward for peg speed. Returns ~1.0 when moving, ~0.0 when stationary."""
+    vel = body_lin_xy_vel_w(env, player_cfg)
+    spd = speed(vel)
+    return 1.0 - torch.exp(-spd / sigma)
 
 
 def difference_speed(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg):

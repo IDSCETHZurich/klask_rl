@@ -148,6 +148,11 @@ class KlaskRlDreamerEnvCfg(ManagerBasedRLEnvCfg):
     terminations = TerminationsCfg()
     episode_length_s = KLASK_PARAMS["timeout"]
 
+    # Configurable ball reset area — override from yaml config to change
+    # where the ball spawns at the start of each episode.
+    ball_reset_position_x: tuple = KLASK_PARAMS["ball_reset_position_x"]
+    ball_reset_position_y: tuple = KLASK_PARAMS["ball_reset_position_y"]
+
     def __post_init__(self):
         """Post initialization."""
         # viewer settings
@@ -157,3 +162,6 @@ class KlaskRlDreamerEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = KLASK_PARAMS["decimation"]
         # simulation settings
         self.sim.dt = KLASK_PARAMS["physics_dt"]
+        # Propagate ball reset ranges into the event config.
+        self.events.reset_ball_position.params["pose_range"]["x"] = self.ball_reset_position_x
+        self.events.reset_ball_position.params["pose_range"]["y"] = self.ball_reset_position_y
