@@ -101,6 +101,7 @@ from isaaclab_tasks.utils import (
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
+    configure_domain_randomization,
     ActionHistoryWrapper,
     RewardWeightWrapper,
     KlaskRlAgentOpponentWrapper,
@@ -168,6 +169,9 @@ def main():
             if not active and hasattr(env_cfg.terminations, term):
                 setattr(env_cfg.terminations, term, None)
 
+    # Configure domain randomization events from YAML BEFORE env construction.
+    configure_domain_randomization(env_cfg, agent_cfg.get("domain_randomization"))
+
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
@@ -202,7 +206,11 @@ def main():
 
     obs_noise = agent_cfg["env"].get("obs_noise", 0.0)
     if obs_noise > 0.0:
-        env = ObservationNoiseWrapper(env, obs_noise)
+        env = ObservationNoiseWrapper(
+            env, obs_noise,
+            own_goal=KLASK_PARAMS["player_goal"],
+            other_goal=KLASK_PARAMS["opponent_goal"],
+        )
 
     head_to_head = args_cli.opponent_checkpoint is not None
     if agent_cfg["params"]["config"].get("self_play", False) or head_to_head:

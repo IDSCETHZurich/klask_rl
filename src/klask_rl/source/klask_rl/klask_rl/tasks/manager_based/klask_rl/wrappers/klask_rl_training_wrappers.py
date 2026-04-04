@@ -2,6 +2,7 @@ import math
 
 import torch
 from gymnasium import Wrapper
+from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 
 class RewardWeightWrapper(Wrapper):
@@ -250,81 +251,57 @@ class CurriculumWrapper(RewardWeightWrapper):
 
 
 class KlaskRlCollisionAvoidanceWrapper(Wrapper):
-    real_to_sim_factor_long_side = 0.0008285
-    real_to_sim_factor_short_side = 1 / 1150
-    DEACCELERATION_DISTANCE = 0.09
-    PEG_RADIUS = 0.0075
-    X_EDGE = (-0.16, 0.16)
-    Y_EDGE_PLAYER = (-0.03, -0.22)
-    Y_EDGE_OPPONENT = (-0.03, -0.22)
-    board_dimensions = (0.32, 0.44)
-    speed_limit_weight = 70.0
+
+    DEACCELERATION_DISTANCE = KLASK_PARAMS["collision_avoidance_decel_distance"]
+    PEG_RADIUS = KLASK_PARAMS["peg_radius"]
+    MIN_CLEARANCE = KLASK_PARAMS["peg_radius"] * KLASK_PARAMS["collision_avoidance_min_clearance_factor"]
+    X_EDGE = KLASK_PARAMS["joint_x_pos_limit"]
+    Y_EDGE_1 = KLASK_PARAMS["joint_y1_pos_limit"]  # [0]=outer, [1]=inner
+    Y_EDGE_2 = KLASK_PARAMS["joint_y2_pos_limit"]  # [0]=inner, [1]=outer
 
     def __init__(self, env, max_vel=0.2):
         super().__init__(env)
-
-        self.x_min, self.x_max = 15.0, 360.0
-        self.y_min_1, self.y_max_1 = 15.0, 235.0
-        self.y_min_2, self.y_max_2 = 340.0, 530.0
         self.MAX_VEL = max_vel
 
     def reset(self, *args, **kwargs):
         obs, info = self.env.reset(*args, **kwargs)
-        self.state_1 = obs["policy"].clone()[:, :2]
-        self.state_2 = obs["opponent"].clone()[:, :2]
-
+        self.state_1 = obs["policy"].clone()[:, :2]  # Peg_1 world xy
+        self.state_2 = obs["policy"].clone()[:, 4:6]  # Peg_2 world xy (unrotated)
         return obs, info
 
+    def _apply_decel_axis(self, vel, pos, edge_min, edge_max):
+        """Clamp vel in-place near boundaries using linear deceleration + hard stop."""
+        safe_zone = self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
+
+        dist_min = pos - edge_min
+        near_min = dist_min <= safe_zone
+        if near_min.any():
+            hard_mask = near_min & (dist_min <= self.MIN_CLEARANCE)
+            soft_mask = near_min & ~hard_mask
+            vel[hard_mask] = torch.maximum(vel[hard_mask], torch.zeros_like(vel[hard_mask]))
+            vel[soft_mask] = torch.maximum(
+                vel[soft_mask], -self.interpolate_vel(dist_min[soft_mask] - self.MIN_CLEARANCE)
+            )
+
+        dist_max = edge_max - pos
+        near_max = dist_max <= safe_zone
+        if near_max.any():
+            hard_mask = near_max & (dist_max <= self.MIN_CLEARANCE)
+            soft_mask = near_max & ~hard_mask
+            vel[hard_mask] = torch.minimum(vel[hard_mask], torch.zeros_like(vel[hard_mask]))
+            vel[soft_mask] = torch.minimum(
+                vel[soft_mask], self.interpolate_vel(dist_max[soft_mask] - self.MIN_CLEARANCE)
+            )
+
     def step(self, actions, *args, **kwargs):
-        left_zone = self.state_1[:, 0] <= self.X_EDGE[0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
-        soft_dist_left = self.state_1[left_zone, 0] - self.X_EDGE[0] - self.PEG_RADIUS
-        actions[left_zone, 0] = torch.maximum(actions[left_zone, 0], -self.interpolate_vel(soft_dist_left))
-
-        left_zone_opp = self.state_2[:, 0] <= self.X_EDGE[0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
-        soft_dist_left_opp = self.state_2[left_zone_opp, 0] - self.X_EDGE[0] - self.PEG_RADIUS
-        actions[left_zone_opp, 2] = torch.maximum(actions[left_zone_opp, 2], -self.interpolate_vel(soft_dist_left_opp))
-
-        right_zone = self.state_1[:, 0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS >= self.X_EDGE[1]
-        actions[right_zone, 0] = torch.minimum(
-            actions[right_zone, 0],
-            self.interpolate_vel(self.X_EDGE[1] - self.state_1[right_zone, 0] - self.PEG_RADIUS),
-        )
-
-        right_zone_opp = self.state_2[:, 0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS >= self.X_EDGE[1]
-        actions[right_zone_opp, 1] = torch.minimum(
-            actions[right_zone_opp, 1],
-            self.interpolate_vel(self.X_EDGE[1] - self.state_2[right_zone_opp, 0] - self.PEG_RADIUS),
-        )
-
-        bottom_zone = self.state_1[:, 1] <= self.Y_EDGE_PLAYER[0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
-        actions[bottom_zone, 1] = torch.maximum(
-            actions[bottom_zone, 1],
-            -self.interpolate_vel(self.state_1[:, 1][bottom_zone] - self.Y_EDGE_PLAYER[0] - self.PEG_RADIUS),
-        )
-
-        bottom_zone_opp = self.state_2[:, 1] <= self.Y_EDGE_OPPONENT[0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
-        actions[bottom_zone_opp, 1] = torch.maximum(
-            actions[bottom_zone_opp, 1],
-            -self.interpolate_vel(self.state_2[:, 1][bottom_zone_opp] - self.Y_EDGE_OPPONENT[0] - self.PEG_RADIUS),
-        )
-
-        # Y - TOP
-        top_zone = self.state_1[:, 1] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS >= self.Y_EDGE_PLAYER[1]
-        actions[top_zone, 1] = torch.minimum(
-            actions[top_zone, 1],
-            self.interpolate_vel(self.Y_EDGE_PLAYER[1] - self.state_1[:, 1][top_zone] + self.PEG_RADIUS),
-        )
-
-        top_zone_opp = self.state_2[:, 1] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS >= self.Y_EDGE_OPPONENT[1]
-        actions[top_zone_opp, 1] = torch.minimum(
-            actions[top_zone_opp, 1],
-            self.interpolate_vel(self.Y_EDGE_OPPONENT[1] - self.state_2[:, 1][top_zone_opp] + self.PEG_RADIUS),
-        )
+        self._apply_decel_axis(actions[:, 0], self.state_1[:, 0], self.X_EDGE[0], self.X_EDGE[1])
+        self._apply_decel_axis(actions[:, 1], self.state_1[:, 1], self.Y_EDGE_1[0], self.Y_EDGE_1[1])
+        self._apply_decel_axis(actions[:, 2], self.state_2[:, 0], self.X_EDGE[0], self.X_EDGE[1])
+        self._apply_decel_axis(actions[:, 3], self.state_2[:, 1], self.Y_EDGE_2[0], self.Y_EDGE_2[1])
 
         obs, rew, terminated, truncated, info = self.env.step(actions, *args, **kwargs)
         self.state_1 = obs["policy"].clone()[:, :2]
-        self.state_2 = obs["opponent"].clone()[:, :2]
-
+        self.state_2 = obs["policy"].clone()[:, 4:6]
         return obs, rew, terminated, truncated, info
 
     def interpolate_vel(self, distance):

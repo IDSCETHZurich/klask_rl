@@ -1,11 +1,10 @@
+import isaaclab.utils.math as math_utils
 import torch
 import torch.nn.functional as F
-
-from isaaclab.assets import RigidObject, Articulation
-import isaaclab.utils.math as math_utils
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
-from isaaclab.sensors import TiledCamera, Camera, RayCasterCamera
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors import Camera, RayCasterCamera, TiledCamera
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 
@@ -58,6 +57,63 @@ def padded_image_rotated(
     return _pad_image_to_target(images, target_h, target_w)
 
 
+def set_joint_position_limits(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    lower: float,
+    upper: float,
+):
+    """Override joint position limits in simulation for the specified joints.
+
+    Useful when the USD asset has incorrect limits and they cannot be edited.
+    Writes the given lower/upper bounds to PhysX for all environments.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    joint_ids = asset_cfg.joint_ids
+    limits = asset.data.joint_pos_limits.clone()
+    limits[:, joint_ids, 0] = lower
+    limits[:, joint_ids, 1] = upper
+    asset.write_joint_position_limit_to_sim(limits[:, joint_ids, :], joint_ids=joint_ids, warn_limit_violation=False)
+
+
+def set_rigid_body_material(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    static_friction: float,
+    dynamic_friction: float,
+    restitution: float,
+):
+    """Set rigid body material properties to fixed values.
+
+    Unlike ``randomize_rigid_body_material``, this simply writes the given
+    values to the PhysX material buffer — no sampling, no buckets.
+    Respects ``asset_cfg.body_ids`` so it can target a subset of bodies.
+    """
+    asset: Articulation | RigidObject = env.scene[asset_cfg.name]
+    materials = asset.root_physx_view.get_material_properties()
+    all_ids = torch.arange(env.scene.num_envs, device="cpu")
+
+    if isinstance(asset, Articulation) and asset_cfg.body_ids != slice(None):
+        num_shapes_per_body = []
+        for link_path in asset.root_physx_view.link_paths[0]:
+            link_view = asset._physics_sim_view.create_rigid_body_view(link_path)
+            num_shapes_per_body.append(link_view.max_shapes)
+        for body_id in asset_cfg.body_ids:
+            start_idx = sum(num_shapes_per_body[:body_id])
+            end_idx = start_idx + num_shapes_per_body[body_id]
+            materials[:, start_idx:end_idx, 0] = static_friction
+            materials[:, start_idx:end_idx, 1] = dynamic_friction
+            materials[:, start_idx:end_idx, 2] = restitution
+    else:
+        materials[:, :, 0] = static_friction
+        materials[:, :, 1] = dynamic_friction
+        materials[:, :, 2] = restitution
+
+    asset.root_physx_view.set_material_properties(materials, all_ids)
+
+    
 def reset_player_velocity_toward_ball(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,
@@ -197,6 +253,33 @@ def ball_hit_timeout(
     should_terminate = env.ball_hit_timer >= timeout
 
     return should_terminate
+
+
+def reset_joints_by_absolute(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    position_range: tuple[float, float],
+    velocity_range: tuple[float, float],
+    asset_cfg: SceneEntityCfg,
+):
+    """Reset the robot joints to an absolute position and velocity sampled from the given ranges.
+
+    Unlike reset_joints_by_offset, this function sets the joint state directly without adding
+    the default joint position as a bias.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+
+    joint_pos = math_utils.sample_uniform(*position_range, (len(env_ids), len(asset_cfg.joint_ids)), env.device)
+    joint_vel = math_utils.sample_uniform(*velocity_range, (len(env_ids), len(asset_cfg.joint_ids)), env.device)
+
+    # clamp joint pos to limits
+    joint_pos_limits = asset.data.soft_joint_pos_limits[env_ids][:, asset_cfg.joint_ids, :]
+    joint_pos = joint_pos.clamp_(joint_pos_limits[..., 0], joint_pos_limits[..., 1])
+    # clamp joint vel to limits
+    joint_vel_limits = asset.data.soft_joint_vel_limits[env_ids][:, asset_cfg.joint_ids]
+    joint_vel = joint_vel.clamp_(-joint_vel_limits, joint_vel_limits)
+
+    asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids, joint_ids=asset_cfg.joint_ids)
 
 
 def reset_joints_by_offset(
@@ -644,7 +727,7 @@ def termination_reward_time_decay(
 
     if termination_term not in term_manager.active_terms:
         available_terms = term_manager.active_terms
-        raise ValueError(f"Termination term '{termination_term}' not found. " f"Available terms: {available_terms}")
+        raise ValueError(f"Termination term '{termination_term}' not found. Available terms: {available_terms}")
 
     # Get the boolean termination signal for this specific term using the proper API
     terminated = term_manager.get_term(termination_term)
@@ -673,20 +756,20 @@ def distance_to_wall(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torc
     device = player_pos.device
     cost = torch.zeros(player_pos.shape[0], device=device)
 
-    x_edge = player_pos[:, 0] < 0.03 + torch.tensor(KLASK_PARAMS["edge"][0])
-    distance = player_pos[:, 0] - torch.tensor(KLASK_PARAMS["edge"][0])
+    x_edge = player_pos[:, 0] < 0.03 + torch.tensor(KLASK_PARAMS["joint_x_pos_limit"][0])
+    distance = player_pos[:, 0] - torch.tensor(KLASK_PARAMS["joint_x_pos_limit"][0])
     cost += x_edge * torch.exp(-5 * distance)
 
-    x_edge = torch.tensor(KLASK_PARAMS["edge"][1]) - player_pos[:, 0] < 0.03
-    distance = torch.tensor(KLASK_PARAMS["edge"][1]) - player_pos[:, 0]
+    x_edge = torch.tensor(KLASK_PARAMS["joint_x_pos_limit"][1]) - player_pos[:, 0] < 0.03
+    distance = torch.tensor(KLASK_PARAMS["joint_x_pos_limit"][1]) - player_pos[:, 0]
     cost += x_edge * torch.exp(-5 * distance)
 
-    y_edge = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["edge"][2]) < 0.03
-    distance = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["edge"][2])
+    y_edge = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][0]) < 0.03
+    distance = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][0])
     cost += y_edge * torch.exp(-5 * distance)
 
-    y_edge = torch.tensor(KLASK_PARAMS["edge"][3]) - player_pos[:, 1] < 0.03
-    distance = torch.tensor(KLASK_PARAMS["edge"][3]) - player_pos[:, 1]
+    y_edge = torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][1]) - player_pos[:, 1] < 0.03
+    distance = torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][1]) - player_pos[:, 1]
     cost += y_edge * torch.exp(-5 * distance)
 
     return 1.0 * (cost)
