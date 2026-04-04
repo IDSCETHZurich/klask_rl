@@ -1,17 +1,15 @@
+# from . import mdp
+import isaaclab.envs.mdp as mdp
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
-
-# from . import mdp
-import isaaclab.envs.mdp as mdp
-
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 
-
 from ..utils_manager_based import (
-    reset_joints_by_offset,
-    reset_ball_hit_tracking,
     reset_ball_hit_timer,
+    reset_ball_hit_tracking,
+    reset_joints_by_absolute,
+    set_joint_position_limits,
     set_rigid_body_material,
 )
 
@@ -25,6 +23,37 @@ class EventCfg:
     - Sets actual ranges from the YAML config
     - Disables events (sets to None) when enable=false or no DR config present
     """
+
+    # -- startup: override joint position limits from KLASK_PARAMS --
+    init_joint_limits_x: EventTerm = EventTerm(
+        func=set_joint_position_limits,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("klask", joint_names=["slider_to_peg_1", "slider_to_peg_2"]),
+            "lower": KLASK_PARAMS["joint_x_pos_limit"][0],
+            "upper": KLASK_PARAMS["joint_x_pos_limit"][1],
+        },
+    )
+
+    init_joint_limits_y1: EventTerm = EventTerm(
+        func=set_joint_position_limits,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("klask", joint_names=["ground_to_slider_1"]),
+            "lower": KLASK_PARAMS["joint_y1_pos_limit"][0],
+            "upper": KLASK_PARAMS["joint_y1_pos_limit"][1],
+        },
+    )
+
+    init_joint_limits_y2: EventTerm = EventTerm(
+        func=set_joint_position_limits,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("klask", joint_names=["ground_to_slider_2"]),
+            "lower": KLASK_PARAMS["joint_y2_pos_limit"][0],
+            "upper": KLASK_PARAMS["joint_y2_pos_limit"][1],
+        },
+    )
 
     # -- startup: set initial material properties from KLASK_PARAMS --
     init_material_board: EventTerm = EventTerm(
@@ -123,19 +152,17 @@ class EventCfg:
 
     # -- non-DR reset events (always active) --
     reset_x_position_peg_1 = EventTerm(
-        func=reset_joints_by_offset,
+        func=reset_joints_by_absolute,
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("klask", joint_names=["slider_to_peg_1"]),
-            # "position_range": (0.0202, 0.0202),
-            # "velocity_range": (0.086, 0.086)
             "position_range": (-0.1, 0.1),
             "velocity_range": (0.0, 0.0),
         },
     )
 
     reset_x_position_peg_2 = EventTerm(
-        func=reset_joints_by_offset,
+        func=reset_joints_by_absolute,
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("klask", joint_names=["slider_to_peg_2"]),
@@ -145,23 +172,21 @@ class EventCfg:
     )
 
     reset_y_position_peg_1 = EventTerm(
-        func=reset_joints_by_offset,
+        func=reset_joints_by_absolute,
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("klask", joint_names=["ground_to_slider_1"]),
-            "position_range": (-0.025, 0.085),
-            # "position_range": (-0.1103, -0.1103),
-            # "velocity_range": (-0.0043, -0.0043)
+            "position_range": (-0.140, -0.030),  # absolute y in player half [-0.210, -0.020]
             "velocity_range": (0.0, 0.0),
         },
     )
 
     reset_y_position_peg_2 = EventTerm(
-        func=reset_joints_by_offset,
+        func=reset_joints_by_absolute,
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("klask", joint_names=["ground_to_slider_2"]),
-            "position_range": (-0.085, 0.025),
+            "position_range": (0.030, 0.140),  # absolute y in opponent half [0.020, 0.210]
             "velocity_range": (0.0, 0.0),
         },
     )
