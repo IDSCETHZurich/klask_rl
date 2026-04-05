@@ -24,7 +24,8 @@ class BoardRenderer:
     background_path : str
         Path to the background PNG image (e.g. ``median_background.png``).
     output_size : tuple[int, int]
-        ``(width, height)`` of the output image.
+        ``(width, height)`` of the output image.  For ``target_frame="sim"``
+        a portrait size such as ``(96, 126)`` is typically appropriate.
     fast_mode : bool
         If *False* (default), composite at full source resolution (652x495)
         then downscale with ``INTER_LINEAR`` (~0.2 ms). Gives better position
@@ -35,7 +36,16 @@ class BoardRenderer:
         Physical board width in metres.
     board_height_m : float
         Physical board height in metres.
+    target_frame : str
+        Coordinate frame for ``render()`` inputs.
+        ``"camera"`` (default) — origin at top-left, X right, Y down.
+        Landscape output (player on left, opponent on right).
+        ``"sim"`` — origin at board centre, X right, Y up.  Portrait output
+        (player at bottom, opponent at top).  Background and sprites are
+        rotated 90 deg CCW at init time.
     """
+
+    # TODO: remove these hardcoded constants by reading from sprite metadata at init time
 
     # Grid dimensions per object type
     _PEG_COLS = 8
@@ -60,17 +70,25 @@ class BoardRenderer:
         fast_mode: bool = False,
         board_width_m: float = 0.42,
         board_height_m: float = 0.32,
+        target_frame: str = "camera",
     ):
         """Initialise the renderer by loading and precomputing all sprites and data."""
+        if target_frame not in ("camera", "sim"):
+            raise ValueError(f"target_frame must be 'camera' or 'sim', got {target_frame!r}")
         self._output_size = output_size
         self._fast_mode = fast_mode
         self._board_w = board_width_m
         self._board_h = board_height_m
+        self._sim_frame = target_frame == "sim"
+        self._half_w = board_width_m / 2.0
+        self._half_h = board_height_m / 2.0
 
         # Load background
         bg = cv2.imread(background_path, cv2.IMREAD_COLOR)
         if bg is None:
             raise FileNotFoundError(f"Cannot load background: {background_path}")
+        if self._sim_frame:
+            bg = cv2.rotate(bg, cv2.ROTATE_90_COUNTERCLOCKWISE)
         self._src_h, self._src_w = bg.shape[:2]
 
         # Compute scale factors (source -> output)
@@ -107,21 +125,34 @@ class BoardRenderer:
         right_grid = _assign_to_grid(right_raw, right_xs, peg_ys, self._PEG_COLS, self._PEG_ROWS)
         ball_grid = _assign_to_grid(ball_raw, ball_xs, ball_ys, self._BALL_COLS, self._BALL_ROWS)
 
+        # Physical dimensions along image axes (swapped for sim frame due to rotation)
+        if self._sim_frame:
+            phys_w, phys_h = board_height_m, board_width_m
+        else:
+            phys_w, phys_h = board_width_m, board_height_m
+
         # Metres-to-pixels conversion factors (at working resolution)
+        rot = self._sim_frame
         if fast_mode:
             self._bg = cv2.resize(bg, output_size, interpolation=cv2.INTER_AREA)
-            self._m2px_x = output_size[0] / board_width_m
-            self._m2px_y = output_size[1] / board_height_m
-            self._left = _precompute_grid(left_grid, self._PEG_ROWS, self._PEG_COLS, self._scale_x, self._scale_y)
-            self._right = _precompute_grid(right_grid, self._PEG_ROWS, self._PEG_COLS, self._scale_x, self._scale_y)
-            self._ball = _precompute_grid(ball_grid, self._BALL_ROWS, self._BALL_COLS, self._scale_x, self._scale_y)
+            self._m2px_x = output_size[0] / phys_w
+            self._m2px_y = output_size[1] / phys_h
+            self._left = _precompute_grid(
+                left_grid, self._PEG_ROWS, self._PEG_COLS, self._scale_x, self._scale_y, rotate_ccw=rot
+            )
+            self._right = _precompute_grid(
+                right_grid, self._PEG_ROWS, self._PEG_COLS, self._scale_x, self._scale_y, rotate_ccw=rot
+            )
+            self._ball = _precompute_grid(
+                ball_grid, self._BALL_ROWS, self._BALL_COLS, self._scale_x, self._scale_y, rotate_ccw=rot
+            )
         else:
             self._bg = bg
-            self._m2px_x = self._src_w / board_width_m
-            self._m2px_y = self._src_h / board_height_m
-            self._left = _precompute_grid(left_grid, self._PEG_ROWS, self._PEG_COLS)
-            self._right = _precompute_grid(right_grid, self._PEG_ROWS, self._PEG_COLS)
-            self._ball = _precompute_grid(ball_grid, self._BALL_ROWS, self._BALL_COLS)
+            self._m2px_x = self._src_w / phys_w
+            self._m2px_y = self._src_h / phys_h
+            self._left = _precompute_grid(left_grid, self._PEG_ROWS, self._PEG_COLS, rotate_ccw=rot)
+            self._right = _precompute_grid(right_grid, self._PEG_ROWS, self._PEG_COLS, rotate_ccw=rot)
+            self._ball = _precompute_grid(ball_grid, self._BALL_ROWS, self._BALL_COLS, rotate_ccw=rot)
 
         self._canvas_h, self._canvas_w = self._bg.shape[:2]
 
@@ -135,7 +166,11 @@ class BoardRenderer:
         Parameters
         ----------
         left_peg_m, right_peg_m, ball_m : array-like of length 2
-            ``(x, y)`` position of each object in metres.
+            ``(x, y)`` position of each object in metres.  When
+            ``target_frame="camera"`` these are camera-frame coordinates
+            (origin top-left, X right, Y down).  When ``target_frame="sim"``
+            these are sim-frame coordinates (origin at board centre, X right,
+            Y up).
 
         Returns:
         -------
@@ -144,15 +179,27 @@ class BoardRenderer:
         """
         canvas = self._bg.copy()
 
-        # Look up sprite grid indices
-        lix = int(np.searchsorted(self._left_bx, left_peg_m[0]).clip(0, self._PEG_COLS - 1))
-        liy = int(np.searchsorted(self._left_by, left_peg_m[1]).clip(0, self._PEG_ROWS - 1))
+        # Convert input coordinates to camera frame for grid lookup
+        if self._sim_frame:
+            half_w = self._half_w
+            half_h = self._half_h
+            l_cx, l_cy = left_peg_m[1] + half_w, left_peg_m[0] + half_h
+            r_cx, r_cy = right_peg_m[1] + half_w, right_peg_m[0] + half_h
+            b_cx, b_cy = ball_m[1] + half_w, ball_m[0] + half_h
+        else:
+            l_cx, l_cy = left_peg_m[0], left_peg_m[1]
+            r_cx, r_cy = right_peg_m[0], right_peg_m[1]
+            b_cx, b_cy = ball_m[0], ball_m[1]
 
-        rix = int(np.searchsorted(self._right_bx, right_peg_m[0]).clip(0, self._PEG_COLS - 1))
-        riy = int(np.searchsorted(self._right_by, right_peg_m[1]).clip(0, self._PEG_ROWS - 1))
+        # Look up sprite grid indices (camera-frame boundaries)
+        lix = int(np.searchsorted(self._left_bx, l_cx).clip(0, self._PEG_COLS - 1))
+        liy = int(np.searchsorted(self._left_by, l_cy).clip(0, self._PEG_ROWS - 1))
 
-        bix = int(np.searchsorted(self._ball_bx, ball_m[0]).clip(0, self._BALL_COLS - 1))
-        biy = int(np.searchsorted(self._ball_by, ball_m[1]).clip(0, self._BALL_ROWS - 1))
+        rix = int(np.searchsorted(self._right_bx, r_cx).clip(0, self._PEG_COLS - 1))
+        riy = int(np.searchsorted(self._right_by, r_cy).clip(0, self._PEG_ROWS - 1))
+
+        bix = int(np.searchsorted(self._ball_bx, b_cx).clip(0, self._BALL_COLS - 1))
+        biy = int(np.searchsorted(self._ball_by, b_cy).clip(0, self._BALL_ROWS - 1))
 
         # Composite sprites at the *requested* pixel positions
         m2px_x = self._m2px_x
@@ -160,9 +207,31 @@ class BoardRenderer:
         cw = self._canvas_w
         ch = self._canvas_h
 
-        _composite(canvas, self._left[liy][lix], left_peg_m[0] * m2px_x, left_peg_m[1] * m2px_y, cw, ch)
-        _composite(canvas, self._right[riy][rix], right_peg_m[0] * m2px_x, right_peg_m[1] * m2px_y, cw, ch)
-        _composite(canvas, self._ball[biy][bix], ball_m[0] * m2px_x, ball_m[1] * m2px_y, cw, ch)
+        if self._sim_frame:
+            # Sim -> rotated-image pixel coords
+            _composite(
+                canvas,
+                self._left[liy][lix],
+                (left_peg_m[0] + half_h) * m2px_x,
+                (half_w - left_peg_m[1]) * m2px_y,
+                cw,
+                ch,
+            )
+            _composite(
+                canvas,
+                self._right[riy][rix],
+                (right_peg_m[0] + half_h) * m2px_x,
+                (half_w - right_peg_m[1]) * m2px_y,
+                cw,
+                ch,
+            )
+            _composite(
+                canvas, self._ball[biy][bix], (ball_m[0] + half_h) * m2px_x, (half_w - ball_m[1]) * m2px_y, cw, ch
+            )
+        else:
+            _composite(canvas, self._left[liy][lix], l_cx * m2px_x, l_cy * m2px_y, cw, ch)
+            _composite(canvas, self._right[riy][rix], r_cx * m2px_x, r_cy * m2px_y, cw, ch)
+            _composite(canvas, self._ball[biy][bix], b_cx * m2px_x, b_cy * m2px_y, cw, ch)
 
         # Downscale if full-res mode
         if not self._fast_mode:
@@ -242,6 +311,7 @@ def _precompute_grid(
     n_cols: int,
     scale_x: float = 1.0,
     scale_y: float = 1.0,
+    rotate_ccw: bool = False,
 ) -> list[list[tuple]]:
     """Precompute premultiplied-alpha compositing data for every grid cell.
 
@@ -257,7 +327,12 @@ def _precompute_grid(
             meta = sp["meta"]
             rgba = sp["img"]  # BGRA uint8
 
-            offset_px = meta["offset_px"]
+            offset_px = list(meta["offset_px"])
+
+            if rotate_ccw:
+                orig_w = rgba.shape[1]
+                rgba = cv2.rotate(rgba, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                offset_px = [offset_px[1], orig_w - offset_px[0]]
 
             if scale_x != 1.0 or scale_y != 1.0:
                 # Downscale sprite
