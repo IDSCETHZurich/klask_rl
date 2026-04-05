@@ -100,6 +100,8 @@ class DreamerSelfPlayWrapper(Wrapper):
         self._opp_deter = None
         self._opp_prev_action = None
         self._device = None
+        self._opp_is_first = None
+        self._opp_pending_first = None
 
     # ------------------------------------------------------------------
     # Public API called from the training script
@@ -163,11 +165,8 @@ class DreamerSelfPlayWrapper(Wrapper):
         if self._opponent_encoder is not None:
             num_envs = self.env.unwrapped.num_envs
             self._reset_opponent_state(num_envs)
-            # Encode the reset observation so the opponent has seen the
-            # initial state before its first action — matches the rl_games
-            # flow where OpponentObservationWrapper captures obs on reset.
-            is_first = torch.ones(num_envs, 1, dtype=torch.bool, device=self._device)
-            self._encode_opponent_obs(obs, is_first)
+            self._opp_is_first = torch.ones(num_envs, dtype=torch.bool, device=self._device)
+            self._opp_pending_first = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
         return obs, info
 
     def step(self, action, *args, **kwargs):
@@ -183,12 +182,15 @@ class DreamerSelfPlayWrapper(Wrapper):
         # Update opponent RSSM state with the new opponent observation.
         done = terminated | truncated
         if self._opponent_encoder is not None:
-            is_first = done.unsqueeze(-1).to(torch.bool)
-            # obs_step internally zeros stoch/deter/prev_action for done envs (via is_first),
-            # then computes the posterior from the first obs of the new episode — no manual
-            # reset needed.  _opp_prev_action is always overwritten by _get_opponent_action()
-            # before _encode_opponent_obs reads it on the next step.
-            self._encode_opponent_obs(obs, is_first)
+            obs_for_encode = self._with_terminal_opponent_obs(obs, info)
+            if self._opp_is_first is None:
+                num_envs = self.env.unwrapped.num_envs
+                self._opp_is_first = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
+                self._opp_pending_first = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
+            is_first = (self._opp_is_first | self._opp_pending_first).unsqueeze(-1)
+            self._encode_opponent_obs(obs_for_encode, is_first)
+            self._opp_is_first.zero_()
+            self._opp_pending_first.copy_(done.to(torch.bool))
 
         # --- Track episode outcomes for score-gated updates ---
         if done.any():
@@ -329,3 +331,23 @@ class DreamerSelfPlayWrapper(Wrapper):
             embed,
             is_first,
         )
+
+    def _with_terminal_opponent_obs(self, obs, info):
+        """Swap terminal observations for opponent keys on done envs when available."""
+        if not isinstance(info, dict):
+            return obs
+        terminal_obs = info.get("terminal_obs")
+        terminal_env_ids = info.get("terminal_env_ids")
+        if terminal_obs is None or terminal_env_ids is None:
+            return obs
+
+        env_ids = torch.as_tensor(terminal_env_ids, device=self._device, dtype=torch.long)
+        if env_ids.numel() == 0:
+            return obs
+
+        out_obs = dict(obs)
+        for key in ("opponent", "opponent_image"):
+            if key in out_obs and key in terminal_obs:
+                out_obs[key] = out_obs[key].clone()
+                out_obs[key][env_ids] = terminal_obs[key].to(out_obs[key].device)
+        return out_obs

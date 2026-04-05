@@ -1,5 +1,8 @@
+import math
+
 import torch
 from gymnasium import Wrapper
+from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 
 class RewardWeightWrapper(Wrapper):
@@ -248,85 +251,158 @@ class CurriculumWrapper(RewardWeightWrapper):
 
 
 class KlaskRlCollisionAvoidanceWrapper(Wrapper):
-    real_to_sim_factor_long_side = 0.0008285
-    real_to_sim_factor_short_side = 1 / 1150
-    DEACCELERATION_DISTANCE = 0.09
-    PEG_RADIUS = 0.0075
-    X_EDGE = (-0.16, 0.16)
-    Y_EDGE_PLAYER = (-0.03, -0.22)
-    Y_EDGE_OPPONENT = (-0.03, -0.22)
-    board_dimensions = (0.32, 0.44)
-    speed_limit_weight = 70.0
+
+    DEACCELERATION_DISTANCE = KLASK_PARAMS["collision_avoidance_decel_distance"]
+    PEG_RADIUS = KLASK_PARAMS["peg_radius"]
+    MIN_CLEARANCE = KLASK_PARAMS["peg_radius"] * KLASK_PARAMS["collision_avoidance_min_clearance_factor"]
+    X_EDGE = KLASK_PARAMS["joint_x_pos_limit"]
+    Y_EDGE_1 = KLASK_PARAMS["joint_y1_pos_limit"]  # [0]=outer, [1]=inner
+    Y_EDGE_2 = KLASK_PARAMS["joint_y2_pos_limit"]  # [0]=inner, [1]=outer
 
     def __init__(self, env, max_vel=0.2):
         super().__init__(env)
-
-        self.x_min, self.x_max = 15.0, 360.0
-        self.y_min_1, self.y_max_1 = 15.0, 235.0
-        self.y_min_2, self.y_max_2 = 340.0, 530.0
         self.MAX_VEL = max_vel
 
     def reset(self, *args, **kwargs):
         obs, info = self.env.reset(*args, **kwargs)
-        self.state_1 = obs["policy"].clone()[:, :2]
-        self.state_2 = obs["opponent"].clone()[:, :2]
-
+        self.state_1 = obs["policy"].clone()[:, :2]  # Peg_1 world xy
+        self.state_2 = obs["policy"].clone()[:, 4:6]  # Peg_2 world xy (unrotated)
         return obs, info
 
+    def _apply_decel_axis(self, vel, pos, edge_min, edge_max):
+        """Clamp vel in-place near boundaries using linear deceleration + hard stop."""
+        safe_zone = self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
+
+        dist_min = pos - edge_min
+        near_min = dist_min <= safe_zone
+        if near_min.any():
+            hard_mask = near_min & (dist_min <= self.MIN_CLEARANCE)
+            soft_mask = near_min & ~hard_mask
+            vel[hard_mask] = torch.maximum(vel[hard_mask], torch.zeros_like(vel[hard_mask]))
+            vel[soft_mask] = torch.maximum(
+                vel[soft_mask], -self.interpolate_vel(dist_min[soft_mask] - self.MIN_CLEARANCE)
+            )
+
+        dist_max = edge_max - pos
+        near_max = dist_max <= safe_zone
+        if near_max.any():
+            hard_mask = near_max & (dist_max <= self.MIN_CLEARANCE)
+            soft_mask = near_max & ~hard_mask
+            vel[hard_mask] = torch.minimum(vel[hard_mask], torch.zeros_like(vel[hard_mask]))
+            vel[soft_mask] = torch.minimum(
+                vel[soft_mask], self.interpolate_vel(dist_max[soft_mask] - self.MIN_CLEARANCE)
+            )
+
     def step(self, actions, *args, **kwargs):
-        left_zone = self.state_1[:, 0] <= self.X_EDGE[0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
-        soft_dist_left = self.state_1[left_zone, 0] - self.X_EDGE[0] - self.PEG_RADIUS
-        actions[left_zone, 0] = torch.maximum(actions[left_zone, 0], -self.interpolate_vel(soft_dist_left))
-
-        left_zone_opp = self.state_2[:, 0] <= self.X_EDGE[0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
-        soft_dist_left_opp = self.state_2[left_zone_opp, 0] - self.X_EDGE[0] - self.PEG_RADIUS
-        actions[left_zone_opp, 2] = torch.maximum(actions[left_zone_opp, 2], -self.interpolate_vel(soft_dist_left_opp))
-
-        right_zone = self.state_1[:, 0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS >= self.X_EDGE[1]
-        actions[right_zone, 0] = torch.minimum(
-            actions[right_zone, 0],
-            self.interpolate_vel(self.X_EDGE[1] - self.state_1[right_zone, 0] - self.PEG_RADIUS),
-        )
-
-        right_zone_opp = self.state_2[:, 0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS >= self.X_EDGE[1]
-        actions[right_zone_opp, 1] = torch.minimum(
-            actions[right_zone_opp, 1],
-            self.interpolate_vel(self.X_EDGE[1] - self.state_2[right_zone_opp, 0] - self.PEG_RADIUS),
-        )
-
-        bottom_zone = self.state_1[:, 1] <= self.Y_EDGE_PLAYER[0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
-        actions[bottom_zone, 1] = torch.maximum(
-            actions[bottom_zone, 1],
-            -self.interpolate_vel(self.state_1[:, 1][bottom_zone] - self.Y_EDGE_PLAYER[0] - self.PEG_RADIUS),
-        )
-
-        bottom_zone_opp = self.state_2[:, 1] <= self.Y_EDGE_OPPONENT[0] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
-        actions[bottom_zone_opp, 1] = torch.maximum(
-            actions[bottom_zone_opp, 1],
-            -self.interpolate_vel(self.state_2[:, 1][bottom_zone_opp] - self.Y_EDGE_OPPONENT[0] - self.PEG_RADIUS),
-        )
-
-        # Y - TOP
-        top_zone = self.state_1[:, 1] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS >= self.Y_EDGE_PLAYER[1]
-        actions[top_zone, 1] = torch.minimum(
-            actions[top_zone, 1],
-            self.interpolate_vel(self.Y_EDGE_PLAYER[1] - self.state_1[:, 1][top_zone] + self.PEG_RADIUS),
-        )
-
-        top_zone_opp = self.state_2[:, 1] + self.DEACCELERATION_DISTANCE + self.PEG_RADIUS >= self.Y_EDGE_OPPONENT[1]
-        actions[top_zone_opp, 1] = torch.minimum(
-            actions[top_zone_opp, 1],
-            self.interpolate_vel(self.Y_EDGE_OPPONENT[1] - self.state_2[:, 1][top_zone_opp] + self.PEG_RADIUS),
-        )
+        self._apply_decel_axis(actions[:, 0], self.state_1[:, 0], self.X_EDGE[0], self.X_EDGE[1])
+        self._apply_decel_axis(actions[:, 1], self.state_1[:, 1], self.Y_EDGE_1[0], self.Y_EDGE_1[1])
+        self._apply_decel_axis(actions[:, 2], self.state_2[:, 0], self.X_EDGE[0], self.X_EDGE[1])
+        self._apply_decel_axis(actions[:, 3], self.state_2[:, 1], self.Y_EDGE_2[0], self.Y_EDGE_2[1])
 
         obs, rew, terminated, truncated, info = self.env.step(actions, *args, **kwargs)
         self.state_1 = obs["policy"].clone()[:, :2]
-        self.state_2 = obs["opponent"].clone()[:, :2]
-
+        self.state_2 = obs["policy"].clone()[:, 4:6]
         return obs, rew, terminated, truncated, info
 
     def interpolate_vel(self, distance):
         return (self.MAX_VEL / self.DEACCELERATION_DISTANCE) * distance
+
+
+class InitializationWrapper(Wrapper):
+    """Manages reset-time initialization helpers via a configurable schedule.
+
+    Sets ``env.unwrapped._init_velocity_speed`` before every ``reset()`` and
+    ``step()`` call.  The event function ``reset_player_velocity_toward_ball``
+    registered in ``EventCfgDreamer`` reads this attribute and writes the
+    corresponding velocity into the physics simulation *inside* the event
+    manager — ensuring that observations (and ``ActuatorModelWrapper``'s state
+    history) see the correct non-zero velocity from the very first step.
+
+    The ``init_velocity`` config key accepts the same schedule types as
+    :class:`CurriculumWrapper` (``static``, ``linear``, ``sigmoid``,
+    ``exponential``, ``schedule``), using ``speed`` instead of ``weight``.
+
+    Example config::
+
+        initialization:
+          init_velocity:
+            type: schedule
+            phases:
+              - type: static
+                speed: 1.0
+                steps: [0, 1_000_000]
+              - type: sigmoid
+                speed: [1.0, 0.0]
+                steps: [1_000_000, 3_000_000]
+                steepness: 6.0
+              - type: static
+                speed: 0.0
+                steps: [3_000_000, -1]
+    """
+
+    def __init__(self, env, cfg: dict):
+        super().__init__(env)
+        self.cfg = cfg
+        self._step = 0
+
+    def _compute_speed(self, spec: dict, step: int) -> float:
+        """Return the current speed scalar from a schedule spec."""
+        if spec["type"] == "schedule":
+            active = spec["phases"][-1]
+            for phase in spec["phases"]:
+                start, end = phase["steps"]
+                if start <= step and (end == -1 or step <= end):
+                    active = phase
+                    break
+        else:
+            active = spec
+
+        phase_type = active["type"]
+        raw = active["speed"]
+
+        if phase_type == "static":
+            return float(raw)
+
+        start_step = active["steps"][0] if "steps" in active else 0
+
+        if phase_type == "linear":
+            end_step = active["steps"][1] if "steps" in active else active["num_steps"]
+            progress = min(max((step - start_step) / (end_step - start_step), 0.0), 1.0)
+            return float(raw[0] + (raw[1] - raw[0]) * progress)
+
+        if phase_type == "sigmoid":
+            end_step = active["steps"][1] if "steps" in active else active["num_steps"]
+            progress = min(max((step - start_step) / (end_step - start_step), 0.0), 1.0)
+            k = active.get("steepness", 6.0)
+
+            def _sig(x):
+                return 1.0 / (1.0 + math.exp(-x))
+
+            normalized = (_sig(k * (2.0 * progress - 1.0)) - _sig(-k)) / (_sig(k) - _sig(-k))
+            return float(raw[0] + (raw[1] - raw[0]) * normalized)
+
+        if phase_type == "exponential":
+            elapsed = max(step - start_step, 0)
+            return float(raw) * math.exp(-elapsed * active["decay_rate"])
+
+        return 0.0
+
+    def _set_env_speed(self):
+        init_vel_spec = self.cfg.get("init_velocity")
+        speed = self._compute_speed(init_vel_spec, self._step) if init_vel_spec else 0.0
+        self.env.unwrapped._init_velocity_speed = speed
+
+    def reset(self, *args, **kwargs):
+        # Set speed BEFORE env.reset() so the event manager reads the correct value.
+        self._set_env_speed()
+        return self.env.reset(*args, **kwargs)
+
+    def step(self, actions):
+        self._step += self.env.unwrapped.num_envs
+        # Update speed BEFORE env.step() so partial resets triggered inside
+        # env.step() also see the current scheduled speed.
+        self._set_env_speed()
+        return self.env.step(actions)
 
 
 class ActionHistoryWrapper(Wrapper):

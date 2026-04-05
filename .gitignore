@@ -234,3 +234,6 @@ wandb/
 ${data}
 
 logdir/
+
+# Renderer Debug Outputs
+src/klask_rl/scripts/dreamer/sprite_renderer/debug/test_renders

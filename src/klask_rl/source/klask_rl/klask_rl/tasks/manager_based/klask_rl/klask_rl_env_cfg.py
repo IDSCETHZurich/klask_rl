@@ -1,21 +1,32 @@
-from isaaclab.sim import SimulationCfg, PhysxCfg, RenderCfg
+import os
+
 from isaaclab.envs import ManagerBasedRLEnvCfg
+from isaaclab.sim import PhysxCfg, RenderCfg, SimulationCfg
 from isaaclab.utils import configclass
-
-
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 
-from .env_cfg import KlaskRlSceneCfg, KlaskRlDreamerSceneCfg
-from .env_cfg import ActionsCfg, ActionsCfgPlayerOnly
-from .env_cfg import ObservationsCfg, ObservationsExtendedCfg, TwoStageHerObservationsCfg, DreamerObservationsCfg
-from .env_cfg import EventCfg, EventCfgSac, EventCfgDreamer
 from .env_cfg import (
+    ActionsCfg,
+    ActionsCfgPlayerOnly,
+    DreamerObservationsCfg,
+    DreamerSpriteObservationsCfg,
+    EventCfg,
+    EventCfgDreamer,
+    EventCfgSac,
+    KlaskRlDreamerSceneCfg,
+    KlaskRlDreamerSpriteSceneCfg,
+    KlaskRlSceneCfg,
+    ObservationsCfg,
+    ObservationsExtendedCfg,
     RewardsCfg,
     RewardsCfgDenseBallHit,
     RewardsCfgSparseHer,
     RewardsCfgTwoStageHer,
+    TerminationsCfg,
+    TerminationsCfgSac,
+    TerminationsCfgTwoStageHer,
+    TwoStageHerObservationsCfg,
 )
-from .env_cfg import TerminationsCfg, TerminationsCfgSac, TerminationsCfgTwoStageHer
 
 
 @configclass
@@ -148,6 +159,11 @@ class KlaskRlDreamerEnvCfg(ManagerBasedRLEnvCfg):
     terminations = TerminationsCfg()
     episode_length_s = KLASK_PARAMS["timeout"]
 
+    # Configurable ball reset area — override from yaml config to change
+    # where the ball spawns at the start of each episode.
+    ball_reset_position_x: tuple = KLASK_PARAMS["ball_reset_position_x"]
+    ball_reset_position_y: tuple = KLASK_PARAMS["ball_reset_position_y"]
+
     def __post_init__(self):
         """Post initialization."""
         # viewer settings
@@ -157,3 +173,26 @@ class KlaskRlDreamerEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = KLASK_PARAMS["decimation"]
         # simulation settings
         self.sim.dt = KLASK_PARAMS["physics_dt"]
+        # Propagate ball reset ranges into the event config.
+        self.events.reset_ball_position.params["pose_range"]["x"] = self.ball_reset_position_x
+        self.events.reset_ball_position.params["pose_range"]["y"] = self.ball_reset_position_y
+
+
+# Default sprite asset paths, resolved relative to this file.
+_SPRITE_ASSETS_DIR = os.path.normpath(
+    os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "..", "..", "..", "scripts", "dreamer", "sprite_renderer", "assets"
+    )
+)
+
+
+@configclass
+class KlaskRlDreamerSpriteEnvCfg(KlaskRlDreamerEnvCfg):
+    """Klask Dreamer env using sprite renderer instead of TiledCamera."""
+
+    scene = KlaskRlDreamerSpriteSceneCfg(num_envs=1, env_spacing=1.0)
+    observations = DreamerSpriteObservationsCfg()
+
+    # Sprite asset paths (overridable from YAML).
+    sprite_dir: str = os.path.join(_SPRITE_ASSETS_DIR, "sprites")
+    background_path: str = os.path.join(_SPRITE_ASSETS_DIR, "background", "median_background.png")

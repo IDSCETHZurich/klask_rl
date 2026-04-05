@@ -1,0 +1,20 @@
+{
+  "object_type": "ball",
+  "source_image": "ball/ball_000064.png",
+  "position_m": [
+    0.38972680515234187,
+    0.28574162209015264
+  ],
+  "position_px": [
+    605,
+    442
+  ],
+  "sprite_size_px": [
+    30,
+    31
+  ],
+  "offset_px": [
+    5.0,
+    15.0
+  ]
+}

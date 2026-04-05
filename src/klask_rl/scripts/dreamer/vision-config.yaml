@@ -1,0 +1,160 @@
+defaults:
+  - model: size50M
+  # Disable Hydra's Python logging-to-file (train.log)
+  - override hydra/job_logging: disabled
+  - _self_
+
+model:
+  rep_loss: "dreamer"
+
+# Logging
+wandb_project: KLASK_Dreamer
+wandb_entity: null
+wandb_name: dreamer_wpt_hootbdk4_6M_with_AM_0.4m/s_128
+
+# Initialization
+logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026-03-14/13-02-06 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
+seed: 0
+deterministic_run: False
+device: "cuda:0"
+init_checkpoint: /workspace/klask_rl/logdir/2026-03-27/23-23-41/checkpoint_6000008.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+
+hydra:
+  run:
+    dir: ${logdir}
+  searchpath:
+    - file://${script_dir:}/r2dreamer/configs
+
+batch_size: 4
+batch_length: 128
+micro_batch_size: 2
+
+# ---- Environment (all klask-specific, inlined here) ----
+env:
+  task: "isaaclab_Klask-Rl-Dreamer-v0"
+  steps: 1e7
+  env_num: 8
+  eval_episode_num: 10
+  action_repeat: 1
+  decimation: 20
+  train_ratio: 128
+  time_limit: 1000
+  sim_dt: 0.001
+  seed: ${seed}
+  device: ${device}
+  ball_reset_position_x: [-0.15, 0.15]
+  ball_reset_position_y: [-0.10, -0.02]
+  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
+  episode_length_s: 5.0 # [s] Episode length in seconds
+  actuator_model: True
+  size: [128, 128]
+  encoder:
+    mlp_keys: "$^"
+    cnn_keys: "image"
+  decoder:
+    mlp_keys: "$^"
+    cnn_keys: "image"
+  rewards:
+    time_punishment:
+      type: static
+      weight: 0.0
+    time_out_punishment:
+      type: static
+      weight: 0.0
+    shot_over_middle_line:
+      type: static
+      weight: 0.0
+    player_in_goal:
+      type: schedule
+      phases:
+        - type: static
+          weight: 0.0
+          steps: [0, 2_000_000]
+        - type: sigmoid
+          weight: [0.0, -1500.0]
+          steps: [2_000_000, 2_500_000]
+          steepness: 6.0
+        - type: static
+          weight: -1500.0
+          steps: [2_500_000, -1]
+    opponent_in_goal:
+      type: static
+      weight: 0.0
+    goal_scored:
+      type: static
+      weight: 5000.0
+    goal_conceded:
+      type: schedule
+      phases:
+        - type: static
+          weight: 0.0
+          steps: [0, 2_500_000]
+        - type: sigmoid
+          weight: [0.0, -1500.0]
+          steps: [2_500_000, 3_000_000]
+          steepness: 6.0
+        - type: static
+          weight: -1500.0
+          steps: [3_000_000, -1]
+    distance_player_ball_own_half:
+      type: static
+      weight: 0.0
+    distance_ball_opponent_goal:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1.0e-6
+    distance_ball_own_goal:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1.0e-6
+    ball_speed:
+      type: static
+      weight: 0.0
+    ball_stationary:
+      type: static
+      weight: 0.0
+    collision_player_ball:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1.0e-6
+    ball_in_own_half:
+      type: static
+      weight: 0.0
+    close_to_boundaries:
+      type: static
+      weight: 0.0
+    player_strategically_positioned:
+      type: static
+      weight: 0.0
+  terminations:
+    time_out: true
+    goal_scored: true
+    goal_conceded: true
+    player_in_goal: true
+    opponent_in_goal: true
+
+buffer:
+  batch_size: ${batch_size}
+  batch_length: ${batch_length}
+  max_size: 5e5
+  device: ${device}
+  storage_device: "cpu"
+
+trainer:
+  steps: ${env.steps}
+  pretrain: 0
+  eval_every: 4e4
+  eval_episode_num: ${env.eval_episode_num}
+  batch_size: ${batch_size}
+  batch_length: ${batch_length}
+  train_ratio: ${env.train_ratio}
+  video_pred_log: True
+  params_hist_log: False
+  update_log_every: 5e3
+  action_repeat: ${env.action_repeat}
+  save_checkpoint_every: 100_000 # Save checkpoint every N steps (0 = only save at the end)
+
+self_play: true
+self_play_config:
+  update_score: 0.3 # opponent updated only when rolling mean score > this
+  games_to_track: 4096 # rolling window size for score averaging

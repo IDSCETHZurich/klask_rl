@@ -1,11 +1,12 @@
+import cv2
+import isaaclab.utils.math as math_utils
+import numpy as np
 import torch
 import torch.nn.functional as F
-
-from isaaclab.assets import RigidObject, Articulation
-import isaaclab.utils.math as math_utils
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
-from isaaclab.sensors import TiledCamera, Camera, RayCasterCamera
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors import Camera, RayCasterCamera, TiledCamera
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 
@@ -56,6 +57,222 @@ def padded_image_rotated(
     # 180° rotation on the spatial (H, W) dimensions before padding
     images = torch.rot90(images, k=2, dims=[1, 2])
     return _pad_image_to_target(images, target_h, target_w)
+
+
+# ---------------------------------------------------------------------------
+# Sprite-rendered image observations
+# ---------------------------------------------------------------------------
+
+# Board aspect ratio: 420mm x 320mm = 21:16 base ratio (same as env_cfg_utils.py).
+_BOARD_BASE_H = 21
+_BOARD_BASE_W = 16
+
+# Lazy renderer cache: keyed by (sprite_dir, bg_path, out_w, out_h)
+_renderer_cache: dict = {}
+# Per-step image cache so the opponent view can reuse the player's render.
+_sprite_image_cache: dict = {}
+
+
+def _sprite_camera_params(image_size: int) -> tuple[int, int]:
+    """Derive (cam_h, cam_w) from a square image size using the board aspect ratio."""
+    scale = min(image_size // _BOARD_BASE_H, image_size // _BOARD_BASE_W)
+    return scale * _BOARD_BASE_H, scale * _BOARD_BASE_W
+
+
+def _get_renderer(sprite_dir: str, background_path: str, cam_w: int, cam_h: int):
+    """Return a cached BoardRenderer, creating one on first call."""
+    key = (sprite_dir, background_path, cam_w, cam_h)
+    if key not in _renderer_cache:
+        import importlib.util
+        import os
+
+        # board_renderer.py lives two directories above sprite_dir
+        # (sprite_dir = .../assets/sprites/, renderer = .../sprite_renderer/board_renderer.py).
+        renderer_path = os.path.join(os.path.dirname(os.path.dirname(sprite_dir)), "board_renderer.py")
+        spec = importlib.util.spec_from_file_location("board_renderer", renderer_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        BoardRenderer = mod.BoardRenderer
+
+        _renderer_cache[key] = BoardRenderer(
+            sprite_dir=sprite_dir,
+            background_path=background_path,
+            output_size=(cam_w, cam_h),
+            fast_mode=False,
+            target_frame="sim",
+        )
+    return _renderer_cache[key]
+
+
+def sprite_rendered_image(
+    env: ManagerBasedRLEnv,
+    peg1_cfg: SceneEntityCfg,
+    peg2_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    target_h: int = 128,
+    target_w: int = 128,
+) -> torch.Tensor:
+    """Render sprite-based board images from sim state positions.
+
+    Returns a ``(N, target_h, target_w, 3)`` uint8 RGB tensor on the env device.
+    The unpadded render is cached so ``sprite_rendered_image_rotated`` can reuse it.
+    """
+    cfg = env.cfg
+    cam_h, cam_w = _sprite_camera_params(min(target_h, target_w))
+    renderer = _get_renderer(cfg.sprite_dir, cfg.background_path, cam_w, cam_h)
+
+    # Extract positions from scene (sim frame, origin at board centre)
+    peg1_pos = body_xy_pos_w(env, peg1_cfg)  # (N, 2) GPU tensor
+    peg2_pos = body_xy_pos_w(env, peg2_cfg)  # (N, 2) GPU tensor
+    ball_pos = root_xy_pos_w(env, ball_cfg)  # (N, 2) GPU tensor
+
+    # Transfer to CPU once (batch)
+    peg1_np = peg1_pos.cpu().numpy()
+    peg2_np = peg2_pos.cpu().numpy()
+    ball_np = ball_pos.cpu().numpy()
+
+    # Render per env, collect RGB images
+    N = env.num_envs
+    images_np = np.empty((N, cam_h, cam_w, 3), dtype=np.uint8)
+    for i in range(N):
+        bgr = renderer.render(peg1_np[i], peg2_np[i], ball_np[i])
+        cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB, dst=images_np[i])
+
+    # To GPU tensor and cache for opponent view
+    tensor = torch.from_numpy(images_np).to(env.device)
+    _sprite_image_cache.clear()
+    _sprite_image_cache["images"] = tensor
+
+    return _pad_image_to_target(tensor, target_h, target_w)
+
+
+def sprite_rendered_image_rotated(
+    env: ManagerBasedRLEnv,
+    peg1_cfg: SceneEntityCfg,
+    peg2_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    target_h: int = 128,
+    target_w: int = 128,
+) -> torch.Tensor:
+    """Return 180-degree-rotated sprite image for the opponent view.
+
+    Reuses the cached render from ``sprite_rendered_image`` to avoid rendering
+    twice per step.
+    """
+    if "images" not in _sprite_image_cache:
+        raise RuntimeError(
+            "sprite_rendered_image_rotated called before sprite_rendered_image. "
+            "Ensure the 'image' observation group is defined before 'opponent_image' "
+            "in DreamerSpriteObservationsCfg so rendering happens first."
+        )
+    images = _sprite_image_cache.pop("images")
+    rotated = torch.rot90(images, k=2, dims=[1, 2])
+    return _pad_image_to_target(rotated, target_h, target_w)
+
+
+def set_joint_position_limits(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    lower: float,
+    upper: float,
+):
+    """Override joint position limits in simulation for the specified joints.
+
+    Useful when the USD asset has incorrect limits and they cannot be edited.
+    Writes the given lower/upper bounds to PhysX for all environments.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    joint_ids = asset_cfg.joint_ids
+    limits = asset.data.joint_pos_limits.clone()
+    limits[:, joint_ids, 0] = lower
+    limits[:, joint_ids, 1] = upper
+    asset.write_joint_position_limit_to_sim(limits[:, joint_ids, :], joint_ids=joint_ids, warn_limit_violation=False)
+
+
+def set_rigid_body_material(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg,
+    static_friction: float,
+    dynamic_friction: float,
+    restitution: float,
+):
+    """Set rigid body material properties to fixed values.
+
+    Unlike ``randomize_rigid_body_material``, this simply writes the given
+    values to the PhysX material buffer — no sampling, no buckets.
+    Respects ``asset_cfg.body_ids`` so it can target a subset of bodies.
+    """
+    asset: Articulation | RigidObject = env.scene[asset_cfg.name]
+    materials = asset.root_physx_view.get_material_properties()
+    all_ids = torch.arange(env.scene.num_envs, device="cpu")
+
+    if isinstance(asset, Articulation) and asset_cfg.body_ids != slice(None):
+        num_shapes_per_body = []
+        for link_path in asset.root_physx_view.link_paths[0]:
+            link_view = asset._physics_sim_view.create_rigid_body_view(link_path)
+            num_shapes_per_body.append(link_view.max_shapes)
+        for body_id in asset_cfg.body_ids:
+            start_idx = sum(num_shapes_per_body[:body_id])
+            end_idx = start_idx + num_shapes_per_body[body_id]
+            materials[:, start_idx:end_idx, 0] = static_friction
+            materials[:, start_idx:end_idx, 1] = dynamic_friction
+            materials[:, start_idx:end_idx, 2] = restitution
+    else:
+        materials[:, :, 0] = static_friction
+        materials[:, :, 1] = dynamic_friction
+        materials[:, :, 2] = restitution
+
+    asset.root_physx_view.set_material_properties(materials, all_ids)
+
+
+def reset_player_velocity_toward_ball(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+):
+    """Initialize player velocity toward the ball at episode reset.
+
+    Reads ``env._init_velocity_speed`` (set by ``InitializationWrapper`` before
+    calling ``env.reset()``) and writes the computed velocity into the physics
+    simulation for the environments being reset.
+
+    Running inside the event manager guarantees that the velocity is written
+    *before* observations are read, so ``ActuatorModelWrapper`` sees the correct
+    non-zero velocity in its state history buffer.
+
+    If ``_init_velocity_speed`` is 0.0 (the default when the wrapper is absent),
+    this function is a no-op.
+    """
+    speed = getattr(env, "_init_velocity_speed", 0.0)
+    if speed <= 0.0:
+        return
+
+    klask_art: Articulation = env.scene["klask"]
+    ball: RigidObject = env.scene["ball"]
+
+    # Cache joint IDs lazily on first call.
+    if not hasattr(env, "_init_vel_joint_ids"):
+        x_ids, _ = klask_art.find_joints(["slider_to_peg_1"])
+        y_ids, _ = klask_art.find_joints(["ground_to_slider_1"])
+        env._init_vel_joint_ids = (x_ids[0], y_ids[0])
+    x_id, y_id = env._init_vel_joint_ids
+
+    # Player XY position from joint positions (prismatic joints; default = 0 = board centre).
+    # joint_pos is updated by write_joint_state_to_sim in the earlier position-reset events.
+    player_x = klask_art.data.joint_pos[env_ids, x_id]  # slider_to_peg_1 → X
+    player_y = klask_art.data.joint_pos[env_ids, y_id]  # ground_to_slider_1 → Y
+
+    # Ball XY relative to the environment origin.
+    # root_pos_w is updated by mdp.reset_root_state_uniform in the ball-reset event.
+    ball_xy = ball.data.root_pos_w[env_ids, :2] - env.scene.env_origins[env_ids, :2]
+
+    direction_x = ball_xy[:, 0] - player_x
+    direction_y = ball_xy[:, 1] - player_y
+    norm = torch.sqrt(direction_x**2 + direction_y**2).clamp(min=1e-6)
+
+    vel_2d = torch.stack([(direction_x / norm) * speed, (direction_y / norm) * speed], dim=1)  # [len(env_ids), 2]
+    klask_art.write_joint_velocity_to_sim(vel_2d, joint_ids=[x_id, y_id], env_ids=env_ids)
 
 
 def reset_ball_hit_tracking(
@@ -147,6 +364,33 @@ def ball_hit_timeout(
     should_terminate = env.ball_hit_timer >= timeout
 
     return should_terminate
+
+
+def reset_joints_by_absolute(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    position_range: tuple[float, float],
+    velocity_range: tuple[float, float],
+    asset_cfg: SceneEntityCfg,
+):
+    """Reset the robot joints to an absolute position and velocity sampled from the given ranges.
+
+    Unlike reset_joints_by_offset, this function sets the joint state directly without adding
+    the default joint position as a bias.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+
+    joint_pos = math_utils.sample_uniform(*position_range, (len(env_ids), len(asset_cfg.joint_ids)), env.device)
+    joint_vel = math_utils.sample_uniform(*velocity_range, (len(env_ids), len(asset_cfg.joint_ids)), env.device)
+
+    # clamp joint pos to limits
+    joint_pos_limits = asset.data.soft_joint_pos_limits[env_ids][:, asset_cfg.joint_ids, :]
+    joint_pos = joint_pos.clamp_(joint_pos_limits[..., 0], joint_pos_limits[..., 1])
+    # clamp joint vel to limits
+    joint_vel_limits = asset.data.soft_joint_vel_limits[env_ids][:, asset_cfg.joint_ids]
+    joint_vel = joint_vel.clamp_(-joint_vel_limits, joint_vel_limits)
+
+    asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids, joint_ids=asset_cfg.joint_ids)
 
 
 def reset_joints_by_offset(
@@ -594,7 +838,7 @@ def termination_reward_time_decay(
 
     if termination_term not in term_manager.active_terms:
         available_terms = term_manager.active_terms
-        raise ValueError(f"Termination term '{termination_term}' not found. " f"Available terms: {available_terms}")
+        raise ValueError(f"Termination term '{termination_term}' not found. Available terms: {available_terms}")
 
     # Get the boolean termination signal for this specific term using the proper API
     terminated = term_manager.get_term(termination_term)
@@ -623,20 +867,20 @@ def distance_to_wall(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torc
     device = player_pos.device
     cost = torch.zeros(player_pos.shape[0], device=device)
 
-    x_edge = player_pos[:, 0] < 0.03 + torch.tensor(KLASK_PARAMS["edge"][0])
-    distance = player_pos[:, 0] - torch.tensor(KLASK_PARAMS["edge"][0])
+    x_edge = player_pos[:, 0] < 0.03 + torch.tensor(KLASK_PARAMS["joint_x_pos_limit"][0])
+    distance = player_pos[:, 0] - torch.tensor(KLASK_PARAMS["joint_x_pos_limit"][0])
     cost += x_edge * torch.exp(-5 * distance)
 
-    x_edge = torch.tensor(KLASK_PARAMS["edge"][1]) - player_pos[:, 0] < 0.03
-    distance = torch.tensor(KLASK_PARAMS["edge"][1]) - player_pos[:, 0]
+    x_edge = torch.tensor(KLASK_PARAMS["joint_x_pos_limit"][1]) - player_pos[:, 0] < 0.03
+    distance = torch.tensor(KLASK_PARAMS["joint_x_pos_limit"][1]) - player_pos[:, 0]
     cost += x_edge * torch.exp(-5 * distance)
 
-    y_edge = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["edge"][2]) < 0.03
-    distance = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["edge"][2])
+    y_edge = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][0]) < 0.03
+    distance = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][0])
     cost += y_edge * torch.exp(-5 * distance)
 
-    y_edge = torch.tensor(KLASK_PARAMS["edge"][3]) - player_pos[:, 1] < 0.03
-    distance = torch.tensor(KLASK_PARAMS["edge"][3]) - player_pos[:, 1]
+    y_edge = torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][1]) - player_pos[:, 1] < 0.03
+    distance = torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][1]) - player_pos[:, 1]
     cost += y_edge * torch.exp(-5 * distance)
 
     return 1.0 * (cost)
@@ -736,5 +980,3 @@ def distance_ball_to_player(
     player_pos = body_xy_pos_w(env, player_cfg)  # (N, 2)
     dist = torch.norm(ball_pos - player_pos, dim=1)  # (N,)
     return dist.unsqueeze(-1)
-
-

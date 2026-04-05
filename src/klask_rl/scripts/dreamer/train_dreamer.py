@@ -17,10 +17,16 @@ for _arg in sys.argv[1:]:
         _vision = True
         break
 
-# The KLASK Dreamer env always uses cameras (cnn_keys: "image"), so we
-# unconditionally enable them.  This avoids having to pass --enable_cameras
-# on every invocation.
-if "--enable_cameras" not in sys.argv:
+# Detect sprite-based task — these render images on CPU from state, so they
+# do NOT need GPU cameras enabled (saves VRAM and avoids rendering overhead).
+_sprite_task = any(
+    "Sprite" in _arg.split("=", 1)[1]
+    for _arg in sys.argv[1:]
+    if _arg.startswith("env.task=") or _arg.startswith("env=")
+)
+
+# Enable GPU cameras for all tasks except sprite-rendered ones.
+if not _sprite_task and "--enable_cameras" not in sys.argv:
     sys.argv.insert(1, "--enable_cameras")
 
 from isaaclab.app import AppLauncher
@@ -70,6 +76,7 @@ from dreamer import Dreamer
 
 # Self-play wrapper (lives outside the r2dreamer submodule)
 from dreamer_self_play import DreamerSelfPlayWrapper
+from env_cfg_utils import apply_camera_size_to_env_cfg
 from envs import make_envs
 from envs.isaaclab import IsaacLabVecEnv
 from gymnasium import Wrapper
@@ -77,8 +84,10 @@ from isaaclab.sim import RenderCfg
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     CurriculumWrapper,
+    InitializationWrapper,
     KlaskRlRandomOpponentWrapper,
     OpponentActionWrapper,
+    configure_domain_randomization,
 )
 from trainer import OnlineTrainer
 
@@ -130,10 +139,7 @@ class EpisodeMetricsWrapper(Wrapper):
             # step N's func*weight (without dt), so multiply by dt.
             for env_id in done_ids.tolist():
                 for term_idx, term_name in enumerate(rm._term_names):
-                    full_sum = (
-                        pre_sums[term_name][env_id].item()
-                        + rm._step_reward[env_id, term_idx].item() * dt
-                    )
+                    full_sum = pre_sums[term_name][env_id].item() + rm._step_reward[env_id, term_idx].item() * dt
                     if term_name not in self._reward_history:
                         self._reward_history[term_name] = self._deque_factory()
                     self._reward_history[term_name].append(full_sum)
@@ -209,7 +215,6 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
     import importlib
 
     import gymnasium as gym
-    import numpy as np
 
     env_cfg_entry = gym.spec(gym_id).kwargs["env_cfg_entry_point"]
     if isinstance(env_cfg_entry, str):
@@ -219,6 +224,17 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
         env_cfg_class = env_cfg_entry
 
     env_cfg = env_cfg_class()
+
+    # Override ball reset position from yaml config if provided.
+    # Sets named fields on env_cfg, then re-propagates to event params
+    # (post_init already ran with defaults).
+    ball_reset_x = getattr(config, "ball_reset_position_x", None)
+    ball_reset_y = getattr(config, "ball_reset_position_y", None)
+    if ball_reset_x is not None and hasattr(env_cfg, "ball_reset_position_x"):
+        env_cfg.ball_reset_position_x = tuple(ball_reset_x)
+        env_cfg.ball_reset_position_y = tuple(ball_reset_y)
+        env_cfg.events.reset_ball_position.params["pose_range"]["x"] = env_cfg.ball_reset_position_x
+        env_cfg.events.reset_ball_position.params["pose_range"]["y"] = env_cfg.ball_reset_position_y
 
     sim_dt = getattr(config, "sim_dt", None)
     if sim_dt is not None:
@@ -233,6 +249,9 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
     # so we disable the antialiasing for a more pixelated (and hence more realistic) image.
     env_cfg.sim.render = RenderCfg(antialiasing_mode="Off")
 
+    # --- Camera resolution & padding derived from env.size ---
+    apply_camera_size_to_env_cfg(env_cfg, getattr(config, "size", None))
+
     # Null out disabled termination terms on env_cfg BEFORE construction so
     # IsaacLab's TerminationManager never registers them (_prepare_terms skips None).
     terminations_cfg = getattr(config, "terminations", None)
@@ -245,6 +264,15 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
         for term, active in term_dict.items():
             if not active and hasattr(env_cfg.terminations, term):
                 setattr(env_cfg.terminations, term, None)
+
+    # Configure domain randomization events from YAML BEFORE env construction.
+    _dr_cfg_raw = getattr(config, "domain_randomization", None)
+    _dr_dict = (
+        OmegaConf.to_container(_dr_cfg_raw, resolve=True)
+        if _dr_cfg_raw is not None and OmegaConf.is_config(_dr_cfg_raw)
+        else _dr_cfg_raw
+    )
+    configure_domain_randomization(env_cfg, _dr_dict)
 
     # --- Create the base gymnasium env ---
     isaac_env = gym.make(gym_id, cfg=env_cfg, render_mode=render_mode)
@@ -269,6 +297,15 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
     # --- 2. Actuator model wrapper ---
     if getattr(config, "actuator_model", False):
         isaac_env = ActuatorModelWrapper(isaac_env)
+
+    # --- 2b. Initialization wrapper (player init velocity, etc.) ---
+    init_cfg = getattr(config, "initialization", None)
+    if init_cfg is not None:
+        if OmegaConf.is_config(init_cfg):
+            init_dict = OmegaConf.to_container(init_cfg, resolve=True)
+        else:
+            init_dict = dict(init_cfg)
+        isaac_env = InitializationWrapper(isaac_env, init_dict)
 
     # --- 3. Reward curriculum wrapper ---
     rewards_cfg = getattr(config, "rewards", None)
@@ -407,6 +444,15 @@ def main(config):
                     env._step = _curriculum_step
                     break
                 env = env.env
+        # Restore initialization step so velocity annealing continues correctly.
+        _init_step = checkpoint.get("init_step", 0)
+        if _init_step > 0:
+            env = vec_env._env
+            while isinstance(env, Wrapper):
+                if isinstance(env, InitializationWrapper):
+                    env._step = _init_step
+                    break
+                env = env.env
         # Restore LR scheduler state so warmup doesn't restart.
         if "scheduler_state_dict" in checkpoint:
             agent._scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
@@ -434,7 +480,10 @@ def main(config):
             if _saved_scores is not None:
                 _self_play_wrapper._score_buffer.clear()
                 _self_play_wrapper._score_buffer.extend(_saved_scores)
-                print(f"  Restored self-play score buffer ({len(_saved_scores)} entries, mean={_self_play_wrapper.mean_score:.3f})")
+                print(
+                    f"  Restored self-play score buffer ({len(_saved_scores)} entries,"
+                    f" mean={_self_play_wrapper.mean_score:.3f})"
+                )
         print("Self-play enabled: opponent initialised from current agent.")
 
     # Subclass OnlineTrainer to hook score-gated opponent updates.
@@ -469,16 +518,29 @@ def main(config):
                 _curr_step = _env._step
                 break
             _env = _env.env
+        # Find initialization step from wrapper chain.
+        _init_step = 0
+        _env = vec_env._env
+        while isinstance(_env, Wrapper):
+            if isinstance(_env, InitializationWrapper):
+                _init_step = _env._step
+                break
+            _env = _env.env
         items_to_save = {
             "agent_state_dict": agent.state_dict(),
             "optims_state_dict": tools.recursively_collect_optim_state_dict(agent),
             "step": step,
             "curriculum_step": _curr_step,
+            "init_step": _init_step,
             "scheduler_state_dict": agent._scheduler.state_dict(),
             "scaler_state_dict": agent._scaler.state_dict(),
             "slow_value_updates": agent._slow_value_updates,
             **({"ema_updates": agent._ema_updates} if hasattr(agent, "_ema_updates") else {}),
-            **({"selfplay_score_buffer": list(_self_play_wrapper._score_buffer)} if _self_play_wrapper is not None else {}),
+            **(
+                {"selfplay_score_buffer": list(_self_play_wrapper._score_buffer)}
+                if _self_play_wrapper is not None
+                else {}
+            ),
         }
         torch.save(items_to_save, logdir / f"checkpoint_{step}.pt")
         torch.save(items_to_save, logdir / "latest.pt")

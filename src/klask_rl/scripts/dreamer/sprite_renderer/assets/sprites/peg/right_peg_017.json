@@ -1,0 +1,20 @@
+{
+  "object_type": "right_peg",
+  "source_image": "grid/grid_000008.png",
+  "position_m": [
+    0.2486503067484662,
+    0.07046464646465289
+  ],
+  "position_px": [
+    386,
+    109
+  ],
+  "sprite_size_px": [
+    33,
+    37
+  ],
+  "offset_px": [
+    11.0,
+    21.0
+  ]
+}

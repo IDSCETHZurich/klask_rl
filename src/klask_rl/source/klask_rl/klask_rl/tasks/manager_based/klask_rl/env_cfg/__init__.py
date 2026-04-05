@@ -1,10 +1,11 @@
-from .klask_rl_scene_cfg import KlaskRlSceneCfg, KlaskRlDreamerSceneCfg
+from .klask_rl_scene_cfg import KlaskRlSceneCfg, KlaskRlDreamerSceneCfg, KlaskRlDreamerSpriteSceneCfg
 from .klask_rl_actions_cfg import ActionsCfg, ActionsCfgPlayerOnly
 from .klask_rl_observations_cfg import (
     ObservationsCfg,
     ObservationsExtendedCfg,
     TwoStageHerObservationsCfg,
     DreamerObservationsCfg,
+    DreamerSpriteObservationsCfg,
 )
 from .klask_rl_event_cfg import EventCfg, EventCfgSac, EventCfgDreamer
 from .klask_rl_rewards_cfg import (
@@ -22,12 +23,14 @@ from .klask_rl_terminations_cfg import (
 __all__ = [
     "KlaskRlSceneCfg",
     "KlaskRlDreamerSceneCfg",
+    "KlaskRlDreamerSpriteSceneCfg",
     "ActionsCfg",
     "ActionsCfgPlayerOnly",
     "ObservationsCfg",
     "ObservationsExtendedCfg",
     "TwoStageHerObservationsCfg",
     "DreamerObservationsCfg",
+    "DreamerSpriteObservationsCfg",
     "EventCfg",
     "EventCfgSac",
     "EventCfgDreamer",

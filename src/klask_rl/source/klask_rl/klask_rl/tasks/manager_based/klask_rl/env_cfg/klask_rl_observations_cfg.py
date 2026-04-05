@@ -17,6 +17,8 @@ from ..utils_manager_based import (
     padded_image_rotated,
     root_lin_xy_vel_w,
     root_xy_pos_w,
+    sprite_rendered_image,
+    sprite_rendered_image_rotated,
 )
 
 
@@ -324,10 +326,16 @@ class DreamerObservationsCfg:
 
     @configclass
     class ImageObsGroup(ObsGroup):
-        # TODO: change padding to transform once it is woring.
+        # TODO: change padding to transform once it is working.
         image = ObsTerm(
             func=padded_image,
-            params={"sensor_cfg": SceneEntityCfg("camera"), "data_type": "rgb", "target_h": 64, "target_w": 64},
+            params={
+                "sensor_cfg": SceneEntityCfg("camera"),
+                "data_type": "rgb",
+                # Defaults for env.size=[128,128]. Overridden by train_dreamer.py.
+                "target_h": 128,
+                "target_w": 128,
+            },
         )
 
         def __post_init__(self) -> None:
@@ -338,7 +346,13 @@ class DreamerObservationsCfg:
     class OpponentImageObsGroup(ObsGroup):
         image = ObsTerm(
             func=padded_image_rotated,
-            params={"sensor_cfg": SceneEntityCfg("camera"), "data_type": "rgb", "target_h": 64, "target_w": 64},
+            params={
+                "sensor_cfg": SceneEntityCfg("camera"),
+                "data_type": "rgb",
+                # Defaults for env.size=[128,128]. Overridden by train_dreamer.py.
+                "target_h": 128,
+                "target_w": 128,
+            },
         )
 
         def __post_init__(self) -> None:
@@ -350,3 +364,48 @@ class DreamerObservationsCfg:
     opponent: ObsGroup = _OpponentPolicyExtendedCfg()
     image: ObsGroup = ImageObsGroup()
     opponent_image: ObsGroup = OpponentImageObsGroup()
+
+
+@configclass
+class DreamerSpriteObservationsCfg(DreamerObservationsCfg):
+    """DreamerV3 observations with sprite-rendered images instead of TiledCamera."""
+
+    @configclass
+    class SpriteImageObsGroup(ObsGroup):
+        image = ObsTerm(
+            func=sprite_rendered_image,
+            params={
+                "peg1_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+                "peg2_cfg": SceneEntityCfg("klask", body_names=["Peg_2"]),
+                "ball_cfg": SceneEntityCfg("ball"),
+                # Defaults for env.size=[128,128]. Overridden by apply_camera_size_to_env_cfg.
+                "target_h": 128,
+                "target_w": 128,
+            },
+        )
+
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    @configclass
+    class SpriteOpponentImageObsGroup(ObsGroup):
+        image = ObsTerm(
+            func=sprite_rendered_image_rotated,
+            params={
+                "peg1_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+                "peg2_cfg": SceneEntityCfg("klask", body_names=["Peg_2"]),
+                "ball_cfg": SceneEntityCfg("ball"),
+                # Defaults for env.size=[128,128]. Overridden by apply_camera_size_to_env_cfg.
+                "target_h": 128,
+                "target_w": 128,
+            },
+        )
+
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    # Override only the image groups; policy + opponent inherited from DreamerObservationsCfg.
+    image: ObsGroup = SpriteImageObsGroup()
+    opponent_image: ObsGroup = SpriteOpponentImageObsGroup()
