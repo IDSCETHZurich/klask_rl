@@ -54,7 +54,11 @@ parser.add_argument(
     help="Disable the actuator model wrapper.",
 )
 parser.add_argument(
-    "--no_collision_avoidance", action="store_false", dest="collision_avoidance", default=True, help="Disable the collision avoidance wrapper."
+    "--no_collision_avoidance",
+    action="store_false",
+    dest="collision_avoidance",
+    default=True,
+    help="Disable the collision avoidance wrapper.",
 )
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 

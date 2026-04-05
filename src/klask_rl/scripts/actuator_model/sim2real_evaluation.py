@@ -1,16 +1,35 @@
+"""Sim-to-real evaluation for the actuator model.
+
+Loads all .npz trajectory files from a given directory and produces four
+diagnostic plots comparing simulated vs. real robot observations:
+
+    1. Velocity comparison  - commanded, real, and sim velocities overlaid
+    2. Performance metrics  - per-trajectory RMSE bar charts for X/Y velocity
+    3. Velocity deviation   - (sim - real) velocity error over time
+    4. Peg position         - sim vs. real positions and their deviation
+
+Velocity error metrics (MSE/RMSE) are saved to sim2real_evaluation_metrics.json
+in the same directory as the figures.
+
+Figures are saved next to the data when running headless (Agg backend),
+or displayed interactively otherwise.
+
+Example usage:
+    python sim2real_evaluation.py data/evaluation/new/from_new_model/seed1
+"""
+
+import argparse
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-DATA_DIR = Path(__file__).parent / "data/evaluation/new/from_new_model/seed1"
-FILENAMES = [DATA_DIR / f"sim2real_trajectories_0{i}.npz" for i in range(1, 6)]
 
-
-def _save_or_show(fig, name):
+def _save_or_show(fig, name, output_dir):
     backend = plt.get_backend().lower()
     if "agg" in backend:
-        output_path = DATA_DIR / name
+        output_path = output_dir / name
         fig.savefig(output_path, dpi=150, bbox_inches="tight")
         print(f"Saved figure to {output_path}")
     else:
@@ -18,7 +37,18 @@ def _save_or_show(fig, name):
 
 
 def load_trajectories(filenames):
-    """Load .npz files and return a list of dicts with extracted arrays."""
+    """Load .npz trajectory files and return a list of dicts with extracted arrays.
+
+    Each dict contains time steps, commanded actions, real/sim velocities, and
+    real/sim peg positions extracted from observations_real and observations_sim.
+    Files that fail to load are skipped with a warning.
+
+    Args:
+        filenames: Iterable of Path objects pointing to .npz files.
+
+    Returns:
+        List of dicts, one per successfully loaded file.
+    """
     trajectories = []
     for i, filename in enumerate(filenames):
         try:
@@ -53,7 +83,16 @@ def load_trajectories(filenames):
 
 
 def calculate_metrics(trajectories):
-    """Calculate MSE and RMSE for velocities. Prints and returns a dict."""
+    """Calculate MSE and RMSE between sim and real velocities for each trajectory.
+
+    Prints per-trajectory and mean error metrics to stdout.
+
+    Args:
+        trajectories: List of trajectory dicts as returned by load_trajectories.
+
+    Returns:
+        Dict mapping trajectory index to {"mse_x", "mse_y", "rmse_x", "rmse_y"}.
+    """
     metrics = {}
     print("Calculating Velocity Error Metrics:")
     for t in trajectories:
@@ -72,8 +111,43 @@ def calculate_metrics(trajectories):
     return metrics
 
 
-def plot_velocity_comparison(trajectories):
-    """Output 1: Commanded vs real vs sim velocities (test1.py style)."""
+def save_metrics(metrics, trajectories, output_dir):
+    """Save computed velocity error metrics to a JSON file.
+
+    Writes per-trajectory MSE/RMSE values plus mean RMSE across all trajectories
+    to sim2real_evaluation_metrics.json in output_dir.
+
+    Args:
+        metrics: Dict as returned by calculate_metrics.
+        trajectories: List of trajectory dicts as returned by load_trajectories.
+        output_dir: Path to the directory where the JSON file is saved.
+    """
+    rmse_x_vals = [metrics[i]["rmse_x"] for i in sorted(metrics)]
+    rmse_y_vals = [metrics[i]["rmse_y"] for i in sorted(metrics)]
+
+    output = {
+        "trajectories": {
+            trajectories[i]["filename"].name: {k: float(v) for k, v in metrics[i].items()} for i in sorted(metrics)
+        },
+        "mean_rmse_x": float(np.mean(rmse_x_vals)),
+        "mean_rmse_y": float(np.mean(rmse_y_vals)),
+    }
+
+    output_path = output_dir / "sim2real_evaluation_metrics.json"
+    output_path.write_text(json.dumps(output, indent=2))
+    print(f"Saved metrics to {output_path}")
+
+
+def plot_velocity_comparison(trajectories, output_dir):
+    """Plot commanded, real, and sim velocities overlaid for each trajectory.
+
+    Saves to sim2real_evaluation_01_velocity_comparison.png (headless) or
+    displays interactively.
+
+    Args:
+        trajectories: List of trajectory dicts as returned by load_trajectories.
+        output_dir: Path to the directory where the figure is saved.
+    """
     fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 12), constrained_layout=True)
     fig.suptitle("Sim-to-Real Actuator Model Validation", fontsize=18, weight="bold")
     ax_flat = axes.flatten()
@@ -98,12 +172,20 @@ def plot_velocity_comparison(trajectories):
     ax_flat[-1].legend(handles, labels, loc="center", fontsize=12)
     ax_flat[-1].axis("off")
 
-    _save_or_show(fig, "sim2real_evaluation_01_velocity_comparison.png")
+    _save_or_show(fig, "sim2real_evaluation_01_velocity_comparison.png", output_dir)
     plt.close(fig)
 
 
-def plot_performance_metrics(metrics):
-    """Output 2: Bar charts of RMSE per trajectory for X and Y velocities."""
+def plot_performance_metrics(metrics, output_dir):
+    """Plot bar charts of RMSE per trajectory for X and Y velocities.
+
+    Saves to sim2real_evaluation_02_performance_metrics.png (headless) or
+    displays interactively.
+
+    Args:
+        metrics: Dict as returned by calculate_metrics.
+        output_dir: Path to the directory where the figure is saved.
+    """
     labels = [f"Traj {i+1}" for i in sorted(metrics)]
     rmse_x_vals = [metrics[i]["rmse_x"] for i in sorted(metrics)]
     rmse_y_vals = [metrics[i]["rmse_y"] for i in sorted(metrics)]
@@ -154,12 +236,20 @@ def plot_performance_metrics(metrics):
 
     print(f"\n  Mean RMSE X: {mean_rmse_x:.6f}   Mean RMSE Y: {mean_rmse_y:.6f}")
 
-    _save_or_show(fig, "sim2real_evaluation_02_performance_metrics.png")
+    _save_or_show(fig, "sim2real_evaluation_02_performance_metrics.png", output_dir)
     plt.close(fig)
 
 
-def plot_velocity_deviation(trajectories):
-    """Output 3: Velocity deviation (sim - real) over time."""
+def plot_velocity_deviation(trajectories, output_dir):
+    """Plot velocity deviation (sim - real) over time for each trajectory.
+
+    Saves to sim2real_evaluation_03_velocity_deviation.png (headless) or
+    displays interactively.
+
+    Args:
+        trajectories: List of trajectory dicts as returned by load_trajectories.
+        output_dir: Path to the directory where the figure is saved.
+    """
     fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 12), constrained_layout=True)
     fig.suptitle("Sim-to-Real Velocity Deviation", fontsize=18, weight="bold")
     ax_flat = axes.flatten()
@@ -183,12 +273,22 @@ def plot_velocity_deviation(trajectories):
     ax_flat[-1].legend(handles, labels, loc="center", fontsize=12)
     ax_flat[-1].axis("off")
 
-    _save_or_show(fig, "sim2real_evaluation_03_velocity_deviation.png")
+    _save_or_show(fig, "sim2real_evaluation_03_velocity_deviation.png", output_dir)
     plt.close(fig)
 
 
-def plot_peg_position(trajectories):
-    """Output 4: Peg position sim vs real (top) and position deviation (bottom)."""
+def plot_peg_position(trajectories, output_dir):
+    """Plot peg position sim vs real and position deviation for each trajectory.
+
+    The figure has two sections: the top half shows raw sim/real positions
+    overlaid; the bottom half shows the deviation (sim - real) over time.
+    Saves to sim2real_evaluation_04_peg_position.png (headless) or displays
+    interactively.
+
+    Args:
+        trajectories: List of trajectory dicts as returned by load_trajectories.
+        output_dir: Path to the directory where the figure is saved.
+    """
     # 6 rows = 3 rows for position comparison + 3 rows for position deviation
     fig, axes = plt.subplots(nrows=6, ncols=2, figsize=(15, 24), constrained_layout=True)
     fig.suptitle("Sim-to-Real Peg Position", fontsize=18, weight="bold")
@@ -238,14 +338,23 @@ def plot_peg_position(trajectories):
     bot_axes[-1].legend(handles_bot, labels_bot, loc="center", fontsize=12)
     bot_axes[-1].axis("off")
 
-    _save_or_show(fig, "sim2real_evaluation_04_peg_position.png")
+    _save_or_show(fig, "sim2real_evaluation_04_peg_position.png", output_dir)
     plt.close(fig)
 
 
 if __name__ == "__main__":
-    trajectories = load_trajectories(FILENAMES)
+    parser = argparse.ArgumentParser(description="Evaluate sim2real trajectories from .npz files.")
+    parser.add_argument("data_dir", type=Path, help="Folder containing .npz trajectory files")
+    args = parser.parse_args()
+
+    filenames = sorted(args.data_dir.glob("*.npz"))
+    if not filenames:
+        raise SystemExit(f"No .npz files found in {args.data_dir}")
+
+    trajectories = load_trajectories(filenames)
     metrics = calculate_metrics(trajectories)
-    plot_velocity_comparison(trajectories)
-    plot_performance_metrics(metrics)
-    plot_velocity_deviation(trajectories)
-    plot_peg_position(trajectories)
+    save_metrics(metrics, trajectories, args.data_dir)
+    plot_velocity_comparison(trajectories, args.data_dir)
+    plot_performance_metrics(metrics, args.data_dir)
+    plot_velocity_deviation(trajectories, args.data_dir)
+    plot_peg_position(trajectories, args.data_dir)
