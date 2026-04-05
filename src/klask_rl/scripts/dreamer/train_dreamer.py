@@ -17,10 +17,16 @@ for _arg in sys.argv[1:]:
         _vision = True
         break
 
-# The KLASK Dreamer env always uses cameras (cnn_keys: "image"), so we
-# unconditionally enable them.  This avoids having to pass --enable_cameras
-# on every invocation.
-if "--enable_cameras" not in sys.argv:
+# Detect sprite-based task — these render images on CPU from state, so they
+# do NOT need GPU cameras enabled (saves VRAM and avoids rendering overhead).
+_sprite_task = any(
+    "Sprite" in _arg.split("=", 1)[1]
+    for _arg in sys.argv[1:]
+    if _arg.startswith("env.task=") or _arg.startswith("env=")
+)
+
+# Enable GPU cameras for all tasks except sprite-rendered ones.
+if not _sprite_task and "--enable_cameras" not in sys.argv:
     sys.argv.insert(1, "--enable_cameras")
 
 from isaaclab.app import AppLauncher
@@ -70,6 +76,7 @@ from dreamer import Dreamer
 
 # Self-play wrapper (lives outside the r2dreamer submodule)
 from dreamer_self_play import DreamerSelfPlayWrapper
+from env_cfg_utils import apply_camera_size_to_env_cfg
 from envs import make_envs
 from envs.isaaclab import IsaacLabVecEnv
 from gymnasium import Wrapper
@@ -82,7 +89,6 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     OpponentActionWrapper,
     configure_domain_randomization,
 )
-from env_cfg_utils import apply_camera_size_to_env_cfg
 from trainer import OnlineTrainer
 
 

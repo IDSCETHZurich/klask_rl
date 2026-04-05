@@ -1,4 +1,6 @@
+import cv2
 import isaaclab.utils.math as math_utils
+import numpy as np
 import torch
 import torch.nn.functional as F
 from isaaclab.assets import Articulation, RigidObject
@@ -57,6 +59,117 @@ def padded_image_rotated(
     return _pad_image_to_target(images, target_h, target_w)
 
 
+# ---------------------------------------------------------------------------
+# Sprite-rendered image observations
+# ---------------------------------------------------------------------------
+
+# Board aspect ratio: 420mm x 320mm = 21:16 base ratio (same as env_cfg_utils.py).
+_BOARD_BASE_H = 21
+_BOARD_BASE_W = 16
+
+# Lazy renderer cache: keyed by (sprite_dir, bg_path, out_w, out_h)
+_renderer_cache: dict = {}
+# Per-step image cache so the opponent view can reuse the player's render.
+_sprite_image_cache: dict = {}
+
+
+def _sprite_camera_params(image_size: int) -> tuple[int, int]:
+    """Derive (cam_h, cam_w) from a square image size using the board aspect ratio."""
+    scale = min(image_size // _BOARD_BASE_H, image_size // _BOARD_BASE_W)
+    return scale * _BOARD_BASE_H, scale * _BOARD_BASE_W
+
+
+def _get_renderer(sprite_dir: str, background_path: str, cam_w: int, cam_h: int):
+    """Return a cached BoardRenderer, creating one on first call."""
+    key = (sprite_dir, background_path, cam_w, cam_h)
+    if key not in _renderer_cache:
+        import importlib.util
+        import os
+
+        # board_renderer.py lives two directories above sprite_dir
+        # (sprite_dir = .../assets/sprites/, renderer = .../sprite_renderer/board_renderer.py).
+        renderer_path = os.path.join(os.path.dirname(os.path.dirname(sprite_dir)), "board_renderer.py")
+        spec = importlib.util.spec_from_file_location("board_renderer", renderer_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        BoardRenderer = mod.BoardRenderer
+
+        _renderer_cache[key] = BoardRenderer(
+            sprite_dir=sprite_dir,
+            background_path=background_path,
+            output_size=(cam_w, cam_h),
+            fast_mode=False,
+            target_frame="sim",
+        )
+    return _renderer_cache[key]
+
+
+def sprite_rendered_image(
+    env: ManagerBasedRLEnv,
+    peg1_cfg: SceneEntityCfg,
+    peg2_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    target_h: int = 128,
+    target_w: int = 128,
+) -> torch.Tensor:
+    """Render sprite-based board images from sim state positions.
+
+    Returns a ``(N, target_h, target_w, 3)`` uint8 RGB tensor on the env device.
+    The unpadded render is cached so ``sprite_rendered_image_rotated`` can reuse it.
+    """
+    cfg = env.cfg
+    cam_h, cam_w = _sprite_camera_params(min(target_h, target_w))
+    renderer = _get_renderer(cfg.sprite_dir, cfg.background_path, cam_w, cam_h)
+
+    # Extract positions from scene (sim frame, origin at board centre)
+    peg1_pos = body_xy_pos_w(env, peg1_cfg)  # (N, 2) GPU tensor
+    peg2_pos = body_xy_pos_w(env, peg2_cfg)  # (N, 2) GPU tensor
+    ball_pos = root_xy_pos_w(env, ball_cfg)  # (N, 2) GPU tensor
+
+    # Transfer to CPU once (batch)
+    peg1_np = peg1_pos.cpu().numpy()
+    peg2_np = peg2_pos.cpu().numpy()
+    ball_np = ball_pos.cpu().numpy()
+
+    # Render per env, collect RGB images
+    N = env.num_envs
+    images_np = np.empty((N, cam_h, cam_w, 3), dtype=np.uint8)
+    for i in range(N):
+        bgr = renderer.render(peg1_np[i], peg2_np[i], ball_np[i])
+        cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB, dst=images_np[i])
+
+    # To GPU tensor and cache for opponent view
+    tensor = torch.from_numpy(images_np).to(env.device)
+    _sprite_image_cache.clear()
+    _sprite_image_cache["images"] = tensor
+
+    return _pad_image_to_target(tensor, target_h, target_w)
+
+
+def sprite_rendered_image_rotated(
+    env: ManagerBasedRLEnv,
+    peg1_cfg: SceneEntityCfg,
+    peg2_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    target_h: int = 128,
+    target_w: int = 128,
+) -> torch.Tensor:
+    """Return 180-degree-rotated sprite image for the opponent view.
+
+    Reuses the cached render from ``sprite_rendered_image`` to avoid rendering
+    twice per step.
+    """
+    if "images" not in _sprite_image_cache:
+        raise RuntimeError(
+            "sprite_rendered_image_rotated called before sprite_rendered_image. "
+            "Ensure the 'image' observation group is defined before 'opponent_image' "
+            "in DreamerSpriteObservationsCfg so rendering happens first."
+        )
+    images = _sprite_image_cache.pop("images")
+    rotated = torch.rot90(images, k=2, dims=[1, 2])
+    return _pad_image_to_target(rotated, target_h, target_w)
+
+
 def set_joint_position_limits(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,
@@ -113,7 +226,7 @@ def set_rigid_body_material(
 
     asset.root_physx_view.set_material_properties(materials, all_ids)
 
-    
+
 def reset_player_velocity_toward_ball(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,
@@ -158,9 +271,7 @@ def reset_player_velocity_toward_ball(
     direction_y = ball_xy[:, 1] - player_y
     norm = torch.sqrt(direction_x**2 + direction_y**2).clamp(min=1e-6)
 
-    vel_2d = torch.stack(
-        [(direction_x / norm) * speed, (direction_y / norm) * speed], dim=1
-    )  # [len(env_ids), 2]
+    vel_2d = torch.stack([(direction_x / norm) * speed, (direction_y / norm) * speed], dim=1)  # [len(env_ids), 2]
     klask_art.write_joint_velocity_to_sim(vel_2d, joint_ids=[x_id, y_id], env_ids=env_ids)
 
 

@@ -43,8 +43,8 @@ class KlaskRlSceneCfg(InteractiveSceneCfg):
 
 
 @configclass
-class KlaskRlDreamerSceneCfg(InteractiveSceneCfg):
-    """Configuration for Klask Dreamer scene."""
+class _KlaskRlDreamerBaseSceneCfg(InteractiveSceneCfg):
+    """Base Dreamer scene: lights, ball, klask articulation. No camera."""
 
     # lights
     dome_light = AssetBaseCfg(
@@ -123,6 +123,11 @@ class KlaskRlDreamerSceneCfg(InteractiveSceneCfg):
         },
     )
 
+
+@configclass
+class KlaskRlDreamerSceneCfg(_KlaskRlDreamerBaseSceneCfg):
+    """Dreamer scene with TiledCamera for GPU-rendered image observations."""
+
     camera = TiledCameraCfg(
         prim_path="{ENV_REGEX_NS}/Camera",
         spawn=sim_utils.PinholeCameraCfg(
@@ -143,3 +148,10 @@ class KlaskRlDreamerSceneCfg(InteractiveSceneCfg):
             convention="world",
         ),
     )
+
+
+@configclass
+class KlaskRlDreamerSpriteSceneCfg(_KlaskRlDreamerBaseSceneCfg):
+    """Dreamer scene for sprite rendering (no camera needed)."""
+
+    pass

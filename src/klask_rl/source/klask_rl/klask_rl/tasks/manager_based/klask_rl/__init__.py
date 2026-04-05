@@ -10,6 +10,7 @@ from .klask_rl_env_cfg import (
     ActionsCfgPlayerOnly,
     EventCfgSac,
     KlaskRlDreamerEnvCfg,
+    KlaskRlDreamerSpriteEnvCfg,
     KlaskRlEnvCfg,
     KlaskRlHerSacEnvCfg,
     KlaskRlSacEnvCfg,
@@ -81,5 +82,15 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlDreamerEnvCfg",
+    },
+)
+
+
+gym.register(
+    id="Klask-Rl-Dreamer-Sprite-v0",
+    entry_point="envs.isaaclab:R2DreamerRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlDreamerSpriteEnvCfg",
     },
 )

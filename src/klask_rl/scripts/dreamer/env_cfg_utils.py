@@ -31,8 +31,10 @@ def apply_camera_size_to_env_cfg(env_cfg, size_cfg) -> None:
         return
     image_size = int(size_cfg[0])
     cam_h, cam_w = _camera_params_from_size(image_size)
-    env_cfg.scene.camera.width = cam_w
-    env_cfg.scene.camera.height = cam_h
+    # Only set camera resolution if the scene has a camera (sprite scenes don't).
+    if hasattr(env_cfg.scene, "camera") and env_cfg.scene.camera is not None:
+        env_cfg.scene.camera.width = cam_w
+        env_cfg.scene.camera.height = cam_h
     for group_attr in ("image", "opponent_image"):
         group = getattr(env_cfg.observations, group_attr, None)
         if group is not None:
