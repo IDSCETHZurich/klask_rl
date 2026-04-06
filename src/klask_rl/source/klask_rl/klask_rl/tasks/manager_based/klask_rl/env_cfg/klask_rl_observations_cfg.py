@@ -10,6 +10,8 @@ from ..utils_manager_based import (
     angle_ball_goal,
     angle_ball_opp,
     body_xy_pos_w,
+    direction_ball_goal,
+    direction_to_ball,
     distance_ball_to_player,
     distance_to_goal,
     goal_position_obs,
@@ -29,8 +31,6 @@ def _peg_obs_group(
     other_body: str,
     other_x_joint: str,
     other_y_joint: str,
-    own_goal: tuple,
-    other_goal: tuple,
     rotate: bool = False,
 ) -> type:
     """Factory: returns a @configclass ObsGroup for one player's full policy observations.
@@ -167,6 +167,38 @@ def _peg_obs_group_extended(
     return _PegObsGroupExtended
 
 
+def _peg_obs_group_extended_vec(
+    base: type,
+    own_body: str,
+    other_body: str,
+    own_goal: tuple,
+    other_goal: tuple,
+) -> type:
+    """Factory: returns a @configclass ObsGroup that extends the basic peg obs with
+    vector auxiliary terms, from the perspective of ``own``.
+    """
+
+    @configclass
+    class _PegObsGroupExtendedVec(base):
+
+        ball_own_peg_vec = ObsTerm(
+            func=direction_to_ball,
+            params={
+                "ball_cfg": SceneEntityCfg(name="ball"),
+                "player_cfg": SceneEntityCfg(name="klask", body_names=[own_body]),
+            },
+        )
+        ball_oppo_goal_vec = ObsTerm(
+            func=direction_ball_goal,
+            params={
+                "ball_cfg": SceneEntityCfg(name="ball"),
+                "goal": other_goal,
+            },
+        )
+
+    return _PegObsGroupExtendedVec
+
+
 def _action_history_obs_group(base: type, action_name: str, history_length: int) -> type:
     """Factory: returns a @configclass ObsGroup that extends a base obs group with a history of past actions."""
 
@@ -220,8 +252,6 @@ _PlayerPolicyCfg = _fix_pickle(
         other_body="Peg_2",
         other_x_joint="slider_to_peg_2",
         other_y_joint="ground_to_slider_2",
-        own_goal=KLASK_PARAMS["player_goal"],
-        other_goal=KLASK_PARAMS["opponent_goal"],
     ),
     "_PlayerPolicyCfg",
 )
@@ -233,8 +263,6 @@ _OpponentPolicyCfg = _fix_pickle(
         other_body="Peg_1",
         other_x_joint="slider_to_peg_1",
         other_y_joint="ground_to_slider_1",
-        own_goal=KLASK_PARAMS["opponent_goal"],
-        other_goal=KLASK_PARAMS["player_goal"],
         rotate=True,
     ),
     "_OpponentPolicyCfg",
@@ -261,6 +289,27 @@ _OpponentPolicyExtendedCfg = _fix_pickle(
     "_OpponentPolicyExtendedCfg",
 )
 
+_PlayerPolicyExtendedVecCfg = _fix_pickle(
+    _peg_obs_group_extended_vec(
+        base=_PlayerPolicyCfg,
+        own_body="Peg_1",
+        other_body="Peg_2",
+        own_goal=KLASK_PARAMS["player_goal"],
+        other_goal=KLASK_PARAMS["opponent_goal"],
+    ),
+    "_PlayerPolicyExtendedVecCfg",
+)
+_OpponentPolicyExtendedVecCfg = _fix_pickle(
+    _peg_obs_group_extended_vec(
+        base=_OpponentPolicyCfg,
+        own_body="Peg_2",
+        other_body="Peg_1",
+        own_goal=KLASK_PARAMS["opponent_goal"],
+        other_goal=KLASK_PARAMS["player_goal"],
+    ),
+    "_OpponentPolicyExtendedVecCfg",
+)
+
 _PlayerPolicyActionHistoryCfg = _fix_pickle(
     _action_history_obs_group(
         base=_PlayerPolicyCfg, action_name="player", history_length=KLASK_PARAMS["action_history"]
@@ -281,6 +330,16 @@ _TwoStageHerPlayerPolicyCfg = _fix_pickle(
 _TwoStageHerOpponentPolicyCfg = _fix_pickle(
     _peg_obs_group_with_goal(_OpponentPolicyCfg, KLASK_PARAMS["player_goal"], rotate=True),
     "_TwoStageHerOpponentPolicyCfg",
+)
+
+
+_TwoStageHerPlayerPolicyExtendedCfg = _fix_pickle(
+    _peg_obs_group_with_goal(_PlayerPolicyExtendedVecCfg, KLASK_PARAMS["opponent_goal"]),
+    "_TwoStageHerPlayerPolicyExtendedCfg",
+)
+_TwoStageHerOpponentPolicyExtendedCfg = _fix_pickle(
+    _peg_obs_group_with_goal(_OpponentPolicyExtendedVecCfg, KLASK_PARAMS["player_goal"], rotate=True),
+    "_TwoStageHerOpponentPolicyExtendedCfg",
 )
 
 
@@ -316,8 +375,8 @@ class TwoStageHerObservationsCfg:
     """
 
     # observation groups
-    policy: ObsGroup = _TwoStageHerPlayerPolicyCfg()
-    opponent: ObsGroup = _TwoStageHerOpponentPolicyCfg()
+    policy: ObsGroup = _TwoStageHerPlayerPolicyExtendedCfg()
+    opponent: ObsGroup = _TwoStageHerOpponentPolicyExtendedCfg()
 
 
 @configclass

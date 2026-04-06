@@ -600,17 +600,19 @@ def goal_position_obs(env: ManagerBasedRLEnv, goal: tuple[float, float]) -> torc
 
 
 def direction_to_ball(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Returns the direction vector from player to ball (2D).
-
-    This is the key observation for learning to move towards the ball.
-    The agent just needs to learn: action ≈ k * direction_to_ball
-
-    The raw displacement is returned (in meters). With observation normalization enabled,
-    this will be normalized by the running mean/std during training.
-    """
+    """Returns the direction vector from player to ball (2D)."""
     ball_pos = root_xy_pos_w(env, ball_cfg)
     player_pos = body_xy_pos_w(env, player_cfg)
     return ball_pos - player_pos
+
+
+def direction_ball_goal(
+    env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, goal: tuple[float, float, float]
+) -> torch.Tensor:
+    """Returns the direction vector from ball to goal center (2D)."""
+    cx, cy, r = goal
+    ball_pos = root_xy_pos_w(env, ball_cfg)
+    return ball_pos - torch.tensor([cx, cy], device=env.device)
 
 
 def distance_player_ball(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg) -> torch.Tensor:
