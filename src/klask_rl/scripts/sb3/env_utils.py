@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     # These imports are only used for type-checking / IDE support.
     # At runtime they are imported lazily inside the functions that need them.
     import gymnasium as gym
-
     from experiment_config import ExperimentConfig
     from isaaclab.envs import DirectMARLEnvCfg, DirectRLEnvCfg, ManagerBasedRLEnvCfg
 
@@ -56,9 +55,7 @@ def resolve_config_path(raw_path: str, script_file: str) -> Path:
 
 def get_log_root_path(cfg: ExperimentConfig, script_file: str) -> str:
     """Return the root log directory for a task (e.g. ``logs/sb3_sac/<task>``)."""
-    script_dir = Path(
-        script_file
-    ).parent.parent.parent  # Go up from scripts/sb3/ to klask_rl/
+    script_dir = Path(script_file).parent.parent.parent  # Go up from scripts/sb3/ to klask_rl/
     return str(script_dir / "logs" / "sb3_sac" / cfg.task)
 
 
@@ -78,29 +75,17 @@ def apply_reward_weights(
     if cfg.use_her and cfg.her_env_reward_scale is not None:
         if hasattr(env_cfg, "rewards"):
             if hasattr(env_cfg.rewards, "collision_player_ball_reward"):
-                print(
-                    f"[INFO] Setting env collision_player_ball_reward weight to {cfg.her_env_reward_scale}"
-                )
-                env_cfg.rewards.collision_player_ball_reward.weight = (
-                    cfg.her_env_reward_scale
-                )
+                print(f"[INFO] Setting env collision_player_ball_reward weight to {cfg.her_env_reward_scale}")
+                env_cfg.rewards.collision_player_ball_reward.weight = cfg.her_env_reward_scale
 
     if cfg.use_two_stage_her:
         if cfg.two_stage_ball_hit_env_reward is not None:
-            if hasattr(env_cfg, "rewards") and hasattr(
-                env_cfg.rewards, "collision_player_ball"
-            ):
-                print(
-                    f"[INFO] Setting env collision_player_ball weight to {cfg.two_stage_ball_hit_env_reward}"
-                )
-                env_cfg.rewards.collision_player_ball.weight = (
-                    cfg.two_stage_ball_hit_env_reward
-                )
+            if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "collision_player_ball"):
+                print(f"[INFO] Setting env collision_player_ball weight to {cfg.two_stage_ball_hit_env_reward}")
+                env_cfg.rewards.collision_player_ball.weight = cfg.two_stage_ball_hit_env_reward
         if cfg.two_stage_goal_score_env_reward is not None:
             if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "goal_scored"):
-                print(
-                    f"[INFO] Setting env goal_scored weight to {cfg.two_stage_goal_score_env_reward}"
-                )
+                print(f"[INFO] Setting env goal_scored weight to {cfg.two_stage_goal_score_env_reward}")
                 env_cfg.rewards.goal_scored.weight = cfg.two_stage_goal_score_env_reward
 
 
@@ -132,9 +117,17 @@ def make_env(
     """
     import gymnasium as gym
     import numpy as np
-
     from isaaclab.envs import DirectMARLEnv, multi_agent_to_single_agent
     from isaaclab.utils.dict import print_dict
+    from klask_rl.tasks.manager_based.klask_rl.wrappers import (
+        configure_domain_randomization,
+    )
+
+    # Configure/disable domain randomization reset events before env creation.
+    configure_domain_randomization(env_cfg, cfg.domain_randomization_cfg)
+
+    # Keep reset event bounds consistent with experiment config.
+    sync_ball_reset_pose_range(cfg, env_cfg)
 
     env = gym.make(cfg.task, cfg=env_cfg, render_mode=render_mode)
 
@@ -149,9 +142,7 @@ def make_env(
     env.unwrapped.single_action_space = gym.spaces.Box(
         low=-max_vel, high=max_vel, shape=(action_dim,), dtype=np.float32
     )
-    env.unwrapped.action_space = gym.vector.utils.batch_space(
-        env.unwrapped.single_action_space, env.unwrapped.num_envs
-    )
+    env.unwrapped.action_space = gym.vector.utils.batch_space(env.unwrapped.single_action_space, env.unwrapped.num_envs)
 
     # Video recording
     if video_kwargs is not None:
@@ -160,6 +151,36 @@ def make_env(
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
     return env
+
+
+def sync_ball_reset_pose_range(
+    cfg: ExperimentConfig,
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+) -> None:
+    """Apply YAML ball reset bounds to env cfg and reset event params."""
+    if not hasattr(env_cfg, "events") or not hasattr(env_cfg.events, "reset_ball_position"):
+        return
+
+    ball_reset_x = getattr(cfg, "ball_reset_position_x", None)
+    ball_reset_y = getattr(cfg, "ball_reset_position_y", None)
+    if ball_reset_x is None or ball_reset_y is None:
+        return
+
+    ball_reset_x = tuple(ball_reset_x)
+    ball_reset_y = tuple(ball_reset_y)
+
+    if hasattr(env_cfg, "ball_reset_position_x"):
+        env_cfg.ball_reset_position_x = ball_reset_x
+    if hasattr(env_cfg, "ball_reset_position_y"):
+        env_cfg.ball_reset_position_y = ball_reset_y
+
+    env_cfg.events.reset_ball_position.params["pose_range"]["x"] = ball_reset_x
+    env_cfg.events.reset_ball_position.params["pose_range"]["y"] = ball_reset_y
+
+    print(
+        "[INFO] Effective reset_ball_position pose_range: "
+        f"x={ball_reset_x}, y={ball_reset_y}"
+    )
 
 
 def wrap_env_for_sb3(
@@ -176,7 +197,6 @@ def wrap_env_for_sb3(
         A wrapped SB3-compatible vectorized environment.
     """
     from isaaclab_rl.sb3 import Sb3VecEnvWrapper
-
     from klask_rl.tasks.manager_based.klask_rl.wrappers import (
         Sb3TwoStageHerWrapper,
         Sb3VecHerWrapper,
@@ -195,18 +215,10 @@ def wrap_env_for_sb3(
         print(f"[INFO] Two-Stage HER player_pos indices: {player_pos_indices}")
         print(f"[INFO] Two-Stage HER ball_pos indices: {ball_pos_indices}")
         print(f"[INFO] Two-Stage HER goal_pos indices: {goal_pos_indices}")
-        print(
-            f"[INFO] Two-Stage HER ball_hit_threshold: {cfg.two_stage_ball_hit_threshold}"
-        )
-        print(
-            f"[INFO] Two-Stage HER goal_score_threshold: {cfg.two_stage_goal_score_threshold}"
-        )
-        print(
-            f"[INFO] Two-Stage HER ball_hit_wrapper_reward: {cfg.two_stage_ball_hit_wrapper_reward}"
-        )
-        print(
-            f"[INFO] Two-Stage HER goal_score_wrapper_reward: {cfg.two_stage_goal_score_wrapper_reward}"
-        )
+        print(f"[INFO] Two-Stage HER ball_hit_threshold: {cfg.two_stage_ball_hit_threshold}")
+        print(f"[INFO] Two-Stage HER goal_score_threshold: {cfg.two_stage_goal_score_threshold}")
+        print(f"[INFO] Two-Stage HER ball_hit_wrapper_reward: {cfg.two_stage_ball_hit_wrapper_reward}")
+        print(f"[INFO] Two-Stage HER goal_score_wrapper_reward: {cfg.two_stage_goal_score_wrapper_reward}")
 
         env = Sb3TwoStageHerWrapper(
             env,
@@ -219,9 +231,7 @@ def wrap_env_for_sb3(
             goal_score_reward=cfg.two_stage_goal_score_wrapper_reward,
         )
     elif cfg.use_her:
-        print(
-            "[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper..."
-        )
+        print("[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper...")
         achieved_indices = tuple(cfg.her_achieved_goal_indices or [0, 2])
         desired_indices = tuple(cfg.her_desired_goal_indices or [8, 10])
 
@@ -263,17 +273,13 @@ def apply_training_normalization(
     Returns the (possibly wrapped) environment.
     """
     import numpy as np
-
     from stable_baselines3.common.vec_env import VecNormalize
 
     if not (norm_args and norm_args.get("normalize_input")):
         return env
 
     if cfg.use_her or cfg.use_two_stage_her:
-        print(
-            "[WARNING] VecNormalize is not fully compatible with HER. "
-            "Disabling observation normalization."
-        )
+        print("[WARNING] VecNormalize is not fully compatible with HER. Disabling observation normalization.")
         return env
 
     print(f"[INFO] Normalizing input, {norm_args=}")
@@ -304,7 +310,6 @@ def apply_inference_normalization(
     Returns the (possibly wrapped) environment.
     """
     import numpy as np
-
     from stable_baselines3.common.vec_env import VecNormalize
 
     vec_norm_path = Path(checkpoint_path).parent / "sac_model_vecnormalize.pkl"
@@ -379,9 +384,7 @@ def find_latest_checkpoint(log_root_path: str) -> str:
         if step_checkpoints:
             return str(step_checkpoints[0])
 
-    raise FileNotFoundError(
-        f"No checkpoints found in any run directory under: {log_root}"
-    )
+    raise FileNotFoundError(f"No checkpoints found in any run directory under: {log_root}")
 
 
 def _extract_step_number(path: Path) -> int:

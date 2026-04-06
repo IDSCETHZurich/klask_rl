@@ -27,8 +27,10 @@ task: Klask-Rl-TwoStage-HER-v0
 env:
   num_envs: 4096
   seed: 42
-  max_velocity: 0.6 # [m/s] Maximum velocity for player movement
+  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
   episode_length_s: 4.0 # [s] Episode length in seconds
+  ball_reset_position_x: [-0.15, 0.15] # [m]
+  ball_reset_position_y: [-0.10, -0.02] # [m]
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # AGENT - SAC Hyperparameters
@@ -42,8 +44,8 @@ agent:
 
   # Learning parameters
   learning_rate: 3.0e-4
-  buffer_size: 1_000_000
-  learning_starts: 1000
+  buffer_size: 10_000_000
+  learning_starts: 1_000_000
   batch_size: 1024
   tau: 0.005
   gamma: 0.99
@@ -93,7 +95,7 @@ two_stage:
   # Observation indices for goal extraction
   player_pos_indices: [0, 2]
   ball_pos_indices: [8, 10]
-  goal_pos_indices: [12, 14]
+  goal_pos_indices: [16, 18]
 
   # Detection thresholds
   ball_hit_threshold: 0.017 # Distance for ball hit detection
@@ -111,6 +113,22 @@ two_stage:
   goal_score_wrapper_reward: 2.0
 
 # ─────────────────────────────────────────────────────────────────────────────────
+# DOMAIN RANDOMIZATION
+# ─────────────────────────────────────────────────────────────────────────────────
+# Keep all randomization terms disabled for deterministic physics.
+domain_randomization:
+  ball_mass:
+    enable: false
+  material_ball:
+    enable: false
+  material_board:
+    enable: false
+  material_peg:
+    enable: false
+  actuator:
+    enable: false
+
+# ─────────────────────────────────────────────────────────────────────────────────
 # TRAINING
 # ─────────────────────────────────────────────────────────────────────────────────
 training:
@@ -123,7 +141,7 @@ training:
 # LOGGING - Weights & Biases
 # ─────────────────────────────────────────────────────────────────────────────────
 wandb:
-  project: KLASK
+  project: null
   entity: null
   name: sac-her-goal-scoring-reward-tuning
 

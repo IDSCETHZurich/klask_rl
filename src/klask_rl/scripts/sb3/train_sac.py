@@ -175,6 +175,7 @@ from env_utils import (
     apply_training_normalization,
     make_env,
     pop_norm_keys,
+    sync_ball_reset_pose_range,
     wrap_env_for_sb3,
 )
 
@@ -305,6 +306,9 @@ def main(
 
     # Directory for logging (run_info and log_root_path already printed early for Ray Tune)
     log_dir = os.path.join(log_root_path, run_info)
+
+    # Synchronize reset event bounds before dumping env.yaml.
+    sync_ball_reset_pose_range(cfg, env_cfg)
 
     # Dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
