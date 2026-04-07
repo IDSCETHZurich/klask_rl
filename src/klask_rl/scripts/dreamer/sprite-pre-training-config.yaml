@@ -17,8 +17,8 @@ logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empt
 seed: 0
 deterministic_run: False
 device: "cuda:0"
-init_checkpoint: null # Path to checkpoint for weight-only init (pretrain -> finetune)
-load_world_model_only: false
+init_checkpoint: /workspace/klask_rl/logdir/2026-04-05/13-20-17/checkpoint_1700008.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+load_world_model_only: true
 
 hydra:
   run:
