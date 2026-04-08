@@ -11,17 +11,6 @@ else
     echo "✗ Failed to install klask_rl package"
 fi
 
-# Install packages in editable mode
-echo "===================================="
-echo "Installing fast_sac package..."
-echo "===================================="
-/workspace/isaaclab/_isaac_sim/python.sh -m pip install --no-deps --root-user-action=ignore -e /workspace/klask_rl/scripts/fast_sac
-if [ $? -eq 0 ]; then
-    echo "✓ fast_sac package installed successfully"
-else
-    echo "✗ Failed to install fast_sac package"
-fi
-
 # Start Ray server in the background
 echo "===================================="
 echo "Starting Ray server..."

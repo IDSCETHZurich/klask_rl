@@ -1,3 +1,4 @@
+from .fast_sac_env_wrapper import FastSACEnvWrapper
 from .klask_rl_opponet_wrappers import (
     KlaskRlAgentOpponentWrapper,
     KlaskRlRandomOpponentWrapper,
@@ -37,4 +38,5 @@ __all__ = [
     "Sb3ContactTrackingWrapper",
     "Sb3VecHerWrapper",
     "Sb3TwoStageHerWrapper",
+    "FastSACEnvWrapper",
 ]

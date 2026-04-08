@@ -13,9 +13,9 @@ from .klask_rl_env_cfg import (
     KlaskRlDreamerEnvCfg,
     KlaskRlDreamerSpriteEnvCfg,
     KlaskRlEnvCfg,
+    KlaskRlFastSACEnvCfg,
     KlaskRlHerSacEnvCfg,
     KlaskRlSacEnvCfg,
-    KlaskRlFastSACEnvCfg,
     KlaskRlTwoStageHerEnvCfg,
     RewardsCfgSparseHer,
     RewardsCfgTwoStageHer,
@@ -91,7 +91,7 @@ gym.register(
 
 gym.register(
     id="Klask-Rl-FastSAC-v0",
-    entry_point="klask_her.envs.isaaclab_klask_env:FastSACManagerBasedRLEnv",
+    entry_point=f"{__name__}.klask_rl_manager_base:ExtendedManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlFastSACEnvCfg",
