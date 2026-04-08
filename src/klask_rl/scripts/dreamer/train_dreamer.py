@@ -263,7 +263,8 @@ _tag_tracker: EpisodeTagTracker | None = None
 
 
 def _make_env(
-    config, gym_id, render_mode=None, trainer_steps=None, self_play=False, self_play_config=None, prioritized_cfg=None
+    config, gym_id, render_mode=None, trainer_steps=None, self_play=False, self_play_config=None, prioritized_cfg=None,
+    trajectory_mirroring=False,
 ):
     """Construct a GPU-resident IsaacLab env with KLASK-specific wrappers.
 
@@ -384,6 +385,14 @@ def _make_env(
             rewards_dict = dict(rewards_cfg)
         isaac_env = CurriculumWrapper(isaac_env, rewards_dict)
 
+    # --- 3b. Opponent reward computation (needed for trajectory mirroring) ---
+    if trajectory_mirroring:
+        from klask_rl.tasks.manager_based.klask_rl.env_cfg.klask_rl_rewards_cfg import _opponent_reward_terms
+        from klask_rl.tasks.manager_based.klask_rl.wrappers.klask_rl_training_wrappers import OpponentRewardWrapper
+
+        term_mapping = {name: (term.func, term.params) for name, term in _opponent_reward_terms.items()}
+        isaac_env = OpponentRewardWrapper(isaac_env, term_mapping)
+
     # --- 5. Opponent wrapper ---
     if self_play:
         sp_cfg = self_play_config or {}
@@ -463,6 +472,7 @@ def main(config):
         self_play=self_play,
         self_play_config=sp_cfg,
         prioritized_cfg=_prioritized_cfg,
+        trajectory_mirroring=getattr(config, "trajectory_mirroring", False),
     )
 
     # Auto-add unconfigured termination terms with baseline_priority so they
@@ -512,6 +522,10 @@ def main(config):
             env.set_logger(logger)
         env = env.env
 
+    # Derive buffer.mirror from the single trajectory_mirroring flag.
+    _traj_mirror = getattr(config, "trajectory_mirroring", False)
+    OmegaConf.update(config, "buffer.mirror", _traj_mirror, force_add=True)
+
     if _prioritized_cfg is not None:
         replay_buffer = PrioritizedBuffer(config.buffer)
     else:
@@ -524,9 +538,10 @@ def main(config):
     env_config.isaac_vec_env = vec_env
     train_envs, eval_envs, obs_space, act_space = make_envs(env_config)
 
-    # Pass opponent_separation flags to model config so Dreamer can read them.
+    # Pass top-level flags to model config so Dreamer / _make_env can read them.
     _opp_sep = getattr(config, "opponent_separation", False)
     config.model.opponent_separation = _opp_sep
+    config.model.trajectory_mirroring = getattr(config, "trajectory_mirroring", False)
     _opp_sep_cfg = getattr(config, "opponent_separation_config", None)
     if _opp_sep_cfg is not None:
         if OmegaConf.is_config(_opp_sep_cfg):

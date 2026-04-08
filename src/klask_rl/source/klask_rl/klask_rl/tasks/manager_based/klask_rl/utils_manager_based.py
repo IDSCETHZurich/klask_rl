@@ -565,13 +565,20 @@ def body_xy_pos_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Te
     return asset.data.body_pos_w[:, asset_cfg.body_ids, :2].squeeze(dim=1) - env.scene.env_origins[:, :2]
 
 
-def shot_over_middle(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, weight: float | None = None) -> torch.Tensor:
+def shot_over_middle(
+    env: ManagerBasedRLEnv,
+    ball_cfg: SceneEntityCfg,
+    weight: float | None = None,
+    direction_sign: float = 1.0,
+) -> torch.Tensor:
     ball_pos = root_xy_pos_w(env, ball_cfg)  # shape: (num_envs, 2)
     ball_vel = root_lin_xy_vel_w(env, ball_cfg)  # shape: (num_envs, 2)
 
-    # Detect near center line and moving forward in +y direction
+    # Detect near center line and moving in the specified direction.
+    # direction_sign=1.0 (player): ball moving in +y toward opponent goal.
+    # direction_sign=-1.0 (opponent): ball moving in -y toward player goal.
     is_near_center = (ball_pos[:, 1] >= 0.0) & (ball_pos[:, 1] <= 0.02)
-    is_moving_forward = ball_vel[:, 1] > 0.1
+    is_moving_forward = ball_vel[:, 1] * direction_sign > 0.1
     if weight is None:
         return (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
     return weight * (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
@@ -668,10 +675,14 @@ def distance_ball_goal(
 
 
 def distance_player_ball_own_half(
-    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg
+    env: ManagerBasedRLEnv,
+    player_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    own_half_sign: float = -1.0,
 ) -> torch.Tensor:
     ball_pos = root_xy_pos_w(env, ball_cfg)
-    ball_in_own_half = ball_pos[:, 1] < 0.0
+    # own_half_sign=-1.0 (player): own half is y<0. +1.0 (opponent): own half is y>0.
+    ball_in_own_half = ball_pos[:, 1] * own_half_sign > 0.0
     return ball_in_own_half * (
         torch.exp(-5 * distance_player_ball(env, player_cfg, ball_cfg))
     )  # factor 5 because distances are really small
@@ -866,12 +877,19 @@ def termination_reward_time_decay(
     return terminated.float() * time_multiplier
 
 
-def ball_in_own_half(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg):
+def ball_in_own_half(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, own_half_sign: float = -1.0):
     ball_pos = root_xy_pos_w(env, ball_cfg)
-    return 1.0 * (ball_pos[:, 1] < 0.0)
+    # own_half_sign=-1.0 (player): own half is y<0. +1.0 (opponent): own half is y>0.
+    return 1.0 * (ball_pos[:, 1] * own_half_sign > 0.0)
 
 
-def distance_to_wall(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torch.Tensor:
+def distance_to_wall(
+    env: ManagerBasedRLEnv,
+    player_cfg: SceneEntityCfg,
+    y_pos_limit: tuple | None = None,
+) -> torch.Tensor:
+    if y_pos_limit is None:
+        y_pos_limit = KLASK_PARAMS["joint_y1_pos_limit"]
     player_pos = body_xy_pos_w(env, player_cfg)
     device = player_pos.device
     cost = torch.zeros(player_pos.shape[0], device=device)
@@ -884,12 +902,12 @@ def distance_to_wall(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torc
     distance = torch.tensor(KLASK_PARAMS["joint_x_pos_limit"][1]) - player_pos[:, 0]
     cost += x_edge * torch.exp(-5 * distance)
 
-    y_edge = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][0]) < 0.03
-    distance = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][0])
+    y_edge = player_pos[:, 1] - torch.tensor(y_pos_limit[0]) < 0.03
+    distance = player_pos[:, 1] - torch.tensor(y_pos_limit[0])
     cost += y_edge * torch.exp(-5 * distance)
 
-    y_edge = torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][1]) - player_pos[:, 1] < 0.03
-    distance = torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][1]) - player_pos[:, 1]
+    y_edge = torch.tensor(y_pos_limit[1]) - player_pos[:, 1] < 0.03
+    distance = torch.tensor(y_pos_limit[1]) - player_pos[:, 1]
     cost += y_edge * torch.exp(-5 * distance)
 
     return 1.0 * (cost)

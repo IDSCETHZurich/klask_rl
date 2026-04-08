@@ -43,6 +43,8 @@ env:
   sim_dt: 0.001
   seed: ${seed}
   device: ${device}
+  ball_reset_position_x: [-0.15, 0.15]
+  ball_reset_position_y: [-0.10, -0.02]
   max_velocity: 1.0 # [m/s] Maximum velocity for player movement
   episode_length_s: 3.0 # [s] Episode length in seconds
   actuator_model: True
@@ -186,6 +188,8 @@ self_play: true
 self_play_config:
   update_score: 0.2 # opponent updated only when rolling mean score > this
   games_to_track: 4096 # rolling window size for score averaging
+
+trajectory_mirroring: true # Compute opponent rewards + mirror trajectories at sampling time
 
 opponent_separation: true # Feed explicit opponent actions to the world model (4D = player + opponent)
 opponent_separation_config:
