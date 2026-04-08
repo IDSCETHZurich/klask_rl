@@ -71,7 +71,7 @@ torch.set_float32_matmul_precision("high")
 import isaaclab_tasks  # noqa: F401
 import klask_rl.tasks  # noqa: F401
 import tools
-from buffer import Buffer
+from buffer import Buffer, PrioritizedBuffer
 from dreamer import Dreamer
 
 # Self-play wrapper (lives outside the r2dreamer submodule)
@@ -112,6 +112,7 @@ class EpisodeMetricsWrapper(Wrapper):
         self._deque_factory = lambda: deque(maxlen=self._window_size)
         self._reward_history: dict[str, deque] = {}
         self._term_history: dict[str, deque] = {}
+        self._total_episodes: int = 0
 
     def set_logger(self, logger):
         """Attach a :class:`tools.Logger` for autonomous metric logging."""
@@ -132,6 +133,8 @@ class EpisodeMetricsWrapper(Wrapper):
         done_ids = done.nonzero(as_tuple=False).squeeze(-1)
 
         if done_ids.numel() > 0:
+            self._total_episodes += done_ids.numel()
+            self._logger.scalar("buffer/episodes_total", self._total_episodes)
             dt = self.env.unwrapped.step_dt
 
             # Per-term cumulative reward for each done env.
@@ -188,6 +191,64 @@ class RewardWeightLogWrapper(Wrapper):
 
 
 # =============================================================================
+# Episode tag tracking — weight-independent per-step signal accumulation
+# =============================================================================
+
+
+def _make_reward_term_bool_checker(term_name: str):
+    """Return a callable that evaluates a reward term's raw function.
+
+    The function is called with its configured parameters directly via the
+    reward manager, bypassing the weight.  This means contact is detected
+    even when the ``collision_player_ball`` reward weight has decayed to 0.
+    """
+
+    def check(env):
+        rm = env.reward_manager
+        if term_name not in rm._term_names:
+            return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        tidx = rm._term_names.index(term_name)
+        cfg = rm._term_cfgs[tidx]
+        return cfg.func(env, **cfg.params).bool()
+
+    return check
+
+
+class EpisodeTagTracker(Wrapper):
+    """OR-accumulates per-step boolean signals across each episode.
+
+    *step_checkers* maps a tag name to a callable
+    ``fn(env_unwrapped) -> (B,) bool tensor``.  At each ``step()`` call the
+    checker result is OR-ed into a per-env flag.  When an episode ends the
+    flag is snapshotted before the env's auto-reset zeroes related state.
+    """
+
+    def __init__(self, env, step_checkers: dict):
+        super().__init__(env)
+        n = env.unwrapped.num_envs
+        dev = env.unwrapped.device
+        self._step_checkers = step_checkers
+        self._episode_flags = {t: torch.zeros(n, dtype=torch.bool, device=dev) for t in step_checkers}
+        self._episode_snapshot = {t: torch.zeros(n, dtype=torch.bool, device=dev) for t in step_checkers}
+
+    def step(self, actions):
+        obs, rew, terminated, truncated, info = self.env.step(actions)
+        done = terminated | truncated
+        unwrapped = self.env.unwrapped
+        for tag, checker in self._step_checkers.items():
+            self._episode_flags[tag] |= checker(unwrapped)
+        # Snapshot current episode flags for done envs, then reset them.
+        for tag in self._step_checkers:
+            self._episode_snapshot[tag][done] = self._episode_flags[tag][done]
+            self._episode_flags[tag][done] = False
+        return obs, rew, terminated, truncated, info
+
+    def get_episode_flag(self, env_idx: int, tag: str) -> bool:
+        """Return whether *tag* fired at any point during the last episode of *env_idx*."""
+        return self._episode_snapshot[tag][env_idx].item()
+
+
+# =============================================================================
 # Task registry — all task-specific knowledge lives here, not in envs/__init__.py
 # =============================================================================
 
@@ -196,8 +257,14 @@ class RewardWeightLogWrapper(Wrapper):
 # used later to initialise / update the opponent from the training agent).
 _self_play_wrapper = None
 
+# Global reference to the EpisodeTagTracker wrapper (set during env construction,
+# used in KlaskTrainer.on_episode_end to query per-step episode flags).
+_tag_tracker: EpisodeTagTracker | None = None
 
-def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=False, self_play_config=None):
+
+def _make_env(
+    config, gym_id, render_mode=None, trainer_steps=None, self_play=False, self_play_config=None, prioritized_cfg=None
+):
     """Construct a GPU-resident IsaacLab env with KLASK-specific wrappers.
 
     Applies (in order):
@@ -208,10 +275,11 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
       5. Opponent wrapper:
          - DreamerSelfPlayWrapper if self_play=True
          - KlaskRlRandomOpponentWrapper otherwise
+      5b. EpisodeTagTracker (if buffer.prioritized configured)
       6. EpisodeMetricsWrapper (episode termination logging)
       7. RewardWeightLogWrapper (reward weight logging)
     """
-    global _self_play_wrapper
+    global _self_play_wrapper, _tag_tracker
     import importlib
 
     import gymnasium as gym
@@ -329,6 +397,20 @@ def _make_env(config, gym_id, render_mode=None, trainer_steps=None, self_play=Fa
     else:
         isaac_env = KlaskRlRandomOpponentWrapper(isaac_env)
 
+    # --- 5b. Episode tag tracker (only when prioritized buffer is configured) ---
+    _tag_tracker = None
+    if prioritized_cfg is not None:
+        _tags_raw = getattr(prioritized_cfg, "tags", [])
+        _tags_list = (
+            list(OmegaConf.to_container(_tags_raw, resolve=True)) if OmegaConf.is_config(_tags_raw) else list(_tags_raw)
+        )
+        step_checkers = {
+            s["name"]: _make_reward_term_bool_checker(s["reward_term"]) for s in _tags_list if "reward_term" in s
+        }
+        if step_checkers:
+            isaac_env = EpisodeTagTracker(isaac_env, step_checkers)
+            _tag_tracker = isaac_env
+
     # --- 6. Episode metrics capture ---
     isaac_env = EpisodeMetricsWrapper(isaac_env)
 
@@ -364,6 +446,15 @@ def main(config):
     if self_play:
         sp_cfg.setdefault("compile", bool(getattr(config.model, "compile", False)))
 
+    _prioritized_cfg = getattr(config.buffer, "prioritized", None)
+    if _prioritized_cfg is not None:
+        _tags_raw = getattr(_prioritized_cfg, "tags", [])
+        _tags_cfg_list = (
+            list(OmegaConf.to_container(_tags_raw, resolve=True)) if OmegaConf.is_config(_tags_raw) else list(_tags_raw)
+        )
+    else:
+        _tags_cfg_list = []
+
     vec_env = _make_env(
         config.env,
         task_name,
@@ -371,7 +462,17 @@ def main(config):
         trainer_steps=trainer_steps,
         self_play=self_play,
         self_play_config=sp_cfg,
+        prioritized_cfg=_prioritized_cfg,
     )
+
+    # Auto-add unconfigured termination terms with baseline_priority so they
+    # are logged in buffer/tagged_* metrics without affecting sampling.
+    if _prioritized_cfg is not None:
+        _baseline = float(getattr(_prioritized_cfg, "baseline_priority", 1.0))
+        _configured_terms = {s["termination_term"] for s in _tags_cfg_list if "termination_term" in s}
+        for _tname in vec_env._env.unwrapped.termination_manager._term_names:
+            if _tname not in _configured_terms:
+                _tags_cfg_list.append({"name": _tname, "priority": _baseline, "termination_term": _tname})
 
     tools.set_seed_everywhere(config.seed)
     if config.deterministic_run:
@@ -407,7 +508,10 @@ def main(config):
             env.set_logger(logger)
         env = env.env
 
-    replay_buffer = Buffer(config.buffer)
+    if _prioritized_cfg is not None:
+        replay_buffer = PrioritizedBuffer(config.buffer)
+    else:
+        replay_buffer = Buffer(config.buffer)
 
     print("Create env.")
     # OmegaConf configs are read-only; use a plain object to pass the env through.
@@ -487,6 +591,13 @@ def main(config):
         print("Self-play enabled: opponent initialised from current agent.")
 
     # Subclass OnlineTrainer to hook score-gated opponent updates.
+    _episode_tags: dict[int, set[str]] = {}
+    from collections import deque as _deque
+
+    _current_episodes: int = 0
+    _episode_count_queue: _deque[int] = _deque()
+    _buffer_capacity: int = int(config.buffer.max_size)
+
     class KlaskTrainer(OnlineTrainer):
         """OnlineTrainer with self-play opponent updates.
 
@@ -503,6 +614,57 @@ def main(config):
                     train_step=train_step,
                 )
             return super().eval(agent, train_step)
+
+        def on_episode_end(self, episode_id: int, env_index: int) -> None:
+            if not isinstance(self.replay_buffer, PrioritizedBuffer):
+                return
+            tm = vec_env._env.unwrapped.termination_manager
+            for s in _tags_cfg_list:
+                tag = s["name"]
+                priority = float(s["priority"])
+                matched = False
+                if "termination_term" in s:
+                    term = s["termination_term"]
+                    if term in tm._term_names:
+                        tidx = tm._term_names.index(term)
+                        matched = bool(tm._term_dones[env_index, tidx].item())
+                if not matched and _tag_tracker is not None and tag in _tag_tracker._step_checkers:
+                    matched = _tag_tracker.get_episode_flag(env_index, tag)
+                if matched:
+                    self.replay_buffer.tag_episode(episode_id, priority, tag=tag)
+                    _episode_tags.setdefault(episode_id, set()).add(tag)
+            self.replay_buffer.flush_episode(episode_id)
+            # Track approximate current episode count in buffer.
+            nonlocal _current_episodes
+            _current_episodes += 1
+            _episode_count_queue.append(self.replay_buffer._transitions_added)
+            while _episode_count_queue:
+                if self.replay_buffer._transitions_added - _episode_count_queue[0] >= _buffer_capacity:
+                    _episode_count_queue.popleft()
+                    _current_episodes = max(0, _current_episodes - 1)
+                else:
+                    break
+            for tag_name, count in self.replay_buffer.get_current_tag_counts().items():
+                self.logger.scalar(f"buffer/tagged_current/{tag_name}", count)
+            for tag_name, count in self.replay_buffer.get_tag_counts().items():
+                self.logger.scalar(f"buffer/tagged_total/{tag_name}", count)
+
+        def on_log(self) -> None:
+            self.logger.scalar("buffer/fill_ratio", self.replay_buffer.count() / int(config.buffer.max_size))
+            self.logger.scalar("buffer/episodes_current", _current_episodes)
+            if not isinstance(self.replay_buffer, PrioritizedBuffer):
+                return
+            ep_ids = getattr(self.replay_buffer, "last_sampled_episodes", None)
+            if not ep_ids:
+                return
+            unique_eps = set(ep_ids)
+            tag_hits: dict[str, int] = {}
+            for eid in unique_eps:
+                for tag in _episode_tags.get(eid, ()):
+                    tag_hits[tag] = tag_hits.get(tag, 0) + 1
+            n = max(len(unique_eps), 1)
+            for tag, count in tag_hits.items():
+                self.logger.scalar(f"buffer/sampled_frac/{tag}", count / n)
 
     def _save_checkpoint(step):
         """Save a full checkpoint at the given step.

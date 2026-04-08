@@ -721,6 +721,13 @@ def collision_player_ball_bool(
     return (dist < eps) & (rel_vel > min_relative_vel) & (ball_vel > min_ball_speed)
 
 
+def collision_player_ball_simple(
+    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg, eps: float = 0.017
+) -> torch.Tensor:
+    dist = distance_player_ball(env, player_cfg, ball_cfg)
+    return (dist < eps).float()
+
+
 def collision_player_ball_time_decay(
     env: ManagerBasedRLEnv,
     player_cfg: SceneEntityCfg,

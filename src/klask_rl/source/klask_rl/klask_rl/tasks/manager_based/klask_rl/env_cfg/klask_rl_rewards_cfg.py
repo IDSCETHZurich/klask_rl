@@ -1,10 +1,8 @@
+# from . import mdp
+import isaaclab.envs.mdp as mdp
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
-
-# from . import mdp
-import isaaclab.envs.mdp as mdp
-
 from klask_rl.assets.robots.klask import KLASK_PARAMS
 
 from ..utils_manager_based import (
@@ -13,15 +11,16 @@ from ..utils_manager_based import (
     ball_speed,
     ball_stationary,
     collision_player_ball,
+    collision_player_ball_simple,
     collision_player_ball_time_decay,
     distance_ball_goal,
     distance_player_ball_own_half,
-    proximity_player_ball,
     distance_to_wall,
     in_goal,
     peg_in_defense_line_with_rebounds,
     peg_speed,
     peg_speed_exp,
+    proximity_player_ball,
     shot_over_middle,
     termination_reward_time_decay,
 )
@@ -82,6 +81,15 @@ class RewardsCfg:
 
     distance_player_ball_own_half = RewTerm(
         func=distance_player_ball_own_half,
+        params={
+            "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
+            "ball_cfg": SceneEntityCfg("ball"),
+        },
+        weight=0.0,
+    )
+
+    collision_player_ball_simple = RewTerm(
+        func=collision_player_ball_simple,
         params={
             "player_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
             "ball_cfg": SceneEntityCfg("ball"),

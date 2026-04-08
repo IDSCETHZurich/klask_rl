@@ -22,6 +22,14 @@ RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install --upgrade pip
 COPY docker_env/res/requirements.txt /tmp/requirements.txt
 RUN /workspace/isaaclab/_isaac_sim/python.sh -m pip install -r /tmp/requirements.txt
 
+# Import and build third-party dependencies from source
+COPY docker_env/res/third_party.repos /tmp/third_party.repos
+RUN mkdir -p /tmp/third_party && \
+    source /workspace/isaaclab/_isaac_sim/setup_python_env.sh && \
+    /workspace/isaaclab/_isaac_sim/kit/python/bin/vcs import /tmp/third_party < /tmp/third_party.repos
+RUN cd /tmp/third_party/torchrl && \
+    /workspace/isaaclab/_isaac_sim/python.sh -m pip install . --no-build-isolation
+
 # Install Ray and configure it
 RUN sed -i "1i $(echo "#!/workspace/isaaclab/_isaac_sim/python.sh")" \
     /isaac-sim/kit/python/bin/ray && ln -s /isaac-sim/kit/python/bin/ray /usr/local/bin/ray
