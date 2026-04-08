@@ -491,12 +491,16 @@ def main(config):
         "name": getattr(config, "wandb_name", f"dreamer_{task_name}"),
         "dir": str(logdir),
     }
+    # Compute agent control frequency for real-time video playback.
+    _sim_dt = float(getattr(config.env, "sim_dt", 0.001))
+    _decimation = int(config.env.decimation)
+    _video_fps = int(round(1.0 / (_decimation * _sim_dt)))
     logger = tools.Logger(
         logdir,
         backends=[
             tools.JSONLBackend(logdir),
-            # tools.TensorBoardBackend(logdir),
-            tools.WandbBackend(wandb_cfg),
+            # tools.TensorBoardBackend(logdir, video_fps=_video_fps),
+            tools.WandbBackend(wandb_cfg, video_fps=_video_fps),
         ],
     )
     logger.log_hydra_config(config)
