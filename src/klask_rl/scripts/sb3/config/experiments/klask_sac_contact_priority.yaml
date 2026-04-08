@@ -1,25 +1,24 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# KLASK SAC + Two-Stage HER Configuration
+# KLASK SAC + Contact Priority Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
-# Two-stage Hindsight Experience Replay for hierarchical goal learning:
-#   Stage 1: Learn to hit the ball (player → ball)
-#   Stage 2: Learn to score a goal (ball → opponent goal)
+# Sparse rewards with contact-priority replay buffer sampling.
+# The replay buffer over-samples transitions from episodes where the agent
+# made contact with the ball, configured by contact_ratio (default 80%).
 #
-# The wrapper dynamically switches goals based on whether the ball has been hit:
-#   Pre-hit:  achieved=player_pos, desired=ball_pos
-#   Post-hit: achieved=ball_pos, desired=opponent_goal
+# No HER / no goal relabeling — uses flat MlpPolicy with 14-dim observations
+# (includes opponent goal position so the agent knows where to score).
 #
-# NOTE: Rewards are handled by env's RewardsCfgTwoStageHer, not the wrapper.
-# The wrapper only converts flat observations to GoalEnv dict format for HER.
+# Uses the same env config as Two-Stage HER (sparse ball hit + goal scored
+# rewards, ball_hit_timeout termination) but without the HER wrapper.
 #
 # Usage:
-#   python train_sac.py --config experiments/klask_sac_two_stage_her.yaml
+#   python train_sac.py --config experiments/klask_sac_contact_priority.yaml
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # TASK
 # ─────────────────────────────────────────────────────────────────────────────────
-task: Klask-Rl-TwoStage-HER-v0
+task: Klask-Rl-ContactPriority-v0
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # ENVIRONMENT
@@ -28,7 +27,7 @@ env:
   num_envs: 4096
   seed: 42
   max_velocity: 0.4 # [m/s] Maximum velocity for player movement
-  episode_length_s: 4.0 # [s] Episode length in seconds
+  episode_length_s: 10.0 # [s] Episode length in seconds
   ball_reset_position_x: [-0.15, 0.15] # [m]
   ball_reset_position_y: [-0.10, -0.02] # [m]
 
@@ -44,8 +43,8 @@ agent:
 
   # Learning parameters
   learning_rate: 3.0e-4
-  buffer_size: 10_000_000
-  learning_starts: 1_000_000
+  buffer_size: 1_000_000
+  learning_starts: 1000
   batch_size: 1024
   tau: 0.005
   gamma: 0.99
@@ -68,7 +67,7 @@ agent:
   n_timesteps: 200_000_000
 
 # ─────────────────────────────────────────────────────────────────────────────────
-# HER (Hindsight Experience Replay) - Two-Stage Configuration
+# CONTACT PRIORITY REPLAY BUFFER
 # ─────────────────────────────────────────────────────────────────────────────────
 # Observation structure (from TwoStageHerObservationsCfg, 14 dims):
 #   - peg_1_pos:      indices 0-2  (player XY position)
@@ -78,39 +77,26 @@ agent:
 #   - ball_pos:       indices 8-10 (ball XY position)
 #   - ball_vel:       indices 10-12 (ball velocity)
 #   - opponent_goal:  indices 12-14 (goal center XY)
-#
-# Two-stage goal switching (handled by wrapper):
-#   Pre-hit:  achieved=player_pos(0:2), desired=ball_pos(8:10)
-#   Post-hit: achieved=ball_pos(8:10), desired=opponent_goal(12:14)
 # ─────────────────────────────────────────────────────────────────────────────────
-her:
-  goal_selection_strategy: final
-  n_sampled_goal: 4
-  distance_threshold: 0.017 # Used by HER buffer
+contact_priority:
+  # Sampling ratio: fraction of each batch drawn from contact episodes
+  contact_ratio: 0.8
 
-# ─────────────────────────────────────────────────────────────────────────────────
-# TWO-STAGE HER SPECIFIC SETTINGS
-# ─────────────────────────────────────────────────────────────────────────────────
-two_stage:
-  # Observation indices for goal extraction
+  # Observation indices for contact detection
   player_pos_indices: [0, 2]
   ball_pos_indices: [8, 10]
   goal_pos_indices: [16, 18]
 
   # Detection thresholds
-  ball_hit_threshold: 0.017 # Distance for ball hit detection
-  goal_score_threshold: 0.025 # Distance for goal scoring
+  ball_hit_threshold: 0.017 # Distance for ball hit detection [m]
+  goal_score_threshold: 0.025 # Distance for goal scoring [m]
 
   # Timeout after ball hit
-  ball_hit_timeout: 2.0 # [s] Time after ball hit to terminate episode
+  ball_hit_timeout: 10.0 # [s] Time after ball hit to terminate episode
 
   # Reward scales - Environment rewards (RewardsCfgTwoStageHer weights)
-  ball_hit_env_reward: 500.0 # collision_player_ball weight
+  ball_hit_env_reward: 0.0 # collision_player_ball weight
   goal_score_env_reward: 1000.0 # goal_scored weight
-
-  # Reward scales - Wrapper rewards (HER compute_reward for hindsight relabeling)
-  ball_hit_wrapper_reward: 1.0
-  goal_score_wrapper_reward: 2.0
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # DOMAIN RANDOMIZATION
@@ -143,7 +129,7 @@ training:
 wandb:
   project: KLASK_SAC
   entity: null
-  name: sac-her-goal-scoring
+  name: sac-contact-priority
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # SIMULATION - Isaac Sim App Launcher
@@ -154,9 +140,9 @@ app_launcher:
   enable_cameras: false
   device: cuda:0
   xr: false
-  experience: ''
+  experience: ""
   rendering_mode: balanced
-  kit_args: ''
+  kit_args: ""
   anim_recording_enabled: false
   anim_recording_start_time: 0
   anim_recording_stop_time: 10

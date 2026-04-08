@@ -53,6 +53,9 @@ class ExperimentConfig:
     # Two-stage HER settings (None if two-stage disabled)
     two_stage_cfg: dict[str, Any] | None = None
 
+    # Contact priority settings (None if contact priority disabled)
+    contact_priority_cfg: dict[str, Any] | None = None
+
     # Domain randomization settings (None means disable DR events)
     domain_randomization_cfg: dict[str, Any] | None = None
 
@@ -82,6 +85,11 @@ class ExperimentConfig:
     def use_two_stage_her(self) -> bool:
         """Two-stage HER is enabled if two_stage_cfg section exists."""
         return self.two_stage_cfg is not None and len(self.two_stage_cfg) > 0
+
+    @property
+    def use_contact_priority(self) -> bool:
+        """Contact priority is enabled if contact_priority_cfg section exists."""
+        return self.contact_priority_cfg is not None and len(self.contact_priority_cfg) > 0
 
     @property
     def video(self) -> bool:
@@ -168,6 +176,43 @@ class ExperimentConfig:
     def two_stage_ball_hit_timeout(self) -> float | None:
         return self.two_stage_cfg.get("ball_hit_timeout") if self.two_stage_cfg else None
 
+    # Contact priority property accessors
+    @property
+    def contact_priority_ratio(self) -> float:
+        return self.contact_priority_cfg.get("contact_ratio", 0.8) if self.contact_priority_cfg else 0.8
+
+    @property
+    def contact_priority_player_pos_indices(self) -> list[int] | None:
+        return self.contact_priority_cfg.get("player_pos_indices") if self.contact_priority_cfg else None
+
+    @property
+    def contact_priority_ball_pos_indices(self) -> list[int] | None:
+        return self.contact_priority_cfg.get("ball_pos_indices") if self.contact_priority_cfg else None
+
+    @property
+    def contact_priority_goal_pos_indices(self) -> list[int] | None:
+        return self.contact_priority_cfg.get("goal_pos_indices") if self.contact_priority_cfg else None
+
+    @property
+    def contact_priority_ball_hit_threshold(self) -> float:
+        return self.contact_priority_cfg.get("ball_hit_threshold", 0.017) if self.contact_priority_cfg else 0.017
+
+    @property
+    def contact_priority_goal_score_threshold(self) -> float:
+        return self.contact_priority_cfg.get("goal_score_threshold", 0.025) if self.contact_priority_cfg else 0.025
+
+    @property
+    def contact_priority_ball_hit_env_reward(self) -> float | None:
+        return self.contact_priority_cfg.get("ball_hit_env_reward") if self.contact_priority_cfg else None
+
+    @property
+    def contact_priority_goal_score_env_reward(self) -> float | None:
+        return self.contact_priority_cfg.get("goal_score_env_reward") if self.contact_priority_cfg else None
+
+    @property
+    def contact_priority_ball_hit_timeout(self) -> float | None:
+        return self.contact_priority_cfg.get("ball_hit_timeout") if self.contact_priority_cfg else None
+
     # Wandb property accessors
     @property
     def wandb_project(self) -> str | None:
@@ -252,6 +297,11 @@ class ExperimentConfig:
         if two_stage_cfg is not None and not two_stage_cfg:
             two_stage_cfg = None
 
+        # Extract contact priority config
+        contact_priority_cfg = data.get("contact_priority")
+        if contact_priority_cfg is not None and not contact_priority_cfg:
+            contact_priority_cfg = None
+
         # Extract domain randomization config
         domain_randomization_cfg = data.get("domain_randomization")
         if domain_randomization_cfg is not None and not domain_randomization_cfg:
@@ -287,6 +337,7 @@ class ExperimentConfig:
             agent_cfg=agent_cfg,
             her_cfg=her_cfg,
             two_stage_cfg=two_stage_cfg,
+            contact_priority_cfg=contact_priority_cfg,
             domain_randomization_cfg=domain_randomization_cfg,
             log_interval=log_interval,
             checkpoint=checkpoint,
@@ -366,7 +417,11 @@ class ExperimentConfig:
             Filtered list of CLI arguments with her.* and two_stage.* keys removed.
         """
         filtered = []
-        override_prefixes = {"her.": "her_cfg", "two_stage.": "two_stage_cfg"}
+        override_prefixes = {
+            "her.": "her_cfg",
+            "two_stage.": "two_stage_cfg",
+            "contact_priority.": "contact_priority_cfg",
+        }
 
         for arg in argv:
             if "=" not in arg:
@@ -379,15 +434,9 @@ class ExperimentConfig:
             # Runtime-only env keys (not part of Hydra struct)
             if key in ("env.ball_reset_position_x", "env.ball_reset_position_y"):
                 parsed_value = self._parse_cli_value(raw_value)
-                attr = (
-                    "ball_reset_position_x"
-                    if key == "env.ball_reset_position_x"
-                    else "ball_reset_position_y"
-                )
+                attr = "ball_reset_position_x" if key == "env.ball_reset_position_x" else "ball_reset_position_y"
                 setattr(self, attr, parsed_value)
-                print(
-                    f"[INFO] CLI override: {attr} = {parsed_value}"
-                )
+                print(f"[INFO] CLI override: {attr} = {parsed_value}")
                 continue
 
             matched = False
@@ -482,9 +531,13 @@ class ExperimentConfig:
         if device is not None:
             overrides.append(f"env.sim.device={device}")
 
-        # Termination overrides (for two-stage HER)
+        # Termination overrides (for two-stage HER and contact priority)
         if self.two_stage_ball_hit_timeout is not None:
             overrides.append(f"env.terminations.ball_hit_timeout_term.params.timeout={self.two_stage_ball_hit_timeout}")
+        elif self.contact_priority_ball_hit_timeout is not None:
+            overrides.append(
+                f"env.terminations.ball_hit_timeout_term.params.timeout={self.contact_priority_ball_hit_timeout}"
+            )
 
         # Agent overrides - only fields that exist in base sb3_sac_cfg.yaml
         # to avoid Hydra struct mode errors. Other fields are merged directly.
@@ -622,6 +675,7 @@ class ExperimentConfig:
             "agent": self.agent_cfg,
             "her": self.her_cfg,
             "two_stage": self.two_stage_cfg,
+            "contact_priority": self.contact_priority_cfg,
             "domain_randomization": self.domain_randomization_cfg,
             "training": {
                 "log_interval": self.log_interval,

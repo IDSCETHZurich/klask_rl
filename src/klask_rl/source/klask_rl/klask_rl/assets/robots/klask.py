@@ -22,7 +22,7 @@ KLASK_PARAMS = {
     "opponent_goal": (0.0, 0.17, 0.01905),
     "ball_mass_initial": 0.0017,
     "ball_reset_position_x": (-0.15, 0.15),
-    "ball_reset_position_y": (-0.20, 0.20),
+    "ball_reset_position_y": (-0.20, -0.04),
     "ball_restitution": 0.8,  # 0.8,  # s2r: 0.3
     "ball_static_friction": 0.18,  # 0.03,  # s2r: 0.3
     "ball_dynamic_friction": 0.12,  # 0.03,  # s2r: 0.6

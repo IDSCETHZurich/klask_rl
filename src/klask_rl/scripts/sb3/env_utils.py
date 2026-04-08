@@ -78,6 +78,16 @@ def apply_reward_weights(
                 print(f"[INFO] Setting env collision_player_ball_reward weight to {cfg.her_env_reward_scale}")
                 env_cfg.rewards.collision_player_ball_reward.weight = cfg.her_env_reward_scale
 
+    if cfg.use_contact_priority:
+        if cfg.contact_priority_ball_hit_env_reward is not None:
+            if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "collision_player_ball"):
+                print(f"[INFO] Setting env collision_player_ball weight to {cfg.contact_priority_ball_hit_env_reward}")
+                env_cfg.rewards.collision_player_ball.weight = cfg.contact_priority_ball_hit_env_reward
+        if cfg.contact_priority_goal_score_env_reward is not None:
+            if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "goal_scored"):
+                print(f"[INFO] Setting env goal_scored weight to {cfg.contact_priority_goal_score_env_reward}")
+                env_cfg.rewards.goal_scored.weight = cfg.contact_priority_goal_score_env_reward
+
     if cfg.use_two_stage_her:
         if cfg.two_stage_ball_hit_env_reward is not None:
             if hasattr(env_cfg, "rewards") and hasattr(env_cfg.rewards, "collision_player_ball"):
@@ -198,6 +208,7 @@ def wrap_env_for_sb3(
     """
     from isaaclab_rl.sb3 import Sb3VecEnvWrapper
     from klask_rl.tasks.manager_based.klask_rl.wrappers import (
+        Sb3ContactTrackingWrapper,
         Sb3TwoStageHerWrapper,
         Sb3VecHerWrapper,
     )
@@ -229,6 +240,25 @@ def wrap_env_for_sb3(
             goal_score_threshold=cfg.two_stage_goal_score_threshold,
             ball_hit_reward=cfg.two_stage_ball_hit_wrapper_reward,
             goal_score_reward=cfg.two_stage_goal_score_wrapper_reward,
+        )
+    elif cfg.use_contact_priority:
+        print("[INFO] Wrapping environment with Contact Tracking wrapper...")
+        player_pos_indices = tuple(cfg.contact_priority_player_pos_indices or [0, 2])
+        ball_pos_indices = tuple(cfg.contact_priority_ball_pos_indices or [8, 10])
+        goal_pos_indices = tuple(cfg.contact_priority_goal_pos_indices or [12, 14]) if cfg.contact_priority_goal_pos_indices else None
+
+        print(f"[INFO] Contact Priority player_pos indices: {player_pos_indices}")
+        print(f"[INFO] Contact Priority ball_pos indices: {ball_pos_indices}")
+        print(f"[INFO] Contact Priority ball_hit_threshold: {cfg.contact_priority_ball_hit_threshold}")
+        print(f"[INFO] Contact Priority contact_ratio: {cfg.contact_priority_ratio}")
+
+        env = Sb3ContactTrackingWrapper(
+            env,
+            player_pos_indices=player_pos_indices,
+            ball_pos_indices=ball_pos_indices,
+            ball_hit_threshold=cfg.contact_priority_ball_hit_threshold,
+            goal_pos_indices=goal_pos_indices,
+            goal_score_threshold=cfg.contact_priority_goal_score_threshold,
         )
     elif cfg.use_her:
         print("[INFO] Wrapping environment with HER (Hindsight Experience Replay) wrapper...")

@@ -170,6 +170,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import klask_rl.tasks  # noqa: F401
 
+from contact_priority_replay_buffer import ContactPriorityReplayBuffer
 from env_utils import (
     apply_reward_weights,
     apply_training_normalization,
@@ -261,6 +262,57 @@ class TwoStageHerMetricsCallback(BaseCallback):
             print(
                 f"[TwoStageMetrics] Envs that hit ball: {ball_hits_count}/{self.num_envs} ({ball_hit_rate:.2%}), "
                 f"Envs that scored: {goal_scores_count}/{self.num_envs} ({goal_score_rate:.2%})"
+            )
+
+        self.envs_hit_ball.clear()
+        self.envs_scored_goal.clear()
+
+
+class ContactPriorityMetricsCallback(BaseCallback):
+    """Callback to track contact priority buffer stats and goal achievements.
+
+    Tracks:
+    - Ball hit rate and goal score rate per rollout
+    - Contact buffer fill ratio and sampling ratio from the replay buffer
+    """
+
+    def __init__(self, num_envs: int, verbose: int = 0):
+        super().__init__(verbose)
+        self.num_envs = num_envs
+        self.envs_hit_ball = set()
+        self.envs_scored_goal = set()
+
+    def _on_step(self) -> bool:
+        if "infos" in self.locals:
+            infos = self.locals["infos"]
+            for i, info in enumerate(infos):
+                if info.get("ball_hit", False) or info.get("terminal_ball_hit", False):
+                    self.envs_hit_ball.add(i)
+                if info.get("goal_scored", False) or info.get("terminal_goal_scored", False):
+                    self.envs_scored_goal.add(i)
+        return True
+
+    def _on_rollout_end(self) -> None:
+        ball_hits_count = len(self.envs_hit_ball)
+        goal_scores_count = len(self.envs_scored_goal)
+        ball_hit_rate = ball_hits_count / self.num_envs if self.num_envs > 0 else 0
+        goal_score_rate = goal_scores_count / self.num_envs if self.num_envs > 0 else 0
+
+        self.logger.record("contact_priority/ball_hits_count", ball_hits_count)
+        self.logger.record("contact_priority/goal_scores_count", goal_scores_count)
+        self.logger.record("contact_priority/ball_hit_rate", ball_hit_rate)
+        self.logger.record("contact_priority/goal_score_rate", goal_score_rate)
+
+        # Log buffer stats if available
+        replay_buffer = getattr(self.model, "replay_buffer", None)
+        if isinstance(replay_buffer, ContactPriorityReplayBuffer):
+            self.logger.record("contact_priority/contact_sample_frac", replay_buffer.contact_sample_frac)
+            self.logger.record("contact_priority/contact_buffer_frac", replay_buffer.contact_buffer_frac)
+
+        if self.verbose > 0:
+            print(
+                f"[ContactPriority] Ball hits: {ball_hits_count}/{self.num_envs} ({ball_hit_rate:.2%}), "
+                f"Goals: {goal_scores_count}/{self.num_envs} ({goal_score_rate:.2%})"
             )
 
         self.envs_hit_ball.clear()
@@ -374,7 +426,14 @@ def main(
     replay_buffer_class = None
     replay_buffer_kwargs = None
 
-    if cfg.use_her or cfg.use_two_stage_her:
+    if cfg.use_contact_priority:
+        print("[INFO] Configuring Contact Priority replay buffer...")
+        print(f"[INFO] Contact ratio: {cfg.contact_priority_ratio}")
+        replay_buffer_class = ContactPriorityReplayBuffer
+        replay_buffer_kwargs = {
+            "contact_ratio": cfg.contact_priority_ratio,
+        }
+    elif cfg.use_her or cfg.use_two_stage_her:
         print("[INFO] Configuring HER replay buffer...")
         print(f"[INFO] HER goal selection strategy: {cfg.her_goal_selection_strategy}")
         print(f"[INFO] HER n_sampled_goal: {cfg.her_n_sampled_goal}")
@@ -462,6 +521,14 @@ def main(
         verbose=2,
     )
     callbacks = [checkpoint_callback]
+
+    # Add contact priority metrics callback if using contact priority
+    if cfg.use_contact_priority:
+        contact_callback = ContactPriorityMetricsCallback(
+            num_envs=env_cfg.scene.num_envs, verbose=1
+        )
+        callbacks.append(contact_callback)
+        print("[INFO] Added ContactPriorityMetricsCallback to track contact stats")
 
     # Add two-stage HER metrics callback if using two-stage HER
     if cfg.use_two_stage_her:

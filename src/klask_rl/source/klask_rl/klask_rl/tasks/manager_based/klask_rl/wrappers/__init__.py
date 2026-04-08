@@ -15,6 +15,7 @@ from .klask_rl_training_wrappers import (
     KlaskRlCollisionAvoidanceWrapper,
     RewardWeightWrapper,
 )
+from .sb3_contact_tracking_wrapper import Sb3ContactTrackingWrapper
 from .sb3_her_wrapper import Sb3VecHerWrapper
 from .sb3_two_stage_her_wrapper import Sb3TwoStageHerWrapper
 from .utils import configure_domain_randomization, find_wrapper
@@ -33,6 +34,7 @@ __all__ = [
     "InitializationWrapper",
     "KlaskRlCollisionAvoidanceWrapper",
     "ActionHistoryWrapper",
+    "Sb3ContactTrackingWrapper",
     "Sb3VecHerWrapper",
     "Sb3TwoStageHerWrapper",
 ]

@@ -142,6 +142,36 @@ class KlaskRlTwoStageHerEnvCfg(KlaskRlEnvCfg):
 
 
 @configclass
+class KlaskRlContactPriorityEnvCfg(KlaskRlEnvCfg):
+    """Configuration for contact-priority SAC training for goal scoring.
+
+    Same env structure as Two-Stage HER (14-dim obs, sparse ball hit + goal
+    scored rewards, ball_hit_timeout termination) but WITHOUT HER wrappers.
+    Instead, the replay buffer over-samples transitions from episodes where
+    ball contact occurred.
+
+    Key features:
+    - Observations: 14 dims (12 base + 2 for opponent goal XY)
+    - Rewards: collision_player_ball and goal_scored (weights set from YAML)
+    - Terminations: timeout, goal scored, or ball_hit_timeout
+    - No HER / no goal relabeling — uses flat MlpPolicy
+    """
+
+    observations = TwoStageHerObservationsCfg()
+    actions = ActionsCfgPlayerOnly()
+    events = EventCfgSac()
+    rewards = RewardsCfgTwoStageHer()
+    terminations = TerminationsCfgTwoStageHer()
+
+    def __post_init__(self):
+        """Post initialization."""
+        super().__post_init__()
+        self.decimation = KLASK_PARAMS["decimation"]
+        self.sim.dt = KLASK_PARAMS["physics_dt"]
+        self.max_episode_length = int(self.episode_length_s / (self.decimation * self.sim.dt))
+
+
+@configclass
 class KlaskRlFastSACEnvCfg(KlaskRlEnvCfg):
     """Configuration for FastSAC + HER training with self-play.
 
