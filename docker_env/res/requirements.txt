@@ -4,3 +4,4 @@ bayesian-optimization==3.2.0
 mlflow==3.9.0
 ruamel.yaml==0.19.1
 torchrl==0.11.1
+tyro==1.0.12

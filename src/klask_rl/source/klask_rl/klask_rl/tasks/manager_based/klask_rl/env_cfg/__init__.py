@@ -4,6 +4,7 @@ from .klask_rl_observations_cfg import (
     ObservationsCfg,
     ObservationsExtendedCfg,
     TwoStageHerObservationsCfg,
+    FastSACObservationsCfg,
     DreamerObservationsCfg,
     DreamerSpriteObservationsCfg,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "ObservationsCfg",
     "ObservationsExtendedCfg",
     "TwoStageHerObservationsCfg",
+    "FastSACObservationsCfg",
     "DreamerObservationsCfg",
     "DreamerSpriteObservationsCfg",
     "EventCfg",

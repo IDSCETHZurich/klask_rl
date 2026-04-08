@@ -23,15 +23,15 @@ KLASK_PARAMS = {
     "ball_mass_initial": 0.0017,
     "ball_reset_position_x": (-0.15, 0.15),
     "ball_reset_position_y": (-0.20, 0.20),
-    "ball_restitution": 0.4,  # 0.8,  # s2r: 0.3
+    "ball_restitution": 0.8,  # 0.8,  # s2r: 0.3
     "ball_static_friction": 0.18,  # 0.03,  # s2r: 0.3
     "ball_dynamic_friction": 0.12,  # 0.03,  # s2r: 0.6
     "board_static_friction": 0.09,  # 0.2
     "board_dynamic_friction": 0.06,  # 0.2
-    "board_restitution": 0.175,  # 0.9
+    "board_restitution": 0.9,  # 0.9
     "peg_static_friction": 0.09,  # 0.4
     "peg_dynamic_friction": 0.06,  # 0.4
-    "peg_restitution": 0.175,  # 0.7
+    "peg_restitution": 0.7,  # 0.7
     "max_ball_vel": 5.0,  # 100.0 # s2r: 5.0
     "action_history": 0,  # s2r: 10
     "peg_radius": 0.0075,

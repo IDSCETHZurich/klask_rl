@@ -343,6 +343,128 @@ _TwoStageHerOpponentPolicyExtendedCfg = _fix_pickle(
 )
 
 
+def _fast_sac_obs_group(
+    own_body: str,
+    own_x_joint: str,
+    own_y_joint: str,
+    other_body: str,
+    other_x_joint: str,
+    other_y_joint: str,
+    own_goal: tuple,
+    other_goal: tuple,
+    rotate: bool = False,
+) -> type:
+    """Factory: returns a @configclass ObsGroup for the FastSAC 18-dim layout.
+
+    Observation order:
+      [0:2]   ball XY         [2:4]   ball vel XY
+      [4:6]   own peg XY      [6:8]   other peg XY
+      [8]     own peg vx       [9]     own peg vy
+      [10]    other peg vx     [11]    other peg vy
+      [12:14] ball-own diff XY [14:16] ball-goal diff XY
+      [16:18] goal XY
+
+    When ``rotate=True`` a 180° rotation is applied (all outputs are negated).
+    """
+    s2 = (-1.0, -1.0) if rotate else None
+    s1 = -1.0 if rotate else None
+
+    @configclass
+    class _FastSACObsGroup(ObsGroup):
+        ball_pos = ObsTerm(
+            func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")}, scale=s2,
+        )
+        ball_vel = ObsTerm(
+            func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")}, scale=s2,
+        )
+        own_pos = ObsTerm(
+            func=body_xy_pos_w,
+            params={"asset_cfg": SceneEntityCfg(name="klask", body_names=[own_body])},
+            scale=s2,
+        )
+        other_pos = ObsTerm(
+            func=body_xy_pos_w,
+            params={"asset_cfg": SceneEntityCfg(name="klask", body_names=[other_body])},
+            scale=s2,
+        )
+        own_x_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[own_x_joint])},
+            scale=s1,
+        )
+        own_y_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[own_y_joint])},
+            scale=s1,
+        )
+        other_x_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[other_x_joint])},
+            scale=s1,
+        )
+        other_y_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[other_y_joint])},
+            scale=s1,
+        )
+        ball_own_diff = ObsTerm(
+            func=direction_to_ball,
+            params={
+                "player_cfg": SceneEntityCfg(name="klask", body_names=[own_body]),
+                "ball_cfg": SceneEntityCfg(name="ball"),
+            },
+            scale=s2,
+        )
+        ball_goal_diff = ObsTerm(
+            func=direction_ball_goal,
+            params={
+                "ball_cfg": SceneEntityCfg(name="ball"),
+                "goal": other_goal,
+            },
+            scale=s2,
+        )
+        goal_pos = ObsTerm(
+            func=goal_position_obs,
+            params={"goal": other_goal[:2]},
+            scale=s2,
+        )
+
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    return _FastSACObsGroup
+
+
+_FastSACPlayerPolicyCfg = _fix_pickle(
+    _fast_sac_obs_group(
+        own_body="Peg_1",
+        own_x_joint="slider_to_peg_1",
+        own_y_joint="ground_to_slider_1",
+        other_body="Peg_2",
+        other_x_joint="slider_to_peg_2",
+        other_y_joint="ground_to_slider_2",
+        own_goal=KLASK_PARAMS["player_goal"],
+        other_goal=KLASK_PARAMS["opponent_goal"],
+    ),
+    "_FastSACPlayerPolicyCfg",
+)
+_FastSACOpponentPolicyCfg = _fix_pickle(
+    _fast_sac_obs_group(
+        own_body="Peg_2",
+        own_x_joint="slider_to_peg_2",
+        own_y_joint="ground_to_slider_2",
+        other_body="Peg_1",
+        other_x_joint="slider_to_peg_1",
+        other_y_joint="ground_to_slider_1",
+        own_goal=KLASK_PARAMS["opponent_goal"],
+        other_goal=KLASK_PARAMS["player_goal"],
+        rotate=True,
+    ),
+    "_FastSACOpponentPolicyCfg",
+)
+
+
 # ---------------------------------------------------------------------------
 # Top-level observation configs
 # ---------------------------------------------------------------------------
@@ -377,6 +499,19 @@ class TwoStageHerObservationsCfg:
     # observation groups
     policy: ObsGroup = _TwoStageHerPlayerPolicyExtendedCfg()
     opponent: ObsGroup = _TwoStageHerOpponentPolicyExtendedCfg()
+
+
+@configclass
+class FastSACObservationsCfg:
+    """18-dim observation layout matching fast_sac's expected format.
+
+    Uses IsaacLab native coordinates (X=short axis, Y=long/playing axis).
+    Both ``policy`` and ``opponent`` groups produce [N, 18] tensors.
+    The opponent group applies 180° rotation and swaps peg roles.
+    """
+
+    policy: ObsGroup = _FastSACPlayerPolicyCfg()
+    opponent: ObsGroup = _FastSACOpponentPolicyCfg()
 
 
 @configclass

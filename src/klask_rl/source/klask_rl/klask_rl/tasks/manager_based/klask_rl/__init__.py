@@ -14,6 +14,7 @@ from .klask_rl_env_cfg import (
     KlaskRlEnvCfg,
     KlaskRlHerSacEnvCfg,
     KlaskRlSacEnvCfg,
+    KlaskRlFastSACEnvCfg,
     KlaskRlTwoStageHerEnvCfg,
     RewardsCfgSparseHer,
     RewardsCfgTwoStageHer,
@@ -72,6 +73,16 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlTwoStageHerEnvCfg",
         "sb3_sac_cfg_entry_point": f"{agents.__name__}:sb3_sac_cfg.yaml",
+    },
+)
+
+
+gym.register(
+    id="Klask-Rl-FastSAC-v0",
+    entry_point="klask_her.envs.isaaclab_klask_env:FastSACManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.klask_rl_env_cfg:KlaskRlFastSACEnvCfg",
     },
 )
 

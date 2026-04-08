@@ -13,6 +13,7 @@ from .env_cfg import (
     EventCfg,
     EventCfgDreamer,
     EventCfgSac,
+    FastSACObservationsCfg,
     KlaskRlDreamerSceneCfg,
     KlaskRlDreamerSpriteSceneCfg,
     KlaskRlSceneCfg,
@@ -138,6 +139,27 @@ class KlaskRlTwoStageHerEnvCfg(KlaskRlEnvCfg):
         self.decimation = KLASK_PARAMS["decimation"]
         self.sim.dt = KLASK_PARAMS["physics_dt"]
         self.max_episode_length = int(self.episode_length_s / (self.decimation * self.sim.dt))
+
+
+@configclass
+class KlaskRlFastSACEnvCfg(KlaskRlEnvCfg):
+    """Configuration for FastSAC + HER training with self-play.
+
+    Uses the 18-dim FastSAC observation layout (ball pos/vel, peg pos/vel,
+    ball-peg diff, ball-goal diff, goal pos) in IsaacLab native coordinates.
+    Both players are controlled (4-dim action) for self-play.
+    Reward weights are set at runtime in the training script.
+    """
+
+    observations = FastSACObservationsCfg()
+    actions = ActionsCfg()  # 4-dim: both player and opponent
+    events = EventCfg()
+    rewards = RewardsCfg()  # weights set to ±1000 at runtime
+    terminations = TerminationsCfg()
+
+    def __post_init__(self):
+        """Post initialization."""
+        super().__post_init__()
 
 
 @configclass
