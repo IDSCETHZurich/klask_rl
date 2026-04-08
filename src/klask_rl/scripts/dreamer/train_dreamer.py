@@ -524,6 +524,19 @@ def main(config):
     env_config.isaac_vec_env = vec_env
     train_envs, eval_envs, obs_space, act_space = make_envs(env_config)
 
+    # Pass opponent_separation flags to model config so Dreamer can read them.
+    _opp_sep = getattr(config, "opponent_separation", False)
+    config.model.opponent_separation = _opp_sep
+    _opp_sep_cfg = getattr(config, "opponent_separation_config", None)
+    if _opp_sep_cfg is not None:
+        if OmegaConf.is_config(_opp_sep_cfg):
+            _opp_sep_dict = OmegaConf.to_container(_opp_sep_cfg, resolve=True)
+        else:
+            _opp_sep_dict = dict(_opp_sep_cfg)
+        config.model.imag_opponent = _opp_sep_dict.get("imag_opponent", "random")
+    else:
+        config.model.imag_opponent = "random"
+
     print("Simulate agent.")
     agent = Dreamer(
         config.model,
@@ -540,7 +553,13 @@ def main(config):
     if checkpoint_path.exists():
         print(f"Resuming from checkpoint: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=config.device)
-        agent.load_state_dict(checkpoint["agent_state_dict"])
+        _missing, _unexpected = agent.load_state_dict(checkpoint["agent_state_dict"], strict=False)
+        if _missing or _unexpected:
+            print(f"  Checkpoint key mismatch: {len(_missing)} missing, {len(_unexpected)} unexpected")
+            if _missing:
+                print(f"    Missing: {_missing}")
+            if _unexpected:
+                print(f"    Unexpected: {_unexpected}")
         tools.recursively_load_optim_state_dict(agent, checkpoint["optims_state_dict"])
         _resume_step = checkpoint.get("step", 0)
         # Restore curriculum step so reward weight schedules continue correctly.

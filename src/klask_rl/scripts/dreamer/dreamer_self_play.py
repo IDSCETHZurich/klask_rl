@@ -179,9 +179,16 @@ class DreamerSelfPlayWrapper(Wrapper):
         full_action = torch.cat([action, opponent_actions], dim=1)
         obs, reward, terminated, truncated, info = self.env.step(full_action, *args, **kwargs)
 
+        # Expose opponent actions so they can be stored in the replay buffer.
+        obs["opponent_action"] = opponent_actions
+
         # Update opponent RSSM state with the new opponent observation.
         done = terminated | truncated
         if self._opponent_encoder is not None:
+            # Build 4D prev_action for the opponent's RSSM when opponent_separation is on.
+            # From the opponent's perspective: [opp_action, player_action].
+            if self._opponent_rssm._act_dim > opponent_actions.shape[-1]:
+                self._opp_prev_action = torch.cat([opponent_actions, action], dim=-1)
             obs_for_encode = self._with_terminal_opponent_obs(obs, info)
             if self._opp_is_first is None:
                 num_envs = self.env.unwrapped.num_envs
@@ -294,7 +301,10 @@ class DreamerSelfPlayWrapper(Wrapper):
         feat = self._opponent_rssm.get_feat(self._opp_stoch, self._opp_deter)
         action_dist = self._opponent_actor(feat)
         action = action_dist.mode if self._eval_mode else action_dist.rsample()
-        self._opp_prev_action = action
+        # Don't set _opp_prev_action here when opponent_separation is on;
+        # step() will build the full 4D prev_action after both actions are known.
+        if self._opponent_rssm._act_dim == action.shape[-1]:
+            self._opp_prev_action = action
         return action
 
     @torch.no_grad()
