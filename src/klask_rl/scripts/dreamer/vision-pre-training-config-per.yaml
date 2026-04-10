@@ -138,7 +138,7 @@ env:
 buffer:
   batch_size: ${batch_size}
   batch_length: ${batch_length}
-  max_size: 2e6
+  max_size: 5e5
   device: ${device}
   storage_device: "cpu"
   prioritized:
