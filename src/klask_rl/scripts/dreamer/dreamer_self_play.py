@@ -156,6 +156,15 @@ class DreamerSelfPlayWrapper(Wrapper):
             return 0.0
         return sum(self._score_buffer) / len(self._score_buffer)
 
+    @property
+    def opponent_networks(self):
+        """Return (rssm, actor) references for imagination self-play.
+
+        Returns the uncompiled originals so that weight updates via
+        ``load_state_dict`` propagate to all consumers automatically.
+        """
+        return self._opponent_rssm_orig, self._opponent_actor_orig
+
     # ------------------------------------------------------------------
     # Gymnasium interface
     # ------------------------------------------------------------------
@@ -198,6 +207,9 @@ class DreamerSelfPlayWrapper(Wrapper):
             self._encode_opponent_obs(obs_for_encode, is_first)
             self._opp_is_first.zero_()
             self._opp_pending_first.copy_(done.to(torch.bool))
+            # Expose post-observation opponent RSSM state for buffer storage.
+            obs["opp_stoch"] = self._opp_stoch.clone()
+            obs["opp_deter"] = self._opp_deter.clone()
 
         # --- Track episode outcomes for score-gated updates ---
         if done.any():

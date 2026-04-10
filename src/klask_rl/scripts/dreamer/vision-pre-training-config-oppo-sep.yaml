@@ -193,4 +193,6 @@ trajectory_mirroring: true # Compute opponent rewards + mirror trajectories at s
 
 opponent_separation: true # Feed explicit opponent actions to the world model (4D = player + opponent)
 opponent_separation_config:
-  imag_opponent: "random" # Opponent policy during imagination: "random" | "frozen_actor" | "zero"
+  imag_opponent: "selfplay" # Opponent policy during imagination: "random" | "zero" | "selfplay"
+
+mirror_opp_warm_start: true # Use opponent RSSM states to warm-start mirrored trajectories

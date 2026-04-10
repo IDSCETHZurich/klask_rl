@@ -526,6 +526,8 @@ def main(config):
     # Derive buffer.mirror from the single trajectory_mirroring flag.
     _traj_mirror = getattr(config, "trajectory_mirroring", False)
     OmegaConf.update(config, "buffer.mirror", _traj_mirror, force_add=True)
+    _mirror_opp_ws = bool(getattr(config, "mirror_opp_warm_start", False))
+    OmegaConf.update(config, "buffer.mirror_opp_warm_start", _mirror_opp_ws, force_add=True)
 
     if _use_prioritized:
         replay_buffer = PrioritizedBuffer(config.buffer)
@@ -616,6 +618,13 @@ def main(config):
     # Initialise self-play opponent from the (randomly initialised) agent.
     if _self_play_wrapper is not None:
         _self_play_wrapper.set_opponent(agent)
+        # Share frozen opponent networks with the agent for imagination
+        # self-play.  The Dreamer class receives references to the same
+        # module instances, so weight updates via load_state_dict propagate
+        # automatically.
+        opp_rssm, opp_actor = _self_play_wrapper.opponent_networks
+        if opp_rssm is not None:
+            agent.set_imag_opponent_networks(opp_rssm, opp_actor)
         # Restore score buffer from checkpoint so mean_score continues
         # correctly instead of being diluted by 4096 pre-filled zeros.
         if checkpoint_path.exists():
