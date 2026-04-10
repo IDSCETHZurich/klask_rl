@@ -636,6 +636,17 @@ def main(config):
     _episode_count_queue: _deque[int] = _deque()
     _buffer_capacity: int = int(config.buffer.max_size)
 
+    # TODO: Remove later
+    # ==============================================
+    # --- Periodic profiling state ---
+    _profile_state = {
+        "every": 100_000,      # Profile every N steps
+        "window": 10_000,      # Each profile captures this many steps
+        "profiler": None,      # Active cProfile.Profile or None
+        "start_step": 0,       # Step when current profile window started
+    }
+    # ==============================================
+
     class KlaskTrainer(OnlineTrainer):
         """OnlineTrainer with self-play opponent updates.
 
@@ -690,6 +701,34 @@ def main(config):
         def on_log(self) -> None:
             self.logger.scalar("buffer/fill_ratio", self.replay_buffer.count() / int(config.buffer.max_size))
             self.logger.scalar("buffer/episodes_current", _current_episodes)
+
+            # TODO: Remove later
+            # ==============================================
+            # --- Periodic cProfile snapshots ---
+            ps = _profile_state
+            step = self._step
+            if ps["profiler"] is not None:
+                # Active profile window — check if we've captured enough steps.
+                if step - ps["start_step"] >= ps["window"]:
+                    ps["profiler"].disable()
+                    prof_dir = logdir / "profiles"
+                    prof_dir.mkdir(exist_ok=True)
+                    prof_path = prof_dir / f"profile_{ps['start_step']}.prof"
+                    ps["profiler"].dump_stats(str(prof_path))
+                    print(f"\n=== Profile snapshot @ step {ps['start_step']} "
+                          f"({ps['window']} steps) saved to {prof_path} ===")
+                    st = pstats.Stats(ps["profiler"])
+                    st.sort_stats("cumulative")
+                    st.print_stats(30)
+                    ps["profiler"] = None
+            elif step > 0 and step % ps["every"] < ps["window"]:
+                # Time to start a new profiling window.
+                ps["profiler"] = cProfile.Profile()
+                ps["start_step"] = step
+                ps["profiler"].enable()
+                print(f"\n=== Starting profile snapshot @ step {step} ===")
+            # ==============================================
+
             if not isinstance(self.replay_buffer, PrioritizedBuffer):
                 return
             ep_ids = getattr(self.replay_buffer, "last_sampled_episodes", None)
