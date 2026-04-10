@@ -26,13 +26,13 @@ hydra:
   searchpath:
     - file://${script_dir:}/r2dreamer/configs
 
-batch_size: 8
+batch_size: 4
 batch_length: 64
-micro_batch_size: 8
+micro_batch_size: 2
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
-  task: "isaaclab_Klask-Rl-Dreamer-v0"
+  task: "isaaclab_Klask-Rl-Dreamer-Sprite-v0"
   steps: 1e7
   env_num: 16
   eval_episode_num: 10
