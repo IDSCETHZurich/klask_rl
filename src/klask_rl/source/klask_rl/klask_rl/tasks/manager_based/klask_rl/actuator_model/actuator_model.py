@@ -42,8 +42,11 @@ class ActuatorModelWrapper(Wrapper):
     DEACCELERATION_DISTANCE = 0.09
     PEG_RADIUS = 0.0075
 
-    def __init__(self, env, device="cuda", model_file=None):
+    def __init__(self, env, device="cuda", model_file=None, pos_idx=slice(0, 2), vel_idx=slice(2, 4)):
         super().__init__(env)
+
+        self.pos_idx = pos_idx
+        self.vel_idx = vel_idx
 
         num_envs = env.unwrapped.num_envs
         self.dT = klask.KLASK_PARAMS["decimation"] * klask.KLASK_PARAMS["physics_dt"]
@@ -71,14 +74,14 @@ class ActuatorModelWrapper(Wrapper):
         obs, info = self.env.reset(*args, **kwargs)
 
         # Peg 1 history update:
-        state_1 = obs["policy"][:, 2:4]
+        state_1 = obs["policy"][:, self.vel_idx]
 
         if self.include_states:
             self.state_buffer_1[:, :] = state_1.repeat(1, self.num_history_steps - 1)
         self.command_buffer_1[:, :] = 0.0
 
         # Peg 2 history update:
-        state_2 = obs["opponent"][:, 2:4]  # here was a minus before but doesnt make sense
+        state_2 = obs["opponent"][:, self.vel_idx]
 
         if self.include_states:
             self.state_buffer_2[:, :] = state_2.repeat(1, self.num_history_steps - 1)
@@ -121,15 +124,15 @@ class ActuatorModelWrapper(Wrapper):
 
         if self.include_states:
             # Peg 1 state history update:
-            self.position_player = obs["policy"][:, :2]
-            state_1 = obs["policy"][:, 2:4]
+            self.position_player = obs["policy"][:, self.pos_idx]
+            state_1 = obs["policy"][:, self.vel_idx]
 
             self.state_buffer_1[:, 2:] = self.state_buffer_1.clone()[:, :-2]
             self.state_buffer_1[:, :2] = state_1
 
             # Peg 2 state history update:
-            self.position_opponent = obs["opponent"][:, :2]
-            state_2 = obs["opponent"][:, 2:4]
+            self.position_opponent = obs["opponent"][:, self.pos_idx]
+            state_2 = obs["opponent"][:, self.vel_idx]
 
             self.state_buffer_2[:, 2:] = self.state_buffer_2.clone()[:, :-2]
             self.state_buffer_2[:, :2] = state_2

@@ -60,7 +60,9 @@ import yaml
 from klask_her.agents.fast_sac import Actor, Critic
 from klask_her.agents.fast_sac_utils import EmpiricalNormalization, save_params
 from klask_her.buffers.gpu_her_replay_buffer import GPUHERReplayBuffer
+from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
 from klask_rl.tasks.manager_based.klask_rl.wrappers import FastSACEnvWrapper
+from klask_rl.tasks.manager_based.klask_rl.wrappers.klask_rl_ovservation_wrappers import OpponentActionWrapper
 from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 
@@ -130,6 +132,10 @@ class KlaskTrainingConfig:
     amp_dtype: str = "bf16"
     obs_normalization: bool = True
     weight_decay: float = 0.001
+
+    # --- Actuator model ---
+    enable_actuator_model: bool = False
+    """Wrap the env with the learned actuator model (sim-to-real transfer)."""
 
     # --- Self-play ---
     self_play: bool = True
@@ -277,6 +283,17 @@ def make_isaaclab_env(config: KlaskTrainingConfig) -> FastSACEnvWrapper:
         render_mode=None,
     )
 
+    # Negate opponent actions to convert from player frame to world frame.
+    # Must be innermost so the actuator model sees player-frame data for both pegs.
+    isaac_env = OpponentActionWrapper(isaac_env)
+
+    # Wrap with learned actuator model for sim-to-real transfer.
+    # FastSAC obs layout: own_pos at [4:6], own_vel at [8:10].
+    if config.enable_actuator_model:
+        isaac_env = ActuatorModelWrapper(
+            isaac_env, pos_idx=slice(4, 6), vel_idx=slice(8, 10),
+        )
+
     return FastSACEnvWrapper(isaac_env)
 
 
@@ -423,9 +440,9 @@ def main():
             opp_norm = obs_normalizer(opp_obs, update=False)
             with torch.no_grad():
                 a2_mirrored = opponent_actor.explore(opp_norm)
-            # Un-mirror opponent action: negate Y (long/playing axis in IsaacLab)
-            a2 = torch.stack([a2_mirrored[:, 0], -a2_mirrored[:, 1]], dim=-1)
-            full_actions = torch.cat([actions, a2], dim=-1)
+            # Pass opponent actions in player frame — OpponentActionWrapper handles
+            # the 180° rotation back to world frame before the env sees them.
+            full_actions = torch.cat([actions, a2_mirrored], dim=-1)
             next_obs, rewards, dones, infos = env.step(full_actions)
         else:
             next_obs, rewards, dones, infos = env.step(actions)
