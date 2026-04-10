@@ -668,11 +668,6 @@ def main(config):
         print("Self-play enabled: opponent initialised from current agent.")
 
     # Subclass OnlineTrainer to hook score-gated opponent updates.
-    from collections import deque as _deque
-
-    _current_episodes: int = 0
-    _episode_count_queue: _deque[int] = _deque()
-    _buffer_capacity: int = int(config.buffer.max_size)
 
     # TODO: Remove later
     # ==============================================
@@ -706,7 +701,7 @@ def main(config):
                 tag_counts, ep_count = self.replay_buffer.compute_current_tag_counts()
                 for tag, count in tag_counts.items():
                     self.logger.scalar(f"buffer/tagged_current/{tag}", count)
-                self.logger.scalar("buffer/episodes_current_scan", ep_count)
+                self.logger.scalar("buffer/episodes_current", ep_count)
             return super().eval(agent, train_step)
 
         def on_episode_end(self, episode_id: int, env_index: int) -> None:
@@ -727,20 +722,9 @@ def main(config):
                 if matched:
                     self.replay_buffer.tag_episode(episode_id, priority, tag=tag)
             self.replay_buffer.flush_episode(episode_id)
-            # Track approximate current episode count in buffer.
-            nonlocal _current_episodes
-            _current_episodes += 1
-            _episode_count_queue.append(self.replay_buffer._transitions_added)
-            while _episode_count_queue:
-                if self.replay_buffer._transitions_added - _episode_count_queue[0] >= _buffer_capacity:
-                    _episode_count_queue.popleft()
-                    _current_episodes = max(0, _current_episodes - 1)
-                else:
-                    break
 
         def on_log(self) -> None:
             self.logger.scalar("buffer/fill_ratio", self.replay_buffer.count() / int(config.buffer.max_size))
-            self.logger.scalar("buffer/episodes_current", _current_episodes)
 
             # TODO: Remove later
             # ==============================================
