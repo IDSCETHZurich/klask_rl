@@ -444,16 +444,56 @@ def main(config):
 
     render_mode = "rgb_array" if _vision else None
     trainer_steps = getattr(config.trainer, "steps", None)
-    self_play = getattr(config, "self_play", False)
 
-    # Attach self_play_config to env config so _make_env can read it.
-    sp_cfg = (
-        OmegaConf.to_container(config.get("self_play_config", OmegaConf.create({})), resolve=True) if self_play else {}
-    )
+    # --- Parse hierarchical self_play config ---
+    _sp_cfg_raw = getattr(config, "self_play", None)
+    if OmegaConf.is_config(_sp_cfg_raw):
+        _sp_dict = OmegaConf.to_container(_sp_cfg_raw, resolve=True)
+        self_play = bool(_sp_dict.get("enabled", False))
+        sp_cfg = {k: v for k, v in _sp_dict.items() if k != "enabled"}
+    elif isinstance(_sp_cfg_raw, bool):
+        # Legacy flat format: self_play: true + self_play_config: {...}
+        self_play = _sp_cfg_raw
+        _legacy_sp = getattr(config, "self_play_config", None)
+        sp_cfg = OmegaConf.to_container(_legacy_sp, resolve=True) if OmegaConf.is_config(_legacy_sp) else {}
+    else:
+        self_play = False
+        sp_cfg = {}
     # Mirror the model compile flag so the opponent is also compiled when the
     # training agent is.
     if self_play:
         sp_cfg.setdefault("compile", bool(getattr(config.model, "compile", False)))
+
+    # --- Parse hierarchical opponent_separation config ---
+    _opp_sep_raw = getattr(config, "opponent_separation", None)
+    if OmegaConf.is_config(_opp_sep_raw):
+        _opp_sep_dict = OmegaConf.to_container(_opp_sep_raw, resolve=True)
+        _opp_sep = bool(_opp_sep_dict.get("enabled", False))
+        _imag_opponent = str(_opp_sep_dict.get("imag_opponent", "random"))
+        _traj_mirror_raw = _opp_sep_dict.get("trajectory_mirroring", {})
+        if isinstance(_traj_mirror_raw, dict):
+            _traj_mirror = bool(_traj_mirror_raw.get("enabled", False))
+            _mirror_opp_ws = bool(_traj_mirror_raw.get("warm_start", False))
+        else:
+            # Simple bool: opponent_separation.trajectory_mirroring: true
+            _traj_mirror = bool(_traj_mirror_raw)
+            _mirror_opp_ws = False
+    elif isinstance(_opp_sep_raw, bool):
+        # Legacy flat format
+        _opp_sep = _opp_sep_raw
+        _legacy_opp_cfg = getattr(config, "opponent_separation_config", None)
+        if _legacy_opp_cfg is not None:
+            _legacy_dict = OmegaConf.to_container(_legacy_opp_cfg, resolve=True) if OmegaConf.is_config(_legacy_opp_cfg) else dict(_legacy_opp_cfg)
+            _imag_opponent = str(_legacy_dict.get("imag_opponent", "random"))
+        else:
+            _imag_opponent = "random"
+        _traj_mirror = bool(getattr(config, "trajectory_mirroring", False))
+        _mirror_opp_ws = bool(getattr(config, "mirror_opp_warm_start", False))
+    else:
+        _opp_sep = False
+        _imag_opponent = "random"
+        _traj_mirror = False
+        _mirror_opp_ws = False
 
     _prioritized_cfg = getattr(config.buffer, "prioritized", None)
     _use_prioritized = _prioritized_cfg is not None and bool(getattr(_prioritized_cfg, "enable", False))
@@ -473,7 +513,7 @@ def main(config):
         self_play=self_play,
         self_play_config=sp_cfg,
         prioritized_cfg=_prioritized_cfg,
-        trajectory_mirroring=getattr(config, "trajectory_mirroring", False),
+        trajectory_mirroring=_traj_mirror,
     )
 
     # Auto-add unconfigured termination terms with baseline_priority so they
@@ -523,10 +563,8 @@ def main(config):
             env.set_logger(logger)
         env = env.env
 
-    # Derive buffer.mirror from the single trajectory_mirroring flag.
-    _traj_mirror = getattr(config, "trajectory_mirroring", False)
+    # Derive buffer flags from the parsed opponent_separation config.
     OmegaConf.update(config, "buffer.mirror", _traj_mirror, force_add=True)
-    _mirror_opp_ws = bool(getattr(config, "mirror_opp_warm_start", False))
     OmegaConf.update(config, "buffer.mirror_opp_warm_start", _mirror_opp_ws, force_add=True)
 
     if _use_prioritized:
@@ -541,19 +579,10 @@ def main(config):
     env_config.isaac_vec_env = vec_env
     train_envs, eval_envs, obs_space, act_space = make_envs(env_config)
 
-    # Pass top-level flags to model config so Dreamer / _make_env can read them.
-    _opp_sep = getattr(config, "opponent_separation", False)
+    # Pass parsed flags to model config so Dreamer can read them.
     config.model.opponent_separation = _opp_sep
-    config.model.trajectory_mirroring = getattr(config, "trajectory_mirroring", False)
-    _opp_sep_cfg = getattr(config, "opponent_separation_config", None)
-    if _opp_sep_cfg is not None:
-        if OmegaConf.is_config(_opp_sep_cfg):
-            _opp_sep_dict = OmegaConf.to_container(_opp_sep_cfg, resolve=True)
-        else:
-            _opp_sep_dict = dict(_opp_sep_cfg)
-        config.model.imag_opponent = _opp_sep_dict.get("imag_opponent", "random")
-    else:
-        config.model.imag_opponent = "random"
+    config.model.trajectory_mirroring = _traj_mirror
+    config.model.imag_opponent = _imag_opponent
 
     print("Simulate agent.")
     agent = Dreamer(

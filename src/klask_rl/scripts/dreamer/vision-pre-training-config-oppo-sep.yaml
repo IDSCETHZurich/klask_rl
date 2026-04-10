@@ -184,15 +184,14 @@ trainer:
   action_repeat: ${env.action_repeat}
   save_checkpoint_every: 100_000 # Save checkpoint every N steps (0 = only save at the end)
 
-self_play: true
-self_play_config:
+self_play:
+  enabled: true
   update_score: 0.2 # opponent updated only when rolling mean score > this
   games_to_track: 4096 # rolling window size for score averaging
 
-trajectory_mirroring: true # Compute opponent rewards + mirror trajectories at sampling time
-
-opponent_separation: true # Feed explicit opponent actions to the world model (4D = player + opponent)
-opponent_separation_config:
+opponent_separation:
+  enabled: true # Feed explicit opponent actions to the world model (4D = player + opponent)
   imag_opponent: "selfplay" # Opponent policy during imagination: "random" | "zero" | "selfplay"
-
-mirror_opp_warm_start: true # Use opponent RSSM states to warm-start mirrored trajectories
+  trajectory_mirroring:
+    enabled: true # Compute opponent rewards + mirror trajectories at sampling time
+    warm_start: true # Use opponent RSSM states to warm-start mirrored trajectories

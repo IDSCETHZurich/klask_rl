@@ -182,7 +182,7 @@ trainer:
   action_repeat: ${env.action_repeat}
   save_checkpoint_every: 100_000 # Save checkpoint every N steps (0 = only save at the end)
 
-self_play: true
-self_play_config:
+self_play:
+  enabled: true
   update_score: 0.2 # opponent updated only when rolling mean score > this
   games_to_track: 4096 # rolling window size for score averaging
