@@ -456,7 +456,8 @@ def main(config):
         sp_cfg.setdefault("compile", bool(getattr(config.model, "compile", False)))
 
     _prioritized_cfg = getattr(config.buffer, "prioritized", None)
-    if _prioritized_cfg is not None:
+    _use_prioritized = _prioritized_cfg is not None and bool(getattr(_prioritized_cfg, "enable", False))
+    if _use_prioritized:
         _tags_raw = getattr(_prioritized_cfg, "tags", [])
         _tags_cfg_list = (
             list(OmegaConf.to_container(_tags_raw, resolve=True)) if OmegaConf.is_config(_tags_raw) else list(_tags_raw)
@@ -477,7 +478,7 @@ def main(config):
 
     # Auto-add unconfigured termination terms with baseline_priority so they
     # are logged in buffer/tagged_* metrics without affecting sampling.
-    if _prioritized_cfg is not None:
+    if _use_prioritized:
         _baseline = float(getattr(_prioritized_cfg, "baseline_priority", 1.0))
         _configured_terms = {s["termination_term"] for s in _tags_cfg_list if "termination_term" in s}
         for _tname in vec_env._env.unwrapped.termination_manager._term_names:
@@ -526,7 +527,7 @@ def main(config):
     _traj_mirror = getattr(config, "trajectory_mirroring", False)
     OmegaConf.update(config, "buffer.mirror", _traj_mirror, force_add=True)
 
-    if _prioritized_cfg is not None:
+    if _use_prioritized:
         replay_buffer = PrioritizedBuffer(config.buffer)
     else:
         replay_buffer = Buffer(config.buffer)
@@ -629,7 +630,6 @@ def main(config):
         print("Self-play enabled: opponent initialised from current agent.")
 
     # Subclass OnlineTrainer to hook score-gated opponent updates.
-    _episode_tags: dict[int, set[str]] = {}
     from collections import deque as _deque
 
     _current_episodes: int = 0
@@ -662,6 +662,13 @@ def main(config):
                     logger=self.logger,
                     train_step=train_step,
                 )
+            # --- Debug: scan buffer for accurate per-tag episode counts ---
+            if (isinstance(self.replay_buffer, PrioritizedBuffer)
+                    and self.replay_buffer._debug_metrics):
+                tag_counts, ep_count = self.replay_buffer.compute_current_tag_counts()
+                for tag, count in tag_counts.items():
+                    self.logger.scalar(f"buffer/tagged_current/{tag}", count)
+                self.logger.scalar("buffer/episodes_current_scan", ep_count)
             return super().eval(agent, train_step)
 
         def on_episode_end(self, episode_id: int, env_index: int) -> None:
@@ -681,7 +688,6 @@ def main(config):
                     matched = _tag_tracker.get_episode_flag(env_index, tag)
                 if matched:
                     self.replay_buffer.tag_episode(episode_id, priority, tag=tag)
-                    _episode_tags.setdefault(episode_id, set()).add(tag)
             self.replay_buffer.flush_episode(episode_id)
             # Track approximate current episode count in buffer.
             nonlocal _current_episodes
@@ -693,10 +699,6 @@ def main(config):
                     _current_episodes = max(0, _current_episodes - 1)
                 else:
                     break
-            for tag_name, count in self.replay_buffer.get_current_tag_counts().items():
-                self.logger.scalar(f"buffer/tagged_current/{tag_name}", count)
-            for tag_name, count in self.replay_buffer.get_tag_counts().items():
-                self.logger.scalar(f"buffer/tagged_total/{tag_name}", count)
 
         def on_log(self) -> None:
             self.logger.scalar("buffer/fill_ratio", self.replay_buffer.count() / int(config.buffer.max_size))
@@ -731,17 +733,9 @@ def main(config):
 
             if not isinstance(self.replay_buffer, PrioritizedBuffer):
                 return
-            ep_ids = getattr(self.replay_buffer, "last_sampled_episodes", None)
-            if not ep_ids:
-                return
-            unique_eps = set(ep_ids)
-            tag_hits: dict[str, int] = {}
-            for eid in unique_eps:
-                for tag in _episode_tags.get(eid, ()):
-                    tag_hits[tag] = tag_hits.get(tag, 0) + 1
-            n = max(len(unique_eps), 1)
-            for tag, count in tag_hits.items():
-                self.logger.scalar(f"buffer/sampled_frac/{tag}", count / n)
+            if self.replay_buffer._debug_metrics:
+                for tag, frac in self.replay_buffer.compute_sampled_tag_fractions().items():
+                    self.logger.scalar(f"buffer/sampled_frac/{tag}", frac)
 
     def _save_checkpoint(step):
         """Save a full checkpoint at the given step.

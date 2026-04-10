@@ -142,12 +142,14 @@ buffer:
   device: ${device}
   storage_device: "cpu"
   prioritized:
+    enable: true
     alpha: 0.7 # 0=uniform, 1=fully priority-proportional
     beta: 0.4 # importance-sampling correction (0=off)
     baseline_priority: 1.0
+    debug_metrics: true
     tags:
       - name: "ball_contact"
-        priority: 100.0
+        priority: 20.0
         reward_term: "collision_player_ball_simple"
       - name: "goal_scored"
         priority: 20.0
