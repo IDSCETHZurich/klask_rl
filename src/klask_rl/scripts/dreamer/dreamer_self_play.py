@@ -107,12 +107,21 @@ class DreamerSelfPlayWrapper(Wrapper):
     # Public API called from the training script
     # ------------------------------------------------------------------
 
-    def set_opponent(self, agent):
+    def set_opponent(self, agent, device=None):
         """Initialise the opponent from a Dreamer agent (deep-copies weights).
 
         Must be called once after the agent has been created and moved to device.
+
+        Parameters
+        ----------
+        agent : Dreamer
+            The training agent to copy weights from.
+        device : torch.device | str | None
+            Device for the opponent networks.  Defaults to ``agent.device``
+            (sim_device) which is correct for multi-GPU splits where the
+            opponent runs alongside the simulation.
         """
-        self._device = agent.device
+        self._device = torch.device(device) if device is not None else agent.device
         self._copy_weights(agent)
         num_envs = self.env.unwrapped.num_envs
         self._reset_opponent_state(num_envs)
@@ -234,10 +243,13 @@ class DreamerSelfPlayWrapper(Wrapper):
         new weights automatically without recompilation.
         """
         if self._opponent_encoder is None:
-            # First call — must deepcopy to get architecture / device / dtype.
-            enc = copy.deepcopy(agent.encoder)
-            rssm = copy.deepcopy(agent.rssm)
-            actor = copy.deepcopy(agent.actor)
+            # First call — deepcopy, move to self._device, THEN compile.
+            # .to(device) before compile ensures CUDA graphs target the correct GPU.
+            enc = copy.deepcopy(agent.encoder).to(self._device)
+            rssm = copy.deepcopy(agent.rssm).to(self._device)
+            actor = copy.deepcopy(agent.actor).to(self._device)
+            # Fix RSSM._device so initial() creates tensors on the correct GPU.
+            rssm._device = self._device
             for module in (enc, rssm, actor):
                 module.eval()
                 for p in module.parameters():
@@ -257,6 +269,7 @@ class DreamerSelfPlayWrapper(Wrapper):
         else:
             # Subsequent calls — update parameters in-place; avoids deepcopy
             # overhead and preserves any torch.compile wrapping.
+            # load_state_dict handles cross-device (train→sim) automatically.
             self._opponent_encoder_orig.load_state_dict(agent.encoder.state_dict())
             self._opponent_rssm_orig.load_state_dict(agent.rssm.state_dict())
             self._opponent_actor_orig.load_state_dict(agent.actor.state_dict())

@@ -17,6 +17,8 @@ logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empt
 seed: 0
 deterministic_run: False
 device: "cuda:0"
+sim_device: null           # if null -> falls back to device (simulation + inference GPU)
+train_device: null         # if null -> falls back to device (training GPU)
 init_checkpoint: /workspace/klask_rl/logdir/2026-04-05/13-20-17/checkpoint_1700008.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
 load_world_model_only: true
 

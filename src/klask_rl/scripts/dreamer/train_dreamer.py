@@ -36,6 +36,14 @@ AppLauncher.add_app_launcher_args(parser)
 # Capture only the args AppLauncher understands; pass the rest to Hydra.
 args_cli, hydra_args = parser.parse_known_args()
 
+# Prevent the Omniverse renderer from initialising GPU contexts on devices
+# other than the simulation GPU.  Without this, the MGPU renderer allocates
+# ~2 GB of VRAM on every visible GPU — wasting memory on GPUs reserved for
+# training.  Safe even on single-GPU (we never use multi-GPU rendering).
+sys.argv += [
+    "--/renderer/multiGpu/enabled=false",
+    "--/renderer/multiGpu/maxGpuCount=1",
+]
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
@@ -49,7 +57,7 @@ import warnings
 
 import hydra
 import torch
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 # Isaac Sim may override SIGINT; restore Python's default so Ctrl-C works.
 signal.signal(signal.SIGINT, signal.default_int_handler)
@@ -505,6 +513,19 @@ def main(config):
     else:
         _tags_cfg_list = []
 
+    # --- Resolve sim / train devices ---
+    sim_device = getattr(config, "sim_device", None) or config.device
+    train_device = getattr(config, "train_device", None) or config.device
+
+    # Propagate into sub-configs (OmegaConf configs are read-only by default).
+    with open_dict(config.model):
+        config.model.sim_device = sim_device
+        config.model.train_device = train_device
+        config.model.device = train_device  # modules created on train_device
+
+    with open_dict(config.buffer):
+        config.buffer.device = train_device  # sampled batches go to training GPU
+
     vec_env = _make_env(
         config.env,
         task_name,
@@ -577,6 +598,7 @@ def main(config):
     env_config = OmegaConf.to_container(config.env, resolve=True)
     env_config = type("EnvConfig", (), env_config)()
     env_config.isaac_vec_env = vec_env
+    env_config.sim_device = sim_device
     train_envs, eval_envs, obs_space, act_space = make_envs(env_config)
 
     # Pass parsed flags to model config so Dreamer can read them.
@@ -589,7 +611,7 @@ def main(config):
         config.model,
         obs_space,
         act_space,
-    ).to(config.device)
+    ).to(train_device)
 
     # Validate init_checkpoint path early.
     _init_ckpt = config.init_checkpoint
@@ -599,7 +621,7 @@ def main(config):
     checkpoint_path = logdir / "latest.pt"
     if checkpoint_path.exists():
         print(f"Resuming from checkpoint: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=config.device)
+        checkpoint = torch.load(checkpoint_path, map_location=train_device)
         _missing, _unexpected = agent.load_state_dict(checkpoint["agent_state_dict"], strict=False)
         if _missing or _unexpected:
             print(f"  Checkpoint key mismatch: {len(_missing)} missing, {len(_unexpected)} unexpected")
@@ -640,13 +662,17 @@ def main(config):
         if "ema_updates" in checkpoint and hasattr(agent, "_ema_updates"):
             agent._ema_updates = checkpoint["ema_updates"]
         print(f"  Restored agent weights, optimizer states, step={_resume_step}, curriculum_step={_curriculum_step}")
+        # Sync inference copies so they pick up restored weights (old checkpoints
+        # won't have _inference_* keys, so strict=False leaves them stale).
+        agent._sync_inference_copies()
     elif _init_ckpt is not None:
         _wm_only = getattr(config, "load_world_model_only", False)
-        tools.load_init_checkpoint(agent, _init_ckpt, config.device, world_model_only=_wm_only)
+        tools.load_init_checkpoint(agent, _init_ckpt, train_device, world_model_only=_wm_only)
+        agent._sync_inference_copies()
 
     # Initialise self-play opponent from the (randomly initialised) agent.
     if _self_play_wrapper is not None:
-        _self_play_wrapper.set_opponent(agent)
+        _self_play_wrapper.set_opponent(agent, device=sim_device)
         # Share frozen opponent networks with the agent for imagination
         # self-play.  The Dreamer class receives references to the same
         # module instances, so weight updates via load_state_dict propagate
@@ -678,11 +704,13 @@ def main(config):
         def eval(self, agent, train_step):
             # --- Self-play opponent update ---
             if _self_play_wrapper is not None:
-                _self_play_wrapper.maybe_update_opponent(
+                updated = _self_play_wrapper.maybe_update_opponent(
                     agent,
                     logger=self.logger,
                     train_step=train_step,
                 )
+                if updated:
+                    agent.sync_imag_opponent_networks()
             # --- Debug: scan buffer for accurate per-tag episode counts ---
             if (isinstance(self.replay_buffer, PrioritizedBuffer)
                     and self.replay_buffer._debug_metrics):
