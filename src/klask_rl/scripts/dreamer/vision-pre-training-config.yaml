@@ -18,7 +18,7 @@ seed: 0
 deterministic_run: False
 device: 'cuda:0'
 sim_device: null           # if null -> falls back to device (simulation + inference GPU)
-train_device: null         # if null -> falls back to device (training GPU)
+train_devices: null        # if null -> falls back to [device]; list of training GPUs (first is primary)
 init_checkpoint: null # Path to checkpoint for weight-only init (pretrain -> finetune)
 load_world_model_only: false
 

@@ -20,7 +20,7 @@ seed: 0
 deterministic_run: False
 device: "cuda:0"
 sim_device: null           # if null -> falls back to device (simulation + inference GPU)
-train_device: null         # if null -> falls back to device (training GPU)
+train_devices: null        # if null -> falls back to [device]; list of training GPUs (first is primary)
 init_checkpoint: /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_2200016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
 load_world_model_only: false # When true + init_checkpoint set: load only world model weights (encoder/rssm/reward/cont/decoder), skip actor/critic
 
