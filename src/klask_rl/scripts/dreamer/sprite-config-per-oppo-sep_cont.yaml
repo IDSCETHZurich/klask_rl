@@ -6,9 +6,6 @@ defaults:
 
 model:
   rep_loss: "dreamer"
-  compile: True
-  compile_mode: "default"
-  inference_compile_mode: "default"
 
 # Logging
 wandb_project: KLASK_Dreamer
@@ -16,14 +13,10 @@ wandb_entity: null
 wandb_name: dreamer_sprite_per_oppo_sep_128
 
 # Initialization
-logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
+logdir: /workspace/klask_rl/logdir/2026-04-10/23-56-30 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
-sim_device: "cuda:0"
-train_devices:
-  - "cuda:1"
-  - "cuda:2"
 init_checkpoint: null # Path to checkpoint for weight-only init (pretrain -> finetune)
 load_world_model_only: false
 
@@ -33,9 +26,9 @@ hydra:
   searchpath:
     - file://${script_dir:}/r2dreamer/configs
 
-batch_size: 10
+batch_size: 4
 batch_length: 64
-micro_batch_size: 5
+micro_batch_size: 2
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
@@ -45,7 +38,7 @@ env:
   eval_episode_num: 10
   action_repeat: 1
   decimation: 20
-  train_ratio: 80
+  train_ratio: 128
   time_limit: 1000
   sim_dt: 0.001
   seed: ${seed}
@@ -162,11 +155,8 @@ buffer:
         priority: 20.0
         termination_term: "goal_scored"
       - name: "goal_conceded"
-        priority: 5.0
+        priority: 10.0
         termination_term: "goal_conceded"
-      - name: "player_in_goal"
-        priority: 2.0
-        termination_term: "player_in_goal"
 
 trainer:
   steps: ${env.steps}
@@ -181,12 +171,6 @@ trainer:
   update_log_every: 5e3
   action_repeat: ${env.action_repeat}
   save_checkpoint_every: 100_000 # Save checkpoint every N steps (0 = only save at the end)
-  profiling:
-    torch_profiler: false # Periodic chrome traces (Perfetto)
-    torch_profiler_wait: 2000 # Updates between profiling windows
-    torch_profiler_active: 5 # Updates per profiling window
-    cprofile: false # Periodic cProfile dumps
-    cprofile_every: 10000 # Steps between cProfile dumps
 
 self_play:
   enabled: true
