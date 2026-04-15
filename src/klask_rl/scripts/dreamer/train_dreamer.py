@@ -9,6 +9,9 @@ import pathlib
 import pstats
 import sys
 
+# Persist torch.compile caches across runs
+os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.join(pathlib.Path(__file__).resolve().parents[2], ".torch_cache"))
+
 # Auto-detect vision env from CLI and enable cameras before AppLauncher
 # parses argv, so the user doesn't have to pass --enable_cameras manually.
 _vision = False

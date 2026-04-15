@@ -27,6 +27,7 @@
         "source=isaac-lab-klask-rl-devcontainer_documents,target=/root/Documents,type=volume",
         "source=isaac-lab-klask-rl-devcontainer_claude,target=/root/.claude,type=volume",
         "source=isaac-lab-klask-rl-devcontainer_shell_history,target=/root/.shell_history,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_torch_cache,target=/workspace/klask_rl/.torch_cache,type=volume",
         "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",
         "source=${localWorkspaceFolder}/third_party/dreamerv3-torch,target=/workspace/klask_rl/scripts/dreamer/dreamerv3torch,type=bind",
         "source=${localWorkspaceFolder}/third_party/r2dreamer,target=/workspace/klask_rl/scripts/dreamer/r2dreamer,type=bind",
