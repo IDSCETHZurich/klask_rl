@@ -61,6 +61,12 @@ parser.add_argument(
     help="Disable the collision avoidance wrapper.",
 )
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+parser.add_argument(
+    "--actuator_model_checkpoint",
+    type=str,
+    default=None,
+    help="Path to actuator model checkpoint (.pt). Defaults to the built-in checkpoint.",
+)
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -147,7 +153,7 @@ def main():
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
     if args_cli.actuator_model:
-        env = ActuatorModelWrapper(env)
+        env = ActuatorModelWrapper(env, model_file=args_cli.actuator_model_checkpoint)
     if args_cli.collision_avoidance:
         env = KlaskRlCollisionAvoidanceWrapper(env)
 
