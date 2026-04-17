@@ -205,29 +205,11 @@ def load_data_from_db3(bag_dir, state_topic="/board_state", command_topic="/cmd_
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(description="Create actuator model dataset from .db3 trajectory bags")
-    parser.add_argument(
-        "--data_dir",
-        default=str(Path(__file__).resolve().parents[2] / "logs" / "actuator_model" / "data" / "train_traj"),
-        help="Path to directory containing trajectory subdirectories",
-    )
-    parser.add_argument("--output", default=None, help="Output .npz file path (auto-generated if omitted)")
-    parser.add_argument("--history", type=int, default=10, help="Number of past command/state steps (default: 10)")
-    parser.add_argument("--interval", type=float, default=0.02, help="Time between history steps in seconds (default: 0.02)")
-    parser.add_argument("--delay", type=float, default=0.0, help="Command-to-state delay in seconds (default: 0.0)")
-    parser.add_argument("--horizon", type=int, default=3, help="Future prediction steps (default: 3)")
-    parser.add_argument("--no-states", action="store_true", help="Omit velocity state history from input")
-    args = parser.parse_args()
-
-    include_states = not args.no_states
-
-    # Discover trajectory directories
-    data_dir = Path(args.data_dir)
+def process_split(data_dir: Path, output_path: str, args, include_states: bool):
+    """Load all trajectories under data_dir, build windowed dataset, save to output_path."""
     bag_dirs = sorted([d for d in data_dir.iterdir() if d.is_dir()])
     print(f"Found {len(bag_dirs)} trajectory directories in {data_dir}")
 
-    # Load all trajectories
     extracted = []
     for bag_dir in bag_dirs:
         print(f"Loading {bag_dir.name}...")
@@ -241,7 +223,6 @@ def main():
 
     print(f"\nLoaded {len(extracted)} trajectories successfully.")
 
-    # Build windowed datasets
     X_commands_all = []
     X_states_all = []
     Y_all = []
@@ -280,19 +261,6 @@ def main():
     Y_prev_full = np.vstack(Y_prev_all)
     commands_full = np.vstack(commands_all)
 
-    # Determine output path
-    if args.output:
-        output_path = args.output
-    else:
-        states_suffix = "_with_states" if include_states else ""
-        filename = (
-            f"data_odrive_new_estimator_history_{args.history}"
-            f"_interval_{args.interval}_delay_{args.delay}"
-            f"_horizon{args.horizon}{states_suffix}.npz"
-        )
-        output_path = str(Path(__file__).resolve().parent / "data" / filename)
-
-    # Save
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     if include_states:
         X_states_full = np.vstack(X_states_all)
@@ -326,11 +294,54 @@ def main():
         input_dim += X_states_full.shape[1]
     print(f"  Network input dim: {input_dim}")
 
-    # Sanity check: print value ranges
     all_vels = Y_full.reshape(-1, 2)
     all_cmds = commands_full.reshape(-1, 2)
     print(f"\n  Velocity range: [{all_vels.min():.4f}, {all_vels.max():.4f}] m/s")
     print(f"  Command range:  [{all_cmds.min():.4f}, {all_cmds.max():.4f}] m/s")
+
+
+def build_output_path(args, include_states: bool, split: str | None = None) -> str:
+    states_suffix = "_with_states" if include_states else ""
+    split_suffix = f"_{split}" if split else ""
+    filename = (
+        f"data_odrive_new_estimator_history_{args.history}"
+        f"_interval_{args.interval}_delay_{args.delay}"
+        f"_horizon{args.horizon}{states_suffix}{split_suffix}.npz"
+    )
+    return str(Path(__file__).resolve().parent / "data" / filename)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Create actuator model dataset from .db3 trajectory bags")
+    parser.add_argument(
+        "--data_dir",
+        default=str(Path(__file__).resolve().parents[2] / "logs" / "actuator_model" / "data" / "train_traj"),
+        help="Path to directory containing trajectory subdirectories (optionally with train/ and validation/ subfolders)",
+    )
+    parser.add_argument("--output", default=None, help="Output .npz file path (auto-generated if omitted; ignored when train/validation split is detected)")
+    parser.add_argument("--history", type=int, default=10, help="Number of past command/state steps (default: 10)")
+    parser.add_argument("--interval", type=float, default=0.02, help="Time between history steps in seconds (default: 0.02)")
+    parser.add_argument("--delay", type=float, default=0.0, help="Command-to-state delay in seconds (default: 0.0)")
+    parser.add_argument("--horizon", type=int, default=3, help="Future prediction steps (default: 3)")
+    parser.add_argument("--no-states", action="store_true", help="Omit velocity state history from input")
+    args = parser.parse_args()
+
+    include_states = not args.no_states
+    data_dir = Path(args.data_dir)
+
+    train_dir = data_dir / "train"
+    val_dir = data_dir / "validation"
+
+    if train_dir.is_dir() and val_dir.is_dir():
+        if args.output:
+            print("Note: --output is ignored when train/ and validation/ subfolders are detected.")
+        for split, split_dir in (("train", train_dir), ("validation", val_dir)):
+            print(f"\n=== Processing {split} split ({split_dir}) ===")
+            output_path = build_output_path(args, include_states, split=split)
+            process_split(split_dir, output_path, args, include_states)
+    else:
+        output_path = args.output if args.output else build_output_path(args, include_states)
+        process_split(data_dir, output_path, args, include_states)
 
 
 if __name__ == "__main__":

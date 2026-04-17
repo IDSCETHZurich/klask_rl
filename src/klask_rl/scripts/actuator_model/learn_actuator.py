@@ -367,7 +367,7 @@ def train_model_with_cv(
 
 if __name__ == "__main__":
 
-    data_file = "/workspace/klask_rl/scripts/actuator_model/data/data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states.npz"
+    data_file = "/workspace/klask_rl/logs/actuator_model/data/train_traj/train/data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states.npz"
 
     data_file = Path(__file__).parent.resolve() / "data" / data_file
     run_name = Path(data_file).stem
