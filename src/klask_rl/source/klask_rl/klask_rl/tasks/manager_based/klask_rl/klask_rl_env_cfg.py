@@ -3,7 +3,7 @@ import os
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.sim import PhysxCfg, RenderCfg, SimulationCfg
 from isaaclab.utils import configclass
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 from .env_cfg import (
     ActionsCfg,

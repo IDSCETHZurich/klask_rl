@@ -3,7 +3,7 @@ import math
 import torch
 from gymnasium import Wrapper
 from isaaclab.managers import SceneEntityCfg
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 
 class RewardWeightWrapper(Wrapper):

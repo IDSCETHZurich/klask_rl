@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from gymnasium import Wrapper
-from klask_rl.assets.robots import klask
+from klask_rl.assets.robots import klask_params
 
 
 class ActuatorNetwork(nn.Module):
@@ -49,7 +49,7 @@ class ActuatorModelWrapper(Wrapper):
         self.vel_idx = vel_idx
 
         num_envs = env.unwrapped.num_envs
-        self.dT = klask.KLASK_PARAMS["decimation"] * klask.KLASK_PARAMS["physics_dt"]
+        self.dT = klask_params.KLASK_PARAMS["decimation"] * klask_params.KLASK_PARAMS["physics_dt"]
         input_dim = self.num_history_steps * 2 + self.include_states * (self.num_history_steps - 1) * 2
         output_dim = 2
         self.model = ActuatorNetwork(input_dim, output_dim, hidden_dim=self.hidden_dim).to(device)

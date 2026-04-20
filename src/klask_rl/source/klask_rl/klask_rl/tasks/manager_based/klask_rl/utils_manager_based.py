@@ -7,7 +7,7 @@ from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import Camera, RayCasterCamera, TiledCamera
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 
 def _pad_image_to_target(images: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
