@@ -6,9 +6,13 @@ from gymnasium import Wrapper
 class OpponentActionWrapper(Wrapper):
     """Negates opponent actions (indices 2:) to convert from player frame back to world frame.
 
-    This wrapper should sit closest to the env (innermost), so that:
-    - Going down: opponent actions in player frame are rotated 180° to world frame
-    - Going up: observations are passed through unchanged (rotation is handled by ObservationsCfg)
+    Going down: opponent actions in player frame are rotated 180° to world frame.
+    Going up: observations are passed through unchanged (rotation is handled by ObservationsCfg).
+
+    Placement: this wrapper sits close to the env, but may have world-frame
+    action wrappers (e.g. ``KlaskRlCollisionAvoidanceWrapper``) below it. Any
+    wrapper placed below must NOT re-rotate opponent dims — only magnitude
+    modifications (clipping, scaling) are safe there.
     """
 
     def step(self, actions, *args, **kwargs):

@@ -96,6 +96,7 @@ from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWr
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     CurriculumWrapper,
     InitializationWrapper,
+    KlaskRlCollisionAvoidanceWrapper,
     KlaskRlRandomOpponentWrapper,
     OpponentActionWrapper,
     VelocityScaleWrapper,
@@ -281,7 +282,9 @@ def _make_env(
     """Construct a GPU-resident IsaacLab env with KLASK-specific wrappers.
 
     Applies (in order, innermost → outermost):
-      1. OpponentActionWrapper (innermost — negates opponent dims)
+      0. KlaskRlCollisionAvoidanceWrapper (if config.collision_avoidance.enable —
+         innermost; clips world-frame m/s actions near board boundaries)
+      1. OpponentActionWrapper (ego → world frame; negates opponent dims)
       2. ActuatorModelWrapper (if config.actuator_model.enable — expects m/s)
       3. VelocityScaleWrapper (scales [-1, 1] → m/s; action manager _scale = 1.0)
       4. InitializationWrapper
@@ -359,18 +362,27 @@ def _make_env(
     # --- Create the base gymnasium env ---
     isaac_env = gym.make(gym_id, cfg=env_cfg, render_mode=render_mode)
 
-    # --- 1a. Opponent action frame transform (innermost) ---
-    isaac_env = OpponentActionWrapper(isaac_env)
-
     # --- 1. Action manager scale = 1.0 (pass-through, m/s in → m/s out) ---
     # Velocity scaling is done by VelocityScaleWrapper below so that the
     # actuator model sees commands in m/s (matching its training units).
+    # max_velocity is also reused by KlaskRlCollisionAvoidanceWrapper.
     max_velocity = getattr(config, "max_velocity", None)
     if max_velocity is None:
         raise ValueError("config.env.max_velocity is required; VelocityScaleWrapper needs it to scale [-1, 1] → m/s.")
     action_mgr = isaac_env.unwrapped.action_manager
     for term in action_mgr._terms.values():
         term._scale = 1.0
+
+    # --- 0. Collision avoidance (world-frame m/s clipping; innermost gym wrapper) ---
+    # Sits inside OpponentActionWrapper so it sees actions already converted
+    # from ego to world frame, matching the world-frame peg positions and
+    # edge constants (X_EDGE, Y_EDGE_1, Y_EDGE_2) that the wrapper uses.
+    ca_cfg = getattr(config, "collision_avoidance", None)
+    if ca_cfg is not None and getattr(ca_cfg, "enable", False):
+        isaac_env = KlaskRlCollisionAvoidanceWrapper(isaac_env, max_vel=float(max_velocity))
+
+    # --- 1a. Opponent action frame transform ---
+    isaac_env = OpponentActionWrapper(isaac_env)
 
     # --- 2. Actuator model wrapper (expects m/s commands) ---
     actuator_cfg = getattr(config, "actuator_model", None)

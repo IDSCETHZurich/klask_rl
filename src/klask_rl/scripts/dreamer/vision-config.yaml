@@ -49,6 +49,8 @@ env:
   actuator_model:
     enable: true
     checkpoint: null
+  collision_avoidance:
+    enable: false
   size: [128, 128]
   encoder:
     mlp_keys: "$^"

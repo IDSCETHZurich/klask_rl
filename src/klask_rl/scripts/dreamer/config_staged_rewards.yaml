@@ -57,6 +57,8 @@ env:
   actuator_model:
     enable: true
     checkpoint: null
+  collision_avoidance:
+    enable: false
   size: [64, 64]
   encoder:
     mlp_keys: "policy"
