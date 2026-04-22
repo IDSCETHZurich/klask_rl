@@ -14,17 +14,21 @@ if "--enable_cameras" not in sys.argv:
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(
-    description="Head-to-head evaluation of Dreamer agents. Supports glob patterns in "
-    "--checkpoint to evaluate multiple player checkpoints against the same opponent."
+    description=(
+        "Head-to-head evaluation of Dreamer agents. Supports glob patterns in "
+        "--checkpoint to evaluate multiple player checkpoints against the same opponent."
+    )
 )
 AppLauncher.add_app_launcher_args(parser)
 parser.add_argument(
     "--checkpoint",
     type=str,
     required=True,
-    help="Path (or glob pattern) to the player agent checkpoint(s) (.pt). "
-    "Supports wildcards such as 'runs/*/checkpoint_*.pt' to evaluate "
-    "multiple checkpoints sequentially against the same opponent.",
+    help=(
+        "Path (or glob pattern) to the player agent checkpoint(s) (.pt). "
+        "Supports wildcards such as 'runs/*/checkpoint_*.pt' to evaluate "
+        "multiple checkpoints sequentially against the same opponent."
+    ),
 )
 parser.add_argument(
     "--config",
@@ -53,7 +57,7 @@ parser.add_argument(
 parser.add_argument(
     "--num_envs",
     type=int,
-    default=2048,
+    default=1024,
     help="Number of parallel environments.",
 )
 parser.add_argument(
@@ -119,7 +123,6 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     OpponentActionWrapper,
     configure_domain_randomization,
 )
-
 
 # =============================================================================
 # Helpers
@@ -257,7 +260,6 @@ def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device, ppo_obs_s
     """
     import yaml
     from isaaclab_tasks.utils import load_cfg_from_registry
-    from rl_games.algos_torch import torch_ext
     from rl_games.common import env_configurations, vecenv
     from rl_games.common.player import BasePlayer
     from rl_games.torch_runner import Runner
@@ -270,9 +272,7 @@ def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device, ppo_obs_s
         agent_cfg.update(user_cfg)
 
     # Action space bounded by the player's max_velocity (the eval env's action scale).
-    ppo_act_space = gym.spaces.Box(
-        low=-max_velocity, high=max_velocity, shape=(2,), dtype=np.float32
-    )
+    ppo_act_space = gym.spaces.Box(low=-max_velocity, high=max_velocity, shape=(2,), dtype=np.float32)
 
     # Minimal stub env so rl_games can query observation/action spaces
     # without creating a full Isaac environment.
@@ -320,6 +320,7 @@ def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device, ppo_obs_s
 def _load_dreamer_agent(full_cfg, obs_space, act_space, checkpoint_path, device):
     """Create a Dreamer agent and load checkpoint weights."""
     import copy
+
     cfg = copy.deepcopy(full_cfg.model)
 
     # Mirror the opponent_separation parsing that train_dreamer.py does at runtime.
@@ -328,10 +329,16 @@ def _load_dreamer_agent(full_cfg, obs_space, act_space, checkpoint_path, device)
         _opp_sep_dict = OmegaConf.to_container(_opp_sep_raw, resolve=True)
         _opp_sep = bool(_opp_sep_dict.get("enabled", False))
         _imag_opponent = str(_opp_sep_dict.get("imag_opponent", "random"))
-        _traj_mirror = bool(_opp_sep_dict.get("trajectory_mirroring", {}).get("enabled", False) if isinstance(_opp_sep_dict.get("trajectory_mirroring"), dict) else _opp_sep_dict.get("trajectory_mirroring", False))
+        _traj_mirror = bool(
+            _opp_sep_dict.get("trajectory_mirroring", {}).get("enabled", False)
+            if isinstance(_opp_sep_dict.get("trajectory_mirroring"), dict)
+            else _opp_sep_dict.get("trajectory_mirroring", False)
+        )
     elif isinstance(_opp_sep_raw, bool):
         _opp_sep = _opp_sep_raw
-        _imag_opponent = str(getattr(getattr(full_cfg, "opponent_separation_config", None) or {}, "imag_opponent", "random"))
+        _imag_opponent = str(
+            getattr(getattr(full_cfg, "opponent_separation_config", None) or {}, "imag_opponent", "random")
+        )
         _traj_mirror = bool(getattr(full_cfg, "trajectory_mirroring", False))
     else:
         _opp_sep = False
@@ -384,13 +391,8 @@ def main():
     if any(c in checkpoint_pattern for c in ("*", "?", "[")):
         checkpoint_paths = sorted(glob_module.glob(checkpoint_pattern, recursive=True))
         if not checkpoint_paths:
-            raise FileNotFoundError(
-                f"No checkpoints matched pattern: {checkpoint_pattern}"
-            )
-        print(
-            f"[INFO] Found {len(checkpoint_paths)} checkpoints matching"
-            f" '{checkpoint_pattern}':"
-        )
+            raise FileNotFoundError(f"No checkpoints matched pattern: {checkpoint_pattern}")
+        print(f"[INFO] Found {len(checkpoint_paths)} checkpoints matching '{checkpoint_pattern}':")
         for i, cp in enumerate(checkpoint_paths, 1):
             print(f"  {i}. {os.path.basename(cp)}")
     else:
@@ -415,9 +417,7 @@ def main():
     if opponent_type == "dreamer":
         opp_config_path = args_cli.opponent_config or args_cli.config
         opp_cfg = _load_config(opp_config_path, device)
-        opp_agent = _load_dreamer_agent(
-            opp_cfg, obs_space, act_space, args_cli.opponent_checkpoint, device
-        )
+        opp_agent = _load_dreamer_agent(opp_cfg, obs_space, act_space, args_cli.opponent_checkpoint, device)
         opponent_wrapper.set_opponent(opp_agent)
         del opp_agent  # Wrapper deep-copied the needed modules.
     elif opponent_type == "ppo":
@@ -425,8 +425,12 @@ def main():
         ppo_obs_space = base_env.single_observation_space["opponent"]
         max_velocity = float(getattr(player_cfg.env, "max_velocity", 1.0))
         ppo_opponent = _load_ppo_opponent(
-            args_cli.opponent_config, args_cli.opponent_checkpoint, num_envs, device,
-            ppo_obs_space, max_velocity,
+            args_cli.opponent_config,
+            args_cli.opponent_checkpoint,
+            num_envs,
+            device,
+            ppo_obs_space,
+            max_velocity,
         )
         opponent_wrapper.add_opponent(ppo_opponent)
 
@@ -446,17 +450,11 @@ def main():
     # --- Evaluate each player checkpoint ---
     for ckpt_idx, ckpt_path in enumerate(checkpoint_paths):
         if len(checkpoint_paths) > 1:
-            print(
-                f"\n{'#' * 60}\n"
-                f"  Checkpoint {ckpt_idx + 1}/{len(checkpoint_paths)}: {ckpt_path}\n"
-                f"{'#' * 60}"
-            )
+            print(f"\n{'#' * 60}\n  Checkpoint {ckpt_idx + 1}/{len(checkpoint_paths)}: {ckpt_path}\n{'#' * 60}")
 
         # --- Load player agent ---
         print(f"[INFO] Loading player checkpoint: {ckpt_path}")
-        player = _load_dreamer_agent(
-            player_cfg, obs_space, act_space, ckpt_path, device
-        )
+        player = _load_dreamer_agent(player_cfg, obs_space, act_space, ckpt_path, device)
 
         # --- Reset tracking state ---
         term_counts = {
@@ -494,9 +492,7 @@ def main():
                         for i, term_name in enumerate(term_manager._term_names):
                             if term_name in TERM_NAME_MAP:
                                 count_key = TERM_NAME_MAP[term_name]
-                                term_counts[count_key] += int(
-                                    term_manager._term_dones[done_mask, i].sum().item()
-                                )
+                                term_counts[count_key] += int(term_manager._term_dones[done_mask, i].sum().item())
 
                         # Update tqdm with live stats.
                         pbar.update(min(num_done, args_cli.num_games - pbar.n))
@@ -522,16 +518,14 @@ def main():
         opponent_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
         draws = term_counts["time_expired"]
 
-        all_results.append(
-            {
-                "checkpoint": ckpt_path,
-                "total_games": total_games,
-                "player_wins": player_wins,
-                "opponent_wins": opponent_wins,
-                "draws": draws,
-                "term_counts": dict(term_counts),
-            }
-        )
+        all_results.append({
+            "checkpoint": ckpt_path,
+            "total_games": total_games,
+            "player_wins": player_wins,
+            "opponent_wins": opponent_wins,
+            "draws": draws,
+            "term_counts": dict(term_counts),
+        })
 
         summary_lines = [
             "\n" + "=" * 50,
@@ -553,9 +547,7 @@ def main():
             f"  Draws        : {draws}",
         ]
         if total_games > 0:
-            summary_lines.append(
-                f"  Player win rate: {player_wins / total_games * 100:.1f}%"
-            )
+            summary_lines.append(f"  Player win rate: {player_wins / total_games * 100:.1f}%")
         summary_lines.append("=" * 50 + "\n")
 
         summary_text = "\n".join(summary_lines)
@@ -577,9 +569,7 @@ def main():
         if interrupted:
             remaining = len(checkpoint_paths) - (ckpt_idx + 1)
             if remaining > 0:
-                print(
-                    f"[INFO] Skipping {remaining} remaining checkpoint(s) due to interrupt."
-                )
+                print(f"[INFO] Skipping {remaining} remaining checkpoint(s) due to interrupt.")
             break
 
     # --- Aggregate summary (when multiple checkpoints) ---
@@ -593,14 +583,9 @@ def main():
         ]
         for r in all_results:
             ckpt_name = os.path.basename(r["checkpoint"])
-            wr = (
-                f"{r['player_wins'] / r['total_games'] * 100:.1f}%"
-                if r["total_games"] > 0
-                else "N/A"
-            )
+            wr = f"{r['player_wins'] / r['total_games'] * 100:.1f}%" if r["total_games"] > 0 else "N/A"
             agg_lines.append(
-                f"  {ckpt_name:<45} {wr:>6}"
-                f"  {r['player_wins']:>5}  {r['opponent_wins']:>5}  {r['draws']:>5}"
+                f"  {ckpt_name:<45} {wr:>6}  {r['player_wins']:>5}  {r['opponent_wins']:>5}  {r['draws']:>5}"
             )
         agg_lines.append("=" * 70 + "\n")
         agg_text = "\n".join(agg_lines)
