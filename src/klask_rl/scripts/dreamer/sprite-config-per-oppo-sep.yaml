@@ -13,7 +13,7 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_sprite_per_oppo_sep_128
+wandb_name: dreamer_sprite_per_oppo_sep_128_transition_new_renderer
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
@@ -24,7 +24,7 @@ sim_device: "cuda:0"
 train_devices:
   - "cuda:1"
   - "cuda:2"
-init_checkpoint: null # Path to checkpoint for weight-only init (pretrain -> finetune)
+init_checkpoint: /workspace/klask_rl/logdir/2026-04-15/16-16-00/checkpoint_9381248.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
 load_world_model_only: false
 
 hydra:
@@ -40,7 +40,7 @@ micro_batch_size: 5
 # ---- Environment (all klask-specific, inlined here) ----
 env:
   task: "isaaclab_Klask-Rl-Dreamer-Sprite-v0"
-  steps: 1e7
+  steps: 1e+7
   env_num: 16
   eval_episode_num: 10
   action_repeat: 1
@@ -50,12 +50,12 @@ env:
   sim_dt: 0.001
   seed: ${seed}
   device: ${device}
-  ball_reset_position_x: [-0.15, 0.15]
-  ball_reset_position_y: [-0.10, -0.02]
+  ball_reset_position_x: [ -0.15, 0.15 ]
+  ball_reset_position_y: [ -0.1, 0.1 ]
   max_velocity: 0.4 # [m/s] Maximum velocity for player movement
   episode_length_s: 10.0 # [s] Episode length in seconds
   actuator_model: True
-  size: [128, 128]
+  size: [ 128, 128 ]
   encoder:
     mlp_keys: "$^"
     cnn_keys: "image"
@@ -74,7 +74,7 @@ env:
       weight: 0.0
     player_in_goal:
       type: static
-      weight: -1000.0
+      weight: -1000
     opponent_in_goal:
       type: static
       weight: 0.0
@@ -83,22 +83,22 @@ env:
       weight: 1000.0
     goal_conceded:
       type: static
-      weight: -1000.0
+      weight: -1000
     distance_player_ball_own_half:
       type: static
       weight: 0.0
     distance_ball_opponent_goal:
       type: exponential
       weight: 0.0
-      decay_rate: 1.0e-07
+      decay_rate: 1e-7
     distance_ball_own_goal:
       type: exponential
       weight: 0.0
-      decay_rate: 1.0e-07
+      decay_rate: 1e-7
     ball_speed:
       type: exponential
       weight: 0.0
-      decay_rate: 1.0e-07
+      decay_rate: 1e-7
     ball_stationary:
       type: static
       weight: 0.0
@@ -133,19 +133,19 @@ env:
       phases:
         - type: static
           speed: 1.0
-          steps: [0, 1_000_000]
+          steps: [ 0, 1_000_000 ]
         - type: sigmoid
-          speed: [1.0, 0.0]
-          steps: [1_000_000, 3_000_000]
+          speed: [ 1.0, 0.0 ]
+          steps: [ 1_000_000, 3_000_000 ]
           steepness: 6.0
         - type: static
           speed: 0.0
-          steps: [3_000_000, -1]
+          steps: [ 3_000_000, -1 ]
 
 buffer:
   batch_size: ${batch_size}
   batch_length: ${batch_length}
-  max_size: 5e5
+  max_size: 5e+5
   device: ${device}
   storage_device: "cpu"
   prioritized:
@@ -171,14 +171,14 @@ buffer:
 trainer:
   steps: ${env.steps}
   pretrain: 0
-  eval_every: 4e4
+  eval_every: 4e+4
   eval_episode_num: ${env.eval_episode_num}
   batch_size: ${batch_size}
   batch_length: ${batch_length}
   train_ratio: ${env.train_ratio}
   video_pred_log: True
   params_hist_log: False
-  update_log_every: 5e3
+  update_log_every: 5e+3
   action_repeat: ${env.action_repeat}
   save_checkpoint_every: 100_000 # Save checkpoint every N steps (0 = only save at the end)
   profiling:
