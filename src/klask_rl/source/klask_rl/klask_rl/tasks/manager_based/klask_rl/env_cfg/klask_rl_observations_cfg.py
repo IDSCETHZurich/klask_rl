@@ -19,8 +19,8 @@ from ..utils_manager_based import (
     padded_image_rotated,
     root_lin_xy_vel_w,
     root_xy_pos_w,
-    sprite_rendered_image,
-    sprite_rendered_image_rotated,
+    sprite_rendered_image_parity_opponent,
+    sprite_rendered_image_parity_player,
 )
 
 
@@ -372,10 +372,14 @@ def _fast_sac_obs_group(
     @configclass
     class _FastSACObsGroup(ObsGroup):
         ball_pos = ObsTerm(
-            func=root_xy_pos_w, params={"asset_cfg": SceneEntityCfg(name="ball")}, scale=s2,
+            func=root_xy_pos_w,
+            params={"asset_cfg": SceneEntityCfg(name="ball")},
+            scale=s2,
         )
         ball_vel = ObsTerm(
-            func=root_lin_xy_vel_w, params={"asset_cfg": SceneEntityCfg(name="ball")}, scale=s2,
+            func=root_lin_xy_vel_w,
+            params={"asset_cfg": SceneEntityCfg(name="ball")},
+            scale=s2,
         )
         own_pos = ObsTerm(
             func=body_xy_pos_w,
@@ -567,7 +571,7 @@ class DreamerSpriteObservationsCfg(DreamerObservationsCfg):
     @configclass
     class SpriteImageObsGroup(ObsGroup):
         image = ObsTerm(
-            func=sprite_rendered_image,
+            func=sprite_rendered_image_parity_player,
             params={
                 "peg1_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
                 "peg2_cfg": SceneEntityCfg("klask", body_names=["Peg_2"]),
@@ -585,8 +589,10 @@ class DreamerSpriteObservationsCfg(DreamerObservationsCfg):
     @configclass
     class SpriteOpponentImageObsGroup(ObsGroup):
         image = ObsTerm(
-            func=sprite_rendered_image_rotated,
+            func=sprite_rendered_image_parity_opponent,
             params={
+                # peg_cfgs unused at runtime but kept so apply_camera_size_to_env_cfg
+                # can find and override target_h / target_w.
                 "peg1_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
                 "peg2_cfg": SceneEntityCfg("klask", body_names=["Peg_2"]),
                 "ball_cfg": SceneEntityCfg("ball"),

@@ -111,11 +111,19 @@ def sprite_rendered_image(
     ball_cfg: SceneEntityCfg,
     target_h: int = 128,
     target_w: int = 128,
+    rotate: bool = False,
 ) -> torch.Tensor:
     """Render sprite-based board images from sim state positions.
 
     Returns a ``(N, target_h, target_w, 3)`` uint8 RGB tensor on the env device.
     The unpadded render is cached so ``sprite_rendered_image_rotated`` can reuse it.
+
+    When ``rotate=True`` the three 2D positions (peg1, peg2, ball) are negated
+    before being passed to the renderer — equivalent to a 180° rotation of the
+    board around its centre. Combined with swapping the ``peg1_cfg`` / ``peg2_cfg``
+    arguments this produces the opponent's ego-frame view: the opponent's own
+    peg is drawn at the bottom with the ``left_peg`` sprite (matching how the
+    player was trained).
     """
     cfg = env.cfg
     cam_h, cam_w = _sprite_camera_params(min(target_h, target_w))
@@ -125,6 +133,11 @@ def sprite_rendered_image(
     peg1_pos = body_xy_pos_w(env, peg1_cfg)  # (N, 2) GPU tensor
     peg2_pos = body_xy_pos_w(env, peg2_cfg)  # (N, 2) GPU tensor
     ball_pos = root_xy_pos_w(env, ball_cfg)  # (N, 2) GPU tensor
+
+    if rotate:
+        peg1_pos = -peg1_pos
+        peg2_pos = -peg2_pos
+        ball_pos = -ball_pos
 
     # Transfer to CPU once (batch)
     peg1_np = peg1_pos.cpu().numpy()
@@ -168,6 +181,109 @@ def sprite_rendered_image_rotated(
     images = _sprite_image_cache.pop("images")
     rotated = torch.rot90(images, k=2, dims=[1, 2])
     return _pad_image_to_target(rotated, target_h, target_w)
+
+
+def sprite_rendered_image_parity_player(
+    env: ManagerBasedRLEnv,
+    peg1_cfg: SceneEntityCfg,
+    peg2_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    target_h: int = 128,
+    target_w: int = 128,
+) -> torch.Tensor:
+    """Render player images with even/odd env parity split.
+
+    Even envs: natural render — left_peg sprite at bottom (player's own peg).
+    Odd  envs: rot90 of the opponent-ego render — right_peg style at bottom.
+
+    Both renders are cached under ``_sprite_image_cache["natural"]`` and
+    ``_sprite_image_cache["opp_ego"]`` for ``sprite_rendered_image_parity_opponent``
+    to consume. This function must be called before that one (image group before
+    opponent_image group in DreamerSpriteObservationsCfg).
+
+    After trajectory mirroring in the replay buffer the encoder sees a 50/50
+    split between left_peg-at-bottom and right_peg-at-bottom views, which
+    trains the model to generalise across both physical board sides.
+    """
+    cfg = env.cfg
+    cam_h, cam_w = _sprite_camera_params(min(target_h, target_w))
+    renderer = _get_renderer(cfg.sprite_dir, cfg.background_path, cam_w, cam_h)
+    N = env.num_envs
+
+    # Extract positions (env frame, origin at board centre).
+    peg1_pos = body_xy_pos_w(env, peg1_cfg)  # Peg_1 — player half, y < 0
+    peg2_pos = body_xy_pos_w(env, peg2_cfg)  # Peg_2 — opponent half, y > 0
+    ball_pos = root_xy_pos_w(env, ball_cfg)
+
+    # CPU transfer — one trip for both render passes.
+    p1_np = peg1_pos.cpu().numpy()
+    p2_np = peg2_pos.cpu().numpy()
+    b_np = ball_pos.cpu().numpy()
+    # Negated/swapped positions for the opponent-ego render.
+    p1r_np = -p2_np  # Peg_2 negated → appears at bottom in opp-ego frame
+    p2r_np = -p1_np  # Peg_1 negated → appears at top
+    br_np = -b_np
+
+    # Single combined loop: render natural AND opp_ego per env.
+    natural_np = np.empty((N, cam_h, cam_w, 3), dtype=np.uint8)
+    opp_ego_np = np.empty((N, cam_h, cam_w, 3), dtype=np.uint8)
+    for i in range(N):
+        bgr = renderer.render(p1_np[i], p2_np[i], b_np[i])
+        cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB, dst=natural_np[i])
+        bgr = renderer.render(p1r_np[i], p2r_np[i], br_np[i])
+        cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB, dst=opp_ego_np[i])
+
+    natural = torch.from_numpy(natural_np).to(env.device)
+    opp_ego = torch.from_numpy(opp_ego_np).to(env.device)
+
+    # Cache both for the opponent function.
+    _sprite_image_cache.clear()
+    _sprite_image_cache["natural"] = natural
+    _sprite_image_cache["opp_ego"] = opp_ego
+
+    # Even envs → natural; odd envs → rot90(opp_ego).
+    even_mask = torch.arange(N, device=env.device) % 2 == 0
+    result = natural.clone()
+    result[~even_mask] = torch.rot90(opp_ego[~even_mask], k=2, dims=[1, 2])
+
+    return _pad_image_to_target(result, target_h, target_w)
+
+
+def sprite_rendered_image_parity_opponent(
+    env: ManagerBasedRLEnv,
+    peg1_cfg: SceneEntityCfg,
+    peg2_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    target_h: int = 128,
+    target_w: int = 128,
+) -> torch.Tensor:
+    """Return opponent images that mirror the parity split from the player function.
+
+    Even envs: rot90(natural) — right_peg style at bottom (opponent's self).
+    Odd  envs: opp_ego render — left_peg sprite at bottom (opponent's self).
+
+    Reads both renders from the cache written by
+    ``sprite_rendered_image_parity_player``, which must run first.
+    The peg_cfg arguments are unused at runtime but kept so that
+    ``apply_camera_size_to_env_cfg`` can find and override ``target_h``/``target_w``.
+    """
+    if "natural" not in _sprite_image_cache or "opp_ego" not in _sprite_image_cache:
+        raise RuntimeError(
+            "sprite_rendered_image_parity_opponent called before "
+            "sprite_rendered_image_parity_player. Ensure the 'image' obs group "
+            "is defined before 'opponent_image' in DreamerSpriteObservationsCfg."
+        )
+    natural = _sprite_image_cache.pop("natural")
+    opp_ego = _sprite_image_cache.pop("opp_ego")
+
+    N = env.num_envs
+    even_mask = torch.arange(N, device=env.device) % 2 == 0
+
+    # Even envs → rot90(natural); odd envs → opp_ego.
+    result = opp_ego.clone()
+    result[even_mask] = torch.rot90(natural[even_mask], k=2, dims=[1, 2])
+
+    return _pad_image_to_target(result, target_h, target_w)
 
 
 def set_joint_position_limits(

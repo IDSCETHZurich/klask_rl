@@ -146,5 +146,94 @@ def main():
             _benchmark(renderer, ((0.0, -0.11), (0.0, 0.11), (0.0, 0.0)))
 
 
+def test_parity_rendering():
+    """Verify the even/odd env parity rendering split without Isaac Lab.
+
+    Renders all four image variants that ``sprite_rendered_image_parity_player``
+    and ``sprite_rendered_image_parity_opponent`` would produce and saves them
+    as individual PNGs plus a labelled 2x2 grid.
+
+    Expected output
+    ---------------
+    parity_even_player.png   - left_peg sprite at bottom  (natural render)
+    parity_odd_opponent.png  - left_peg sprite at bottom  (opp-ego render)
+    parity_even_opponent.png - right_peg style at bottom  (rot90 of natural)
+    parity_odd_player.png    - right_peg style at bottom  (rot90 of opp-ego)
+    parity_grid.png          - 2x2 labelled composite of all four
+
+    Top-left / bottom-right should look visually similar (left_peg at bottom).
+    Top-right / bottom-left should look visually similar (right_peg at bottom).
+    """
+    import cv2
+    import numpy as np
+
+    print("\n=== Parity rendering verification ===")
+
+    renderer = BoardRenderer(
+        sprite_dir=SPRITE_DIR,
+        background_path=BG_PATH,
+        output_size=(96, 126),  # sim frame: width × height
+        fast_mode=False,
+        target_frame="sim",
+    )
+
+    # Sim-frame positions matching production env defaults.
+    player_pos = np.array([0.0, -0.115])  # Peg_1 — bottom half
+    opp_pos = np.array([0.0, 0.115])  # Peg_2 — top half
+    ball_pos = np.array([0.05, -0.05])  # off-centre for visual interest
+
+    # --- Four renders ---
+    # natural: left_peg sprite at bottom (player's ego view)
+    natural = renderer.render(player_pos, opp_pos, ball_pos)
+
+    # opp_ego: swap + negate → left_peg sprite at bottom (opponent's ego view)
+    opp_ego = renderer.render(-opp_pos, -player_pos, -ball_pos)
+
+    # rot90 variants (180° pixel rotation)
+    rot_natural = np.rot90(natural, k=2)
+    rot_opp_ego = np.rot90(opp_ego, k=2)
+
+    variants = {
+        "parity_even_player": natural,  # left_peg at bottom
+        "parity_odd_opponent": opp_ego,  # left_peg at bottom
+        "parity_even_opponent": rot_natural,  # right_peg style at bottom
+        "parity_odd_player": rot_opp_ego,  # right_peg style at bottom
+    }
+
+    for name, img in variants.items():
+        path = os.path.join(OUT_DIR, f"{name}.png")
+        cv2.imwrite(path, img)
+        print(f"  Saved: {name}.png  shape={img.shape}")
+
+    # --- 2×2 labelled grid ---
+    def _label(img, text):
+        out = img.copy()
+        cv2.putText(out, text, (4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1, cv2.LINE_AA)
+        return out
+
+    top = np.concatenate(
+        [
+            _label(natural, "even-player"),
+            _label(rot_natural, "even-opponent"),
+        ],
+        axis=1,
+    )
+    bot = np.concatenate(
+        [
+            _label(rot_opp_ego, "odd-player"),
+            _label(opp_ego, "odd-opponent"),
+        ],
+        axis=1,
+    )
+    grid = np.concatenate([top, bot], axis=0)
+
+    grid_path = os.path.join(OUT_DIR, "parity_grid.png")
+    cv2.imwrite(grid_path, grid)
+    print(f"  Saved: parity_grid.png  shape={grid.shape}")
+    print("  Check: top-left & bottom-right should have left_peg at bottom;")
+    print("         top-right & bottom-left should have right_peg style at bottom.")
+
+
 if __name__ == "__main__":
     main()
+    test_parity_rendering()
