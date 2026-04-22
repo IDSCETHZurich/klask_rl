@@ -56,9 +56,7 @@ env:
   episode_length_s: 10.0 # [s] Episode length in seconds
   actuator_model:
     enable: true
-    checkpoint: /workspace/klask_rl/logs/actuator_model/data/new/checkpoints/model\
-      _data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_wi\
-      th_states_train_seed0.pt
+    checkpoint: /workspace/klask_rl/logs/actuator_model/data/new/checkpoints/model_data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states_train_seed0.pt
   collision_avoidance:
     enable: true
   size: [ 128, 128 ]
