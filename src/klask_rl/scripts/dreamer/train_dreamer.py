@@ -281,7 +281,7 @@ def _make_env(
 
     Applies (in order):
       1. Bounded action space (max_velocity)
-      2. ActuatorModelWrapper (if config.actuator_model)
+      2. ActuatorModelWrapper (if config.actuator_model.enable)
       3. CurriculumWrapper (if config.rewards)
       4. Termination filtering (if config.terminations)
       5. Opponent wrapper:
@@ -375,8 +375,9 @@ def _make_env(
             term._scale = vel
 
     # --- 2. Actuator model wrapper ---
-    if getattr(config, "actuator_model", False):
-        isaac_env = ActuatorModelWrapper(isaac_env)
+    actuator_cfg = getattr(config, "actuator_model", None)
+    if actuator_cfg is not None and actuator_cfg.enable:
+        isaac_env = ActuatorModelWrapper(isaac_env, model_file=actuator_cfg.checkpoint)
 
     # --- 2b. Initialization wrapper (player init velocity, etc.) ---
     init_cfg = getattr(config, "initialization", None)

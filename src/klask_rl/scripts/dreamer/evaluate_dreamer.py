@@ -154,7 +154,7 @@ def _make_eval_env(
 
     Simplified wrapper chain (no curriculum/logging):
       1. OpponentActionWrapper — negate opponent actions for coordinate frame
-      2. ActuatorModelWrapper (if config.actuator_model)
+      2. ActuatorModelWrapper (if config.actuator_model.enable)
       3. max_velocity scaling
       4. Opponent wrapper (DreamerSelfPlayWrapper or KlaskRlAgentOpponentWrapper)
       5. IsaacLabVecEnv — r2dreamer adapter
@@ -232,8 +232,9 @@ def _make_eval_env(
             term._scale = vel
 
     # --- 3. Actuator model wrapper ---
-    if getattr(env_config, "actuator_model", False):
-        isaac_env = ActuatorModelWrapper(isaac_env)
+    actuator_cfg = getattr(env_config, "actuator_model", None)
+    if actuator_cfg is not None and actuator_cfg.enable:
+        isaac_env = ActuatorModelWrapper(isaac_env, model_file=actuator_cfg.checkpoint)
 
     # --- 4. Opponent wrapper ---
     if opponent_type == "dreamer":

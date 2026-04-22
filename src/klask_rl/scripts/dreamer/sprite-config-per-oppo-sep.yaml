@@ -54,7 +54,9 @@ env:
   ball_reset_position_y: [ -0.1, 0.1 ]
   max_velocity: 0.4 # [m/s] Maximum velocity for player movement
   episode_length_s: 10.0 # [s] Episode length in seconds
-  actuator_model: True
+  actuator_model:
+    enable: true
+    checkpoint: null
   size: [ 128, 128 ]
   encoder:
     mlp_keys: "$^"

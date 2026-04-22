@@ -48,7 +48,9 @@ env:
   device: ${device}
   max_velocity: 0.6 # [m/s] Maximum velocity for player movement
   episode_length_s: 5.0 # [s] Episode length in seconds
-  actuator_model: False
+  actuator_model:
+    enable: false
+    checkpoint: null
   size: [64, 64]
   encoder:
     mlp_keys: "policy"
