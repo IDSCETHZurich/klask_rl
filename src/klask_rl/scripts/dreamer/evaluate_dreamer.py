@@ -91,7 +91,7 @@ import numpy as np
 import torch
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 from tqdm import tqdm
 
 # Isaac Sim may override SIGINT; restore Python's default so Ctrl-C works.
@@ -168,6 +168,17 @@ def _make_eval_env(
         env_cfg_class = env_cfg_entry
 
     env_cfg = env_cfg_class()
+
+    # Mirror train_dreamer.py: apply ball reset position override from YAML.
+    # Without this, the env uses KLASK_PARAMS defaults which put ~90% of resets
+    # in the player's half, causing a strong structural win-rate asymmetry.
+    ball_reset_x = getattr(env_config, "ball_reset_position_x", None)
+    ball_reset_y = getattr(env_config, "ball_reset_position_y", None)
+    if ball_reset_x is not None and hasattr(env_cfg, "ball_reset_position_x"):
+        env_cfg.ball_reset_position_x = tuple(ball_reset_x)
+        env_cfg.ball_reset_position_y = tuple(ball_reset_y)
+        env_cfg.events.reset_ball_position.params["pose_range"]["x"] = env_cfg.ball_reset_position_x
+        env_cfg.events.reset_ball_position.params["pose_range"]["y"] = env_cfg.ball_reset_position_y
 
     sim_dt = getattr(env_config, "sim_dt", None)
     if sim_dt is not None:
@@ -306,12 +317,46 @@ def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device, ppo_obs_s
     return opponent
 
 
-def _load_dreamer_agent(model_config, obs_space, act_space, checkpoint_path, device):
+def _load_dreamer_agent(full_cfg, obs_space, act_space, checkpoint_path, device):
     """Create a Dreamer agent and load checkpoint weights."""
     import copy
-    agent = Dreamer(copy.deepcopy(model_config), obs_space, act_space).to(device)
+    cfg = copy.deepcopy(full_cfg.model)
+
+    # Mirror the opponent_separation parsing that train_dreamer.py does at runtime.
+    _opp_sep_raw = getattr(full_cfg, "opponent_separation", None)
+    if OmegaConf.is_config(_opp_sep_raw):
+        _opp_sep_dict = OmegaConf.to_container(_opp_sep_raw, resolve=True)
+        _opp_sep = bool(_opp_sep_dict.get("enabled", False))
+        _imag_opponent = str(_opp_sep_dict.get("imag_opponent", "random"))
+        _traj_mirror = bool(_opp_sep_dict.get("trajectory_mirroring", {}).get("enabled", False) if isinstance(_opp_sep_dict.get("trajectory_mirroring"), dict) else _opp_sep_dict.get("trajectory_mirroring", False))
+    elif isinstance(_opp_sep_raw, bool):
+        _opp_sep = _opp_sep_raw
+        _imag_opponent = str(getattr(getattr(full_cfg, "opponent_separation_config", None) or {}, "imag_opponent", "random"))
+        _traj_mirror = bool(getattr(full_cfg, "trajectory_mirroring", False))
+    else:
+        _opp_sep = False
+        _imag_opponent = "random"
+        _traj_mirror = False
+
+    with open_dict(cfg):
+        cfg.sim_device = str(device)
+        cfg.train_device = str(device)
+        cfg.train_devices = [str(device)]
+        cfg.device = str(device)
+        cfg.opponent_separation = _opp_sep
+        cfg.imag_opponent = _imag_opponent
+        cfg.trajectory_mirroring = _traj_mirror
+
+    agent = Dreamer(cfg, obs_space, act_space).to(device)
     ckpt = torch.load(checkpoint_path, map_location=device)
-    agent.load_state_dict(ckpt["agent_state_dict"])
+    missing, unexpected = agent.load_state_dict(ckpt["agent_state_dict"], strict=False)
+    # _inference_* keys are aliases to _frozen_* in single-GPU mode — their
+    # parameters are shared objects already loaded via _frozen_* keys.
+    # Unexpected keys are from multi-GPU checkpoints (_inference_*_orig,
+    # _imag_opp_*, compiled ._orig_mod copies) not needed for evaluation.
+    real_missing = [k for k in missing if not k.startswith("_inference_")]
+    if real_missing:
+        raise RuntimeError(f"Missing keys in checkpoint: {real_missing}")
     agent.eval()
     return agent
 
@@ -371,7 +416,7 @@ def main():
         opp_config_path = args_cli.opponent_config or args_cli.config
         opp_cfg = _load_config(opp_config_path, device)
         opp_agent = _load_dreamer_agent(
-            opp_cfg.model, obs_space, act_space, args_cli.opponent_checkpoint, device
+            opp_cfg, obs_space, act_space, args_cli.opponent_checkpoint, device
         )
         opponent_wrapper.set_opponent(opp_agent)
         del opp_agent  # Wrapper deep-copied the needed modules.
@@ -396,6 +441,7 @@ def main():
 
     # Collect per-checkpoint results for aggregate summary.
     all_results = []
+    interrupted = False
 
     # --- Evaluate each player checkpoint ---
     for ckpt_idx, ckpt_path in enumerate(checkpoint_paths):
@@ -409,7 +455,7 @@ def main():
         # --- Load player agent ---
         print(f"[INFO] Loading player checkpoint: {ckpt_path}")
         player = _load_dreamer_agent(
-            player_cfg.model, obs_space, act_space, ckpt_path, device
+            player_cfg, obs_space, act_space, ckpt_path, device
         )
 
         # --- Reset tracking state ---
@@ -425,42 +471,49 @@ def main():
         # --- Game loop ---
         pbar = tqdm(total=args_cli.num_games, desc="Games")
 
-        with torch.inference_mode():
-            vec_env.reset()
-            done = torch.ones(num_envs, dtype=torch.bool, device=device)
-            agent_state = player.get_initial_state(num_envs)
-            act = agent_state["prev_action"].clone()
+        try:
+            with torch.inference_mode():
+                vec_env.reset()
+                done = torch.ones(num_envs, dtype=torch.bool, device=device)
+                agent_state = player.get_initial_state(num_envs)
+                act = agent_state["action"].clone()
 
-            while total_games < args_cli.num_games and simulation_app.is_running():
-                # Step env (opponent actions generated inside the opponent wrapper).
-                trans, done = vec_env.step(act.detach(), done.detach())
+                while total_games < args_cli.num_games and simulation_app.is_running():
+                    # Step env (opponent actions generated inside the opponent wrapper).
+                    trans, done = vec_env.step(act.detach(), done.detach())
 
-                # Player agent inference (deterministic).
-                act, agent_state = player.act(trans, agent_state, eval=True)
+                    # Player agent inference (deterministic).
+                    act, agent_state = player.act(trans, agent_state, eval=True)
 
-                # Track terminations.
-                if done.any():
-                    num_done = int(done.sum().item())
-                    total_games += num_done
+                    # Track terminations.
+                    if done.any():
+                        num_done = int(done.sum().item())
+                        total_games += num_done
 
-                    done_mask = done.bool().to(term_manager._term_dones.device)
-                    for i, term_name in enumerate(term_manager._term_names):
-                        if term_name in TERM_NAME_MAP:
-                            count_key = TERM_NAME_MAP[term_name]
-                            term_counts[count_key] += int(
-                                term_manager._term_dones[done_mask, i].sum().item()
-                            )
+                        done_mask = done.bool().to(term_manager._term_dones.device)
+                        for i, term_name in enumerate(term_manager._term_names):
+                            if term_name in TERM_NAME_MAP:
+                                count_key = TERM_NAME_MAP[term_name]
+                                term_counts[count_key] += int(
+                                    term_manager._term_dones[done_mask, i].sum().item()
+                                )
 
-                    # Update tqdm with live stats.
-                    pbar.update(min(num_done, args_cli.num_games - pbar.n))
-                    p_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
-                    o_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
-                    pbar.set_postfix(
-                        P_wins=p_wins,
-                        O_wins=o_wins,
-                        Draws=term_counts["time_expired"],
-                        P_wr=f"{p_wins / total_games * 100:.1f}%",
-                    )
+                        # Update tqdm with live stats.
+                        pbar.update(min(num_done, args_cli.num_games - pbar.n))
+                        p_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
+                        o_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
+                        pbar.set_postfix(
+                            P_wins=p_wins,
+                            O_wins=o_wins,
+                            Draws=term_counts["time_expired"],
+                            P_wr=f"{p_wins / total_games * 100:.1f}%",
+                        )
+        except KeyboardInterrupt:
+            interrupted = True
+            print(
+                f"\n[INFO] Evaluation interrupted by user after {total_games} games. "
+                "Printing summary for completed games..."
+            )
 
         pbar.close()
 
@@ -519,6 +572,15 @@ def main():
 
         # Free player model before loading the next one.
         del player
+
+        # Stop evaluating further checkpoints if user interrupted.
+        if interrupted:
+            remaining = len(checkpoint_paths) - (ckpt_idx + 1)
+            if remaining > 0:
+                print(
+                    f"[INFO] Skipping {remaining} remaining checkpoint(s) due to interrupt."
+                )
+            break
 
     # --- Aggregate summary (when multiple checkpoints) ---
     if len(all_results) > 1:
