@@ -98,6 +98,7 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     InitializationWrapper,
     KlaskRlRandomOpponentWrapper,
     OpponentActionWrapper,
+    VelocityScaleWrapper,
     configure_domain_randomization,
 )
 from trainer import OnlineTrainer
@@ -279,17 +280,18 @@ def _make_env(
 ):
     """Construct a GPU-resident IsaacLab env with KLASK-specific wrappers.
 
-    Applies (in order):
-      1. Bounded action space (max_velocity)
-      2. ActuatorModelWrapper (if config.actuator_model.enable)
-      3. CurriculumWrapper (if config.rewards)
-      4. Termination filtering (if config.terminations)
-      5. Opponent wrapper:
+    Applies (in order, innermost → outermost):
+      1. OpponentActionWrapper (innermost — negates opponent dims)
+      2. ActuatorModelWrapper (if config.actuator_model.enable — expects m/s)
+      3. VelocityScaleWrapper (scales [-1, 1] → m/s; action manager _scale = 1.0)
+      4. InitializationWrapper
+      5. CurriculumWrapper (if config.rewards)
+      6. Opponent wrapper (emits opponent action in [-1, 1]):
          - DreamerSelfPlayWrapper if self_play=True
          - KlaskRlRandomOpponentWrapper otherwise
-      5b. EpisodeTagTracker (if buffer.prioritized configured)
-      6. EpisodeMetricsWrapper (episode termination logging)
-      7. RewardWeightLogWrapper (reward weight logging)
+      7. EpisodeTagTracker (if buffer.prioritized configured)
+      8. EpisodeMetricsWrapper (episode termination logging)
+      9. RewardWeightLogWrapper (reward weight logging)
     """
     global _self_play_wrapper, _tag_tracker
     import importlib
@@ -360,24 +362,26 @@ def _make_env(
     # --- 1a. Opponent action frame transform (innermost) ---
     isaac_env = OpponentActionWrapper(isaac_env)
 
-    # --- 1. Set bounded action space ---
-    # Scale the IsaacLab action terms so that the agent's [-1, 1] output
-    # maps to [-max_velocity, +max_velocity] m/s.  Simply overriding the
-    # gym action-space metadata is NOT enough — Dreamer's actor always
-    # outputs in [-1, 1] regardless of the reported space bounds.
+    # --- 1. Action manager scale = 1.0 (pass-through, m/s in → m/s out) ---
+    # Velocity scaling is done by VelocityScaleWrapper below so that the
+    # actuator model sees commands in m/s (matching its training units).
     max_velocity = getattr(config, "max_velocity", None)
-    if max_velocity is not None:
-        vel = float(max_velocity)
-        # Set the scale on every JointVelocityAction term in the action manager
-        # so that raw_action * scale produces the desired velocity in m/s.
-        action_mgr = isaac_env.unwrapped.action_manager
-        for term in action_mgr._terms.values():
-            term._scale = vel
+    if max_velocity is None:
+        raise ValueError("config.env.max_velocity is required; VelocityScaleWrapper needs it to scale [-1, 1] → m/s.")
+    action_mgr = isaac_env.unwrapped.action_manager
+    for term in action_mgr._terms.values():
+        term._scale = 1.0
 
-    # --- 2. Actuator model wrapper ---
+    # --- 2. Actuator model wrapper (expects m/s commands) ---
     actuator_cfg = getattr(config, "actuator_model", None)
     if actuator_cfg is not None and actuator_cfg.enable:
         isaac_env = ActuatorModelWrapper(isaac_env, model_file=actuator_cfg.checkpoint)
+
+    # --- 2a. Velocity scaling: [-1, 1] → [-max_velocity, max_velocity] m/s ---
+    # Sits outside the actuator model (so the model sees m/s) and inside
+    # the opponent wrappers (so player and opponent actions are scaled
+    # together in one pass — both are produced in [-1, 1]).
+    isaac_env = VelocityScaleWrapper(isaac_env, max_velocity=float(max_velocity))
 
     # --- 2b. Initialization wrapper (player init velocity, etc.) ---
     init_cfg = getattr(config, "initialization", None)

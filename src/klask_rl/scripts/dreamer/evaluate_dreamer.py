@@ -121,6 +121,7 @@ from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWr
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     KlaskRlAgentOpponentWrapper,
     OpponentActionWrapper,
+    VelocityScaleWrapper,
     configure_domain_randomization,
 )
 
@@ -152,11 +153,12 @@ def _make_eval_env(
 ):
     """Create an evaluation env with the appropriate opponent wrapper.
 
-    Simplified wrapper chain (no curriculum/logging):
+    Simplified wrapper chain (no curriculum/logging, innermost → outermost):
       1. OpponentActionWrapper — negate opponent actions for coordinate frame
-      2. ActuatorModelWrapper (if config.actuator_model.enable)
-      3. max_velocity scaling
-      4. Opponent wrapper (DreamerSelfPlayWrapper or KlaskRlAgentOpponentWrapper)
+      2. ActuatorModelWrapper (if config.actuator_model.enable — expects m/s)
+      3. VelocityScaleWrapper — scales [-1, 1] → m/s; action manager _scale = 1.0
+      4. Opponent wrapper (emits opponent action in [-1, 1]):
+         DreamerSelfPlayWrapper or KlaskRlAgentOpponentWrapper
       5. IsaacLabVecEnv — r2dreamer adapter
 
     Returns (vec_env, opponent_wrapper).
@@ -223,18 +225,23 @@ def _make_eval_env(
     # --- 1. Opponent action frame transform (innermost) ---
     isaac_env = OpponentActionWrapper(isaac_env)
 
-    # --- 2. Bounded action space (max_velocity) ---
+    # --- 2. Action manager scale = 1.0 (pass-through, m/s in → m/s out) ---
+    # Velocity scaling is done by VelocityScaleWrapper below so that the
+    # actuator model sees commands in m/s (matching its training units).
     max_velocity = getattr(env_config, "max_velocity", None)
-    if max_velocity is not None:
-        vel = float(max_velocity)
-        action_mgr = isaac_env.unwrapped.action_manager
-        for term in action_mgr._terms.values():
-            term._scale = vel
+    if max_velocity is None:
+        raise ValueError("env_config.max_velocity is required; VelocityScaleWrapper needs it to scale [-1, 1] → m/s.")
+    action_mgr = isaac_env.unwrapped.action_manager
+    for term in action_mgr._terms.values():
+        term._scale = 1.0
 
-    # --- 3. Actuator model wrapper ---
+    # --- 3. Actuator model wrapper (expects m/s commands) ---
     actuator_cfg = getattr(env_config, "actuator_model", None)
     if actuator_cfg is not None and actuator_cfg.enable:
         isaac_env = ActuatorModelWrapper(isaac_env, model_file=actuator_cfg.checkpoint)
+
+    # --- 3a. Velocity scaling: [-1, 1] → [-max_velocity, max_velocity] m/s ---
+    isaac_env = VelocityScaleWrapper(isaac_env, max_velocity=float(max_velocity))
 
     # --- 4. Opponent wrapper ---
     if opponent_type == "dreamer":
@@ -254,7 +261,7 @@ def _make_eval_env(
     return vec_env, opponent_wrapper
 
 
-def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device, ppo_obs_space, max_velocity):
+def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device, ppo_obs_space):
     """Load a PPO opponent agent from an rl_games checkpoint.
 
     Mirrors the loading pattern from play_klask.py.
@@ -272,8 +279,12 @@ def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device, ppo_obs_s
             user_cfg = yaml.safe_load(f)
         agent_cfg.update(user_cfg)
 
-    # Action space bounded by the player's max_velocity (the eval env's action scale).
-    ppo_act_space = gym.spaces.Box(low=-max_velocity, high=max_velocity, shape=(2,), dtype=np.float32)
+    # PPO outputs in [-1, 1]; VelocityScaleWrapper handles the m/s scaling
+    # uniformly with the player and random opponents. Declaring [-1, 1] makes
+    # rl_games' rescale_actions a no-op, so the raw post-clamp network output
+    # is returned unchanged (which is what the model was trained to produce
+    # pre-rescale).
+    ppo_act_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
     # Minimal stub env so rl_games can query observation/action spaces
     # without creating a full Isaac environment.
@@ -424,14 +435,12 @@ def main():
     elif opponent_type == "ppo":
         base_env = opponent_wrapper.env.unwrapped
         ppo_obs_space = base_env.single_observation_space["opponent"]
-        max_velocity = float(getattr(player_cfg.env, "max_velocity", 1.0))
         ppo_opponent = _load_ppo_opponent(
             args_cli.opponent_config,
             args_cli.opponent_checkpoint,
             num_envs,
             device,
             ppo_obs_space,
-            max_velocity,
         )
         opponent_wrapper.add_opponent(ppo_opponent)
 
