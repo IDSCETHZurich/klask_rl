@@ -13,7 +13,7 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_sprite_new_AM_and_boarder_coll
+wandb_name: dreamer_sprite_new_AM_and_boarder_coll_acc_limit
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
@@ -24,7 +24,7 @@ sim_device: "cuda:0"
 train_devices:
   - "cuda:1"
   - "cuda:2"
-init_checkpoint: /workspace/klask_rl/logdir/2026-04-22/10-54-12/checkpoint_564064.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+init_checkpoint: /workspace/klask_rl/logdir/2026-04-22/19-46-33/checkpoint_3115824.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
 load_world_model_only: false
 
 hydra:
