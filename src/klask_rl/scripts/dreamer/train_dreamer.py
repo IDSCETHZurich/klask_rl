@@ -657,6 +657,19 @@ def main(config):
     # Validate init_checkpoint path early.
     _init_ckpt = config.init_checkpoint
 
+    # Register self-play opponent submodules on the agent BEFORE loading any
+    # checkpoint.  This ensures _imag_opp_rssm / _imag_opp_actor (and, in
+    # multi-GPU mode, _imag_opp_rssm_src / _imag_opp_actor_src) are known to
+    # PyTorch so load_state_dict can restore their weights instead of silently
+    # dropping them as "unexpected" keys.  The deep-copied modules start with
+    # random weights but will be overwritten by the checkpoint or synced from
+    # the agent below.
+    if _self_play_wrapper is not None:
+        _self_play_wrapper.set_opponent(agent, device=sim_device)
+        opp_rssm, opp_actor = _self_play_wrapper.opponent_networks
+        if opp_rssm is not None:
+            agent.set_imag_opponent_networks(opp_rssm, opp_actor)
+
     # Resume from checkpoint if one exists in the logdir.
     _resume_step = 0
     checkpoint_path = logdir / "latest.pt"
@@ -706,21 +719,34 @@ def main(config):
         # Sync inference copies so they pick up restored weights (old checkpoints
         # won't have _inference_* keys, so strict=False leaves them stale).
         agent._sync_inference_copies()
+        # Restore the opponent encoder.  It is not a submodule of the agent,
+        # so load_state_dict above doesn't cover it.  (The opponent rssm/actor
+        # ARE submodules and were already restored above.)  Fall back to the
+        # agent's encoder for older checkpoints without this key.
+        if _self_play_wrapper is not None and _self_play_wrapper._opponent_encoder_orig is not None:
+            opp_enc_sd = checkpoint.get("selfplay_opp_encoder_state_dict")
+            if opp_enc_sd is not None:
+                _self_play_wrapper._opponent_encoder_orig.load_state_dict(opp_enc_sd)
+            else:
+                _self_play_wrapper._opponent_encoder_orig.load_state_dict(agent.encoder.state_dict())
+            # Propagate restored opponent weights to multi-GPU train-device
+            # copies and data-parallel replicas.  No-op in single-GPU.
+            agent.sync_imag_opponent_networks()
     elif _init_ckpt is not None:
         _wm_only = getattr(config, "load_world_model_only", False)
         tools.load_init_checkpoint(agent, _init_ckpt, train_device, world_model_only=_wm_only)
         agent._sync_inference_copies()
+        # Sync ALL opponent networks from the newly initialised agent.  Unlike
+        # resume (where opponent weights come from the checkpoint), init
+        # checkpoint means a fresh training run so the opponent should match
+        # the agent.
+        if _self_play_wrapper is not None and _self_play_wrapper._opponent_encoder_orig is not None:
+            _self_play_wrapper._opponent_encoder_orig.load_state_dict(agent.encoder.state_dict())
+            _self_play_wrapper._opponent_rssm_orig.load_state_dict(agent.rssm.state_dict())
+            _self_play_wrapper._opponent_actor_orig.load_state_dict(agent.actor.state_dict())
+            agent.sync_imag_opponent_networks()
 
-    # Initialise self-play opponent from the (randomly initialised) agent.
     if _self_play_wrapper is not None:
-        _self_play_wrapper.set_opponent(agent, device=sim_device)
-        # Share frozen opponent networks with the agent for imagination
-        # self-play.  The Dreamer class receives references to the same
-        # module instances, so weight updates via load_state_dict propagate
-        # automatically.
-        opp_rssm, opp_actor = _self_play_wrapper.opponent_networks
-        if opp_rssm is not None:
-            agent.set_imag_opponent_networks(opp_rssm, opp_actor)
         # Restore score buffer from checkpoint so mean_score continues
         # correctly instead of being diluted by 4096 pre-filled zeros.
         if checkpoint_path.exists():
@@ -821,7 +847,10 @@ def main(config):
             "slow_value_updates": agent._slow_value_updates,
             **({"ema_updates": agent._ema_updates} if hasattr(agent, "_ema_updates") else {}),
             **(
-                {"selfplay_score_buffer": list(_self_play_wrapper._score_buffer)}
+                {
+                    "selfplay_score_buffer": list(_self_play_wrapper._score_buffer),
+                    "selfplay_opp_encoder_state_dict": _self_play_wrapper._opponent_encoder_orig.state_dict(),
+                }
                 if _self_play_wrapper is not None
                 else {}
             ),
