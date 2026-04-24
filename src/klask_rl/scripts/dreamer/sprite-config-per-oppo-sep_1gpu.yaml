@@ -175,6 +175,12 @@ trainer:
   update_log_every: 5e+3
   action_repeat: ${env.action_repeat}
   save_checkpoint_every: 100_000 # Save checkpoint every N steps (0 = only save at the end)
+  profiling:
+    torch_profiler: false # Periodic chrome traces (Perfetto)
+    torch_profiler_wait: 2000 # Updates between profiling windows
+    torch_profiler_active: 5 # Updates per profiling window
+    cprofile: false # Periodic cProfile dumps
+    cprofile_every: 10000 # Steps between cProfile dumps
 
 self_play:
   enabled: true
