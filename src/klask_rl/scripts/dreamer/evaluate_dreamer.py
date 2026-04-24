@@ -241,7 +241,16 @@ def _make_eval_env(
         isaac_env = ActuatorModelWrapper(isaac_env, model_file=actuator_cfg.checkpoint)
 
     # --- 3a. Velocity scaling: [-1, 1] → [-max_velocity, max_velocity] m/s ---
-    isaac_env = VelocityScaleWrapper(isaac_env, max_velocity=float(max_velocity))
+    max_acceleration = getattr(env_config, "max_acceleration", None)
+    _act_space = isaac_env.unwrapped.single_action_space
+    isaac_env = VelocityScaleWrapper(
+        isaac_env,
+        max_velocity=float(max_velocity),
+        max_acceleration=None if max_acceleration is None else float(max_acceleration),
+        num_envs=int(isaac_env.unwrapped.num_envs),
+        action_dim=int(_act_space.shape[0]),
+        device=isaac_env.unwrapped.device,
+    )
 
     # --- 4. Opponent wrapper ---
     if opponent_type == "dreamer":

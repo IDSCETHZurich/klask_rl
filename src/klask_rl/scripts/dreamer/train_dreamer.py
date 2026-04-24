@@ -393,7 +393,16 @@ def _make_env(
     # Sits outside the actuator model (so the model sees m/s) and inside
     # the opponent wrappers (so player and opponent actions are scaled
     # together in one pass — both are produced in [-1, 1]).
-    isaac_env = VelocityScaleWrapper(isaac_env, max_velocity=float(max_velocity))
+    max_acceleration = getattr(config, "max_acceleration", None)
+    _act_space = isaac_env.unwrapped.single_action_space
+    isaac_env = VelocityScaleWrapper(
+        isaac_env,
+        max_velocity=float(max_velocity),
+        max_acceleration=None if max_acceleration is None else float(max_acceleration),
+        num_envs=int(isaac_env.unwrapped.num_envs),
+        action_dim=int(_act_space.shape[0]),
+        device=isaac_env.unwrapped.device,
+    )
 
     # --- 2b. Initialization wrapper (player init velocity, etc.) ---
     init_cfg = getattr(config, "initialization", None)

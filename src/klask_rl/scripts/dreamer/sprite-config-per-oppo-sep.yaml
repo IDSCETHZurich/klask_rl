@@ -53,6 +53,7 @@ env:
   ball_reset_position_x: [ -0.15, 0.15 ]
   ball_reset_position_y: [ -0.1, 0.1 ]
   max_velocity: 0.4 # [m/s] Maximum velocity for player movement
+  max_acceleration: 10.0 # [m/s^2] Max rate-of-change.
   episode_length_s: 10.0 # [s] Episode length in seconds
   actuator_model:
     enable: true
