@@ -21,6 +21,9 @@ Record a video of the first trajectory:
 
     python playback_actions.py --trajectory_dir scripts/actuator_model/data/real_traj --video
 
+Use specific actuator model checkpoint:
+    python playback_actions.py --trajectory_dir scripts/actuator_model/data/real_traj --actuator_model_checkpoint path/to/checkpoint.pt
+
 Output
 ------
 For each input file ``<name>.npz`` a ``sim2<name>.npz`` is written to
@@ -31,8 +34,8 @@ the same directory as the input files, containing:
 """
 
 import argparse
-import glob
 import os
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
@@ -61,6 +64,12 @@ parser.add_argument(
     help="Disable the collision avoidance wrapper.",
 )
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+parser.add_argument(
+    "--actuator_model_checkpoint",
+    type=str,
+    default=None,
+    help="Path to actuator model checkpoint (.pt). Defaults to the built-in checkpoint.",
+)
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -87,6 +96,36 @@ from tqdm import tqdm
 def _set_state_range(term_cfg, pos, vel):
     term_cfg.params["position_range"] = (pos, pos)
     term_cfg.params["velocity_range"] = (vel, vel)
+
+
+_STRUCTURED_KEYS = {
+    "player_pos", "player_vel",
+    "opponent_pos", "opponent_vel",
+    "ball_pos", "ball_vel",
+    "player_actions",
+}
+
+
+def _load_trajectory(path):
+    """Load a trajectory npz, supporting the new structured layout and the
+    legacy flat ``obs`` layout. Returns ``None`` if the file matches neither
+    (e.g. windowed training datasets that happen to live in the same tree)."""
+    d = np.load(path)
+    keys = set(d.files)
+    if _STRUCTURED_KEYS <= keys:
+        peg_1 = np.concatenate([d["player_pos"], d["player_vel"]], axis=1)
+        peg_2 = np.concatenate([d["opponent_pos"], d["opponent_vel"]], axis=1)
+        ball = np.concatenate([d["ball_pos"], d["ball_vel"]], axis=1)
+        actions = d["player_actions"]
+    elif "obs" in keys and "actions" in keys:
+        obs = d["obs"]
+        peg_1 = obs[:, :4]
+        peg_2 = obs[:, 4:8]
+        ball = obs[:, 8:12]
+        actions = d["actions"]
+    else:
+        return None
+    return peg_1, peg_2, ball, actions
 
 
 def initialize_sim_state(event_manager, ball_state, peg_1_state, peg_2_state):
@@ -129,17 +168,31 @@ def main():
 
     log_dir = args_cli.trajectory_dir
     os.makedirs(log_dir, exist_ok=True)
-    files = sorted(glob.glob(os.path.join(args_cli.trajectory_dir, "*.npz")))
-    if not files:
+    candidates = sorted(str(p) for p in Path(args_cli.trajectory_dir).rglob("*.npz") if not p.name.startswith("sim2"))
+    if not candidates:
         raise FileNotFoundError(f"No .npz files found in {args_cli.trajectory_dir}")
-    print(f"[INFO]: Found {len(files)} trajectory file(s) in {args_cli.trajectory_dir}")
+
+    # Pre-load each candidate once to filter out unknown/unsupported formats
+    # (e.g. windowed training datasets that happen to share the tree).
+    loaded = []
+    for fp in candidates:
+        data = _load_trajectory(fp)
+        if data is None:
+            print(f"[WARN] Skipping {fp}: unrecognised npz layout.")
+            continue
+        loaded.append((fp, data))
+    if not loaded:
+        raise FileNotFoundError(
+            f"No supported trajectory .npz files found under {args_cli.trajectory_dir}"
+        )
+    print(f"[INFO]: Found {len(loaded)} playable trajectory file(s) under {args_cli.trajectory_dir}")
 
     if args_cli.video:
-        first_traj = np.load(files[0])
+        _, _, _, first_actions = loaded[0][1]
         video_kwargs = {
             "video_folder": log_dir,
             "step_trigger": lambda step: step == 0,
-            "video_length": len(first_traj["actions"]),
+            "video_length": len(first_actions),
             "disable_logger": True,
         }
         print("[INFO] Recording videos during training.")
@@ -147,7 +200,7 @@ def main():
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
     if args_cli.actuator_model:
-        env = ActuatorModelWrapper(env)
+        env = ActuatorModelWrapper(env, model_file=args_cli.actuator_model_checkpoint)
     if args_cli.collision_avoidance:
         env = KlaskRlCollisionAvoidanceWrapper(env)
 
@@ -157,17 +210,13 @@ def main():
     event_manager = env.unwrapped.event_manager
 
     with torch.inference_mode():
-        for filepath in tqdm(files, desc="trajectories"):
-            trajectories = np.load(filepath)
-            peg_1_state = trajectories["obs"][:, :4]
-            peg_2_state = trajectories["obs"][:, 4:8]
-            ball_state = trajectories["obs"][:, 8:12]
+        for filepath, (peg_1_state, peg_2_state, ball_state, actions) in tqdm(loaded, desc="trajectories"):
 
             initialize_sim_state(event_manager, ball_state, peg_1_state, peg_2_state)
             obs, _ = env.reset()
 
             obs_buffer = []
-            for step_actions in tqdm(trajectories["actions"], desc="steps", leave=False):
+            for step_actions in tqdm(actions, desc="steps", leave=False):
                 step_actions = torch.from_numpy(step_actions).to(env.unwrapped.device)
                 obs_buffer.append(obs["policy"][0].cpu().numpy())
                 actions_input = step_actions.unsqueeze(0)
@@ -175,10 +224,11 @@ def main():
                     actions_input = torch.cat([actions_input, torch.zeros(1, 2, device=actions_input.device)], dim=1)
                 obs, _, _, _, _ = env.step(actions_input)
 
+            observations_real = np.concatenate([peg_1_state, peg_2_state, ball_state], axis=1)
             np.savez(
-                os.path.join(log_dir, f"sim2{os.path.basename(filepath)}"),
-                actions=trajectories["actions"],
-                observations_real=trajectories["obs"],
+                os.path.join(os.path.dirname(filepath), f"sim2{os.path.basename(filepath)}"),
+                actions=actions,
+                observations_real=observations_real,
                 observations_sim=np.array(obs_buffer),
             )
 

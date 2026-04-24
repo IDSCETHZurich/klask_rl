@@ -107,12 +107,21 @@ class DreamerSelfPlayWrapper(Wrapper):
     # Public API called from the training script
     # ------------------------------------------------------------------
 
-    def set_opponent(self, agent):
+    def set_opponent(self, agent, device=None):
         """Initialise the opponent from a Dreamer agent (deep-copies weights).
 
         Must be called once after the agent has been created and moved to device.
+
+        Parameters
+        ----------
+        agent : Dreamer
+            The training agent to copy weights from.
+        device : torch.device | str | None
+            Device for the opponent networks.  Defaults to ``agent.device``
+            (sim_device) which is correct for multi-GPU splits where the
+            opponent runs alongside the simulation.
         """
-        self._device = agent.device
+        self._device = torch.device(device) if device is not None else agent.device
         self._copy_weights(agent)
         num_envs = self.env.unwrapped.num_envs
         self._reset_opponent_state(num_envs)
@@ -156,6 +165,15 @@ class DreamerSelfPlayWrapper(Wrapper):
             return 0.0
         return sum(self._score_buffer) / len(self._score_buffer)
 
+    @property
+    def opponent_networks(self):
+        """Return (rssm, actor) references for imagination self-play.
+
+        Returns the uncompiled originals so that weight updates via
+        ``load_state_dict`` propagate to all consumers automatically.
+        """
+        return self._opponent_rssm_orig, self._opponent_actor_orig
+
     # ------------------------------------------------------------------
     # Gymnasium interface
     # ------------------------------------------------------------------
@@ -179,9 +197,16 @@ class DreamerSelfPlayWrapper(Wrapper):
         full_action = torch.cat([action, opponent_actions], dim=1)
         obs, reward, terminated, truncated, info = self.env.step(full_action, *args, **kwargs)
 
+        # Expose opponent actions so they can be stored in the replay buffer.
+        obs["opponent_action"] = opponent_actions
+
         # Update opponent RSSM state with the new opponent observation.
         done = terminated | truncated
         if self._opponent_encoder is not None:
+            # Build 4D prev_action for the opponent's RSSM when opponent_separation is on.
+            # From the opponent's perspective: [opp_action, player_action].
+            if self._opponent_rssm._act_dim > opponent_actions.shape[-1]:
+                self._opp_prev_action = torch.cat([opponent_actions, action], dim=-1)
             obs_for_encode = self._with_terminal_opponent_obs(obs, info)
             if self._opp_is_first is None:
                 num_envs = self.env.unwrapped.num_envs
@@ -191,6 +216,9 @@ class DreamerSelfPlayWrapper(Wrapper):
             self._encode_opponent_obs(obs_for_encode, is_first)
             self._opp_is_first.zero_()
             self._opp_pending_first.copy_(done.to(torch.bool))
+            # Expose post-observation opponent RSSM state for buffer storage.
+            obs["opp_stoch"] = self._opp_stoch.clone()
+            obs["opp_deter"] = self._opp_deter.clone()
 
         # --- Track episode outcomes for score-gated updates ---
         if done.any():
@@ -215,10 +243,13 @@ class DreamerSelfPlayWrapper(Wrapper):
         new weights automatically without recompilation.
         """
         if self._opponent_encoder is None:
-            # First call — must deepcopy to get architecture / device / dtype.
-            enc = copy.deepcopy(agent.encoder)
-            rssm = copy.deepcopy(agent.rssm)
-            actor = copy.deepcopy(agent.actor)
+            # First call — deepcopy, move to self._device, THEN compile.
+            # .to(device) before compile ensures CUDA graphs target the correct GPU.
+            enc = copy.deepcopy(agent.encoder).to(self._device)
+            rssm = copy.deepcopy(agent.rssm).to(self._device)
+            actor = copy.deepcopy(agent.actor).to(self._device)
+            # Fix RSSM._device so initial() creates tensors on the correct GPU.
+            rssm._device = self._device
             for module in (enc, rssm, actor):
                 module.eval()
                 for p in module.parameters():
@@ -238,6 +269,7 @@ class DreamerSelfPlayWrapper(Wrapper):
         else:
             # Subsequent calls — update parameters in-place; avoids deepcopy
             # overhead and preserves any torch.compile wrapping.
+            # load_state_dict handles cross-device (train→sim) automatically.
             self._opponent_encoder_orig.load_state_dict(agent.encoder.state_dict())
             self._opponent_rssm_orig.load_state_dict(agent.rssm.state_dict())
             self._opponent_actor_orig.load_state_dict(agent.actor.state_dict())
@@ -294,7 +326,10 @@ class DreamerSelfPlayWrapper(Wrapper):
         feat = self._opponent_rssm.get_feat(self._opp_stoch, self._opp_deter)
         action_dist = self._opponent_actor(feat)
         action = action_dist.mode if self._eval_mode else action_dist.rsample()
-        self._opp_prev_action = action
+        # Don't set _opp_prev_action here when opponent_separation is on;
+        # step() will build the full 4D prev_action after both actions are known.
+        if self._opponent_rssm._act_dim == action.shape[-1]:
+            self._opp_prev_action = action
         return action
 
     @torch.no_grad()

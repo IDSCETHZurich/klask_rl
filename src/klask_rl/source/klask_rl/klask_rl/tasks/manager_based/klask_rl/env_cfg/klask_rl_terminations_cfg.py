@@ -5,7 +5,7 @@ from isaaclab.utils import configclass
 # from . import mdp
 import isaaclab.envs.mdp as mdp
 
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 
 from ..utils_manager_based import (

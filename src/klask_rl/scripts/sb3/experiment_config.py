@@ -14,7 +14,6 @@ from a single YAML file. Configuration sections:
 
 from __future__ import annotations
 
-import os
 import random
 import sys
 from dataclasses import dataclass, field
@@ -42,6 +41,8 @@ class ExperimentConfig:
     seed: int = 42
     max_velocity: float = 0.2
     episode_length_s: float = 4.0
+    ball_reset_position_x: list[float] | tuple[float, float] | None = None
+    ball_reset_position_y: list[float] | tuple[float, float] | None = None
 
     # Agent config (SAC hyperparameters) - stored as dict for flexibility
     agent_cfg: dict[str, Any] = field(default_factory=dict)
@@ -51,6 +52,12 @@ class ExperimentConfig:
 
     # Two-stage HER settings (None if two-stage disabled)
     two_stage_cfg: dict[str, Any] | None = None
+
+    # Contact priority settings (None if contact priority disabled)
+    contact_priority_cfg: dict[str, Any] | None = None
+
+    # Domain randomization settings (None means disable DR events)
+    domain_randomization_cfg: dict[str, Any] | None = None
 
     # Training settings
     log_interval: int = 1000
@@ -80,6 +87,11 @@ class ExperimentConfig:
         return self.two_stage_cfg is not None and len(self.two_stage_cfg) > 0
 
     @property
+    def use_contact_priority(self) -> bool:
+        """Contact priority is enabled if contact_priority_cfg section exists."""
+        return self.contact_priority_cfg is not None and len(self.contact_priority_cfg) > 0
+
+    @property
     def video(self) -> bool:
         """Video recording is enabled if video_cfg section exists."""
         return self.video_cfg is not None and len(self.video_cfg) > 0
@@ -97,11 +109,7 @@ class ExperimentConfig:
     # HER property accessors
     @property
     def her_goal_selection_strategy(self) -> str:
-        return (
-            self.her_cfg.get("goal_selection_strategy", "future")
-            if self.her_cfg
-            else "future"
-        )
+        return self.her_cfg.get("goal_selection_strategy", "future") if self.her_cfg else "future"
 
     @property
     def her_n_sampled_goal(self) -> int:
@@ -130,77 +138,80 @@ class ExperimentConfig:
     # Two-stage HER property accessors
     @property
     def two_stage_player_pos_indices(self) -> list[int] | None:
-        return (
-            self.two_stage_cfg.get("player_pos_indices") if self.two_stage_cfg else None
-        )
+        return self.two_stage_cfg.get("player_pos_indices") if self.two_stage_cfg else None
 
     @property
     def two_stage_ball_pos_indices(self) -> list[int] | None:
-        return (
-            self.two_stage_cfg.get("ball_pos_indices") if self.two_stage_cfg else None
-        )
+        return self.two_stage_cfg.get("ball_pos_indices") if self.two_stage_cfg else None
 
     @property
     def two_stage_goal_pos_indices(self) -> list[int] | None:
-        return (
-            self.two_stage_cfg.get("goal_pos_indices") if self.two_stage_cfg else None
-        )
+        return self.two_stage_cfg.get("goal_pos_indices") if self.two_stage_cfg else None
 
     @property
     def two_stage_ball_hit_threshold(self) -> float:
-        return (
-            self.two_stage_cfg.get("ball_hit_threshold", 0.017)
-            if self.two_stage_cfg
-            else 0.017
-        )
+        return self.two_stage_cfg.get("ball_hit_threshold", 0.017) if self.two_stage_cfg else 0.017
 
     @property
     def two_stage_goal_score_threshold(self) -> float:
-        return (
-            self.two_stage_cfg.get("goal_score_threshold", 0.025)
-            if self.two_stage_cfg
-            else 0.025
-        )
+        return self.two_stage_cfg.get("goal_score_threshold", 0.025) if self.two_stage_cfg else 0.025
 
     @property
     def two_stage_ball_hit_env_reward(self) -> float | None:
-        return (
-            self.two_stage_cfg.get("ball_hit_env_reward")
-            if self.two_stage_cfg
-            else None
-        )
+        return self.two_stage_cfg.get("ball_hit_env_reward") if self.two_stage_cfg else None
 
     @property
     def two_stage_goal_score_env_reward(self) -> float | None:
-        return (
-            self.two_stage_cfg.get("goal_score_env_reward")
-            if self.two_stage_cfg
-            else None
-        )
+        return self.two_stage_cfg.get("goal_score_env_reward") if self.two_stage_cfg else None
 
     @property
     def two_stage_ball_hit_wrapper_reward(self) -> float | None:
-        return (
-            self.two_stage_cfg.get("ball_hit_wrapper_reward")
-            if self.two_stage_cfg
-            else None
-        )
+        return self.two_stage_cfg.get("ball_hit_wrapper_reward") if self.two_stage_cfg else None
 
     @property
     def two_stage_goal_score_wrapper_reward(self) -> float | None:
-        return (
-            self.two_stage_cfg.get("goal_score_wrapper_reward")
-            if self.two_stage_cfg
-            else None
-        )
+        return self.two_stage_cfg.get("goal_score_wrapper_reward") if self.two_stage_cfg else None
 
     @property
     def two_stage_ball_hit_timeout(self) -> float | None:
-        return (
-            self.two_stage_cfg.get("ball_hit_timeout")
-            if self.two_stage_cfg
-            else None
-        )
+        return self.two_stage_cfg.get("ball_hit_timeout") if self.two_stage_cfg else None
+
+    # Contact priority property accessors
+    @property
+    def contact_priority_ratio(self) -> float:
+        return self.contact_priority_cfg.get("contact_ratio", 0.8) if self.contact_priority_cfg else 0.8
+
+    @property
+    def contact_priority_player_pos_indices(self) -> list[int] | None:
+        return self.contact_priority_cfg.get("player_pos_indices") if self.contact_priority_cfg else None
+
+    @property
+    def contact_priority_ball_pos_indices(self) -> list[int] | None:
+        return self.contact_priority_cfg.get("ball_pos_indices") if self.contact_priority_cfg else None
+
+    @property
+    def contact_priority_goal_pos_indices(self) -> list[int] | None:
+        return self.contact_priority_cfg.get("goal_pos_indices") if self.contact_priority_cfg else None
+
+    @property
+    def contact_priority_ball_hit_threshold(self) -> float:
+        return self.contact_priority_cfg.get("ball_hit_threshold", 0.017) if self.contact_priority_cfg else 0.017
+
+    @property
+    def contact_priority_goal_score_threshold(self) -> float:
+        return self.contact_priority_cfg.get("goal_score_threshold", 0.025) if self.contact_priority_cfg else 0.025
+
+    @property
+    def contact_priority_ball_hit_env_reward(self) -> float | None:
+        return self.contact_priority_cfg.get("ball_hit_env_reward") if self.contact_priority_cfg else None
+
+    @property
+    def contact_priority_goal_score_env_reward(self) -> float | None:
+        return self.contact_priority_cfg.get("goal_score_env_reward") if self.contact_priority_cfg else None
+
+    @property
+    def contact_priority_ball_hit_timeout(self) -> float | None:
+        return self.contact_priority_cfg.get("ball_hit_timeout") if self.contact_priority_cfg else None
 
     # Wandb property accessors
     @property
@@ -232,13 +243,9 @@ class ExperimentConfig:
                 try:
                     return int(float(value))
                 except ValueError:
-                    print(
-                        f"[ERROR] Config '{field_name}' must be numeric, got: {value!r}"
-                    )
+                    print(f"[ERROR] Config '{field_name}' must be numeric, got: {value!r}")
                     sys.exit(1)
-        print(
-            f"[ERROR] Config '{field_name}' must be numeric, got: {type(value).__name__}"
-        )
+        print(f"[ERROR] Config '{field_name}' must be numeric, got: {type(value).__name__}")
         sys.exit(1)
 
     @staticmethod
@@ -274,6 +281,8 @@ class ExperimentConfig:
         seed = env_cfg.get("seed", 42)
         max_velocity = env_cfg.get("max_velocity", 0.2)
         episode_length_s = env_cfg.get("episode_length_s")
+        ball_reset_position_x = env_cfg.get("ball_reset_position_x")
+        ball_reset_position_y = env_cfg.get("ball_reset_position_y")
 
         # Extract agent config (SAC hyperparameters)
         agent_cfg = dict(data.get("agent", {}))
@@ -287,6 +296,16 @@ class ExperimentConfig:
         two_stage_cfg = data.get("two_stage")
         if two_stage_cfg is not None and not two_stage_cfg:
             two_stage_cfg = None
+
+        # Extract contact priority config
+        contact_priority_cfg = data.get("contact_priority")
+        if contact_priority_cfg is not None and not contact_priority_cfg:
+            contact_priority_cfg = None
+
+        # Extract domain randomization config
+        domain_randomization_cfg = data.get("domain_randomization")
+        if domain_randomization_cfg is not None and not domain_randomization_cfg:
+            domain_randomization_cfg = None
 
         # Extract training settings
         training_cfg = data.get("training", {})
@@ -313,9 +332,13 @@ class ExperimentConfig:
             seed=seed,
             max_velocity=max_velocity,
             episode_length_s=episode_length_s,
+            ball_reset_position_x=ball_reset_position_x,
+            ball_reset_position_y=ball_reset_position_y,
             agent_cfg=agent_cfg,
             her_cfg=her_cfg,
             two_stage_cfg=two_stage_cfg,
+            contact_priority_cfg=contact_priority_cfg,
+            domain_randomization_cfg=domain_randomization_cfg,
             log_interval=log_interval,
             checkpoint=checkpoint,
             export_io_descriptors=export_io_descriptors,
@@ -347,7 +370,7 @@ class ExperimentConfig:
                 # Disable livestream to avoid port conflicts in parallel training
                 if self.app_launcher.get("livestream", 0) != 0:
                     print(
-                        f"[INFO] Ray Tune detected: disabling livestream "
+                        "[INFO] Ray Tune detected: disabling livestream "
                         f"(was {self.app_launcher['livestream']}) to avoid port conflicts"
                     )
                     self.app_launcher["livestream"] = 0
@@ -379,11 +402,13 @@ class ExperimentConfig:
         return args
 
     def apply_cli_overrides(self, argv: list[str]) -> list[str]:
-        """Apply her.* and two_stage.* CLI overrides to this config.
+        """Apply non-Hydra CLI overrides to this config.
 
-        Since HER and two-stage parameters are NOT handled by Hydra (they live
-        in her_cfg / two_stage_cfg dicts), we need to intercept them from the
-        CLI args (e.g. passed by Ray Tune) and apply them directly.
+        Intercepts keys that are not part of the Hydra env struct and applies
+        them directly to this config, removing them from argv so Hydra does not
+        raise struct errors.
+
+        Handles her.*, two_stage.*, and env.ball_reset_position_{x,y} keys.
 
         Args:
             argv: List of CLI arguments, e.g. ["her.n_sampled_goal=8", "agent.lr=1e-4"]
@@ -392,7 +417,11 @@ class ExperimentConfig:
             Filtered list of CLI arguments with her.* and two_stage.* keys removed.
         """
         filtered = []
-        override_prefixes = {"her.": "her_cfg", "two_stage.": "two_stage_cfg"}
+        override_prefixes = {
+            "her.": "her_cfg",
+            "two_stage.": "two_stage_cfg",
+            "contact_priority.": "contact_priority_cfg",
+        }
 
         for arg in argv:
             if "=" not in arg:
@@ -401,6 +430,14 @@ class ExperimentConfig:
 
             key, raw_value = arg.split("=", 1)
             key = key.strip("'\"")
+
+            # Runtime-only env keys (not part of Hydra struct)
+            if key in ("env.ball_reset_position_x", "env.ball_reset_position_y"):
+                parsed_value = self._parse_cli_value(raw_value)
+                attr = "ball_reset_position_x" if key == "env.ball_reset_position_x" else "ball_reset_position_y"
+                setattr(self, attr, parsed_value)
+                print(f"[INFO] CLI override: {attr} = {parsed_value}")
+                continue
 
             matched = False
             for prefix, cfg_attr in override_prefixes.items():
@@ -411,9 +448,7 @@ class ExperimentConfig:
                         cfg_dict = {}
                         setattr(self, cfg_attr, cfg_dict)
                     cfg_dict[param_name] = self._parse_cli_value(raw_value)
-                    print(
-                        f"[INFO] CLI override: {cfg_attr}.{param_name} = {cfg_dict[param_name]}"
-                    )
+                    print(f"[INFO] CLI override: {cfg_attr}.{param_name} = {cfg_dict[param_name]}")
                     matched = True
                     break
 
@@ -441,9 +476,7 @@ class ExperimentConfig:
             inner = raw[1:-1].strip()
             if not inner:
                 return []
-            items = [
-                ExperimentConfig._parse_cli_value(v.strip()) for v in inner.split(",")
-            ]
+            items = [ExperimentConfig._parse_cli_value(v.strip()) for v in inner.split(",")]
             return items
 
         # Int
@@ -498,10 +531,12 @@ class ExperimentConfig:
         if device is not None:
             overrides.append(f"env.sim.device={device}")
 
-        # Termination overrides (for two-stage HER)
+        # Termination overrides (for two-stage HER and contact priority)
         if self.two_stage_ball_hit_timeout is not None:
+            overrides.append(f"env.terminations.ball_hit_timeout_term.params.timeout={self.two_stage_ball_hit_timeout}")
+        elif self.contact_priority_ball_hit_timeout is not None:
             overrides.append(
-                f"env.terminations.ball_hit_timeout_term.params.timeout={self.two_stage_ball_hit_timeout}"
+                f"env.terminations.ball_hit_timeout_term.params.timeout={self.contact_priority_ball_hit_timeout}"
             )
 
         # Agent overrides - only fields that exist in base sb3_sac_cfg.yaml
@@ -527,9 +562,7 @@ class ExperimentConfig:
         for key, value in self.agent_cfg.items():
             if key in safe_agent_fields:
                 agent_overrides.extend(
-                    self._flatten_dict_to_overrides(
-                        {key: value}, prefix="agent", exclude_keys=exclude_keys
-                    )
+                    self._flatten_dict_to_overrides({key: value}, prefix="agent", exclude_keys=exclude_keys)
                 )
 
         overrides.extend(agent_overrides)
@@ -562,9 +595,7 @@ class ExperimentConfig:
 
             if isinstance(value, dict):
                 # Recurse into nested dicts
-                overrides.extend(
-                    self._flatten_dict_to_overrides(value, full_key, exclude_keys)
-                )
+                overrides.extend(self._flatten_dict_to_overrides(value, full_key, exclude_keys))
             elif isinstance(value, list):
                 # Format lists for Hydra
                 formatted = "[" + ",".join(str(v) for v in value) + "]"
@@ -638,10 +669,14 @@ class ExperimentConfig:
                 "seed": self.seed,
                 "max_velocity": self.max_velocity,
                 "episode_length_s": self.episode_length_s,
+                "ball_reset_position_x": self.ball_reset_position_x,
+                "ball_reset_position_y": self.ball_reset_position_y,
             },
             "agent": self.agent_cfg,
             "her": self.her_cfg,
             "two_stage": self.two_stage_cfg,
+            "contact_priority": self.contact_priority_cfg,
+            "domain_randomization": self.domain_randomization_cfg,
             "training": {
                 "log_interval": self.log_interval,
                 "checkpoint": self.checkpoint,

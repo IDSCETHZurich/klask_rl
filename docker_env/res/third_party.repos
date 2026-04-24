@@ -1,1 +1,5 @@
-Once the dreamer fork is ready to merge we can ad it as a externerl repo here and remove the submodule
+repositories:
+  torchrl:
+    type: git
+    url: https://github.com/pytorch/rl.git
+    version: v0.11.1

@@ -6,21 +6,26 @@ defaults:
 
 model:
   rep_loss: "dreamer"
+  compile: True
+  compile_mode: "default"
+  inference_compile_mode: "default"
 
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_pretraining_sprite_size128
+wandb_name: dreamer_sprite_new_AM_and_boarder_coll
 
 # Initialization
 logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
-sim_device: null           # if null -> falls back to device (simulation + inference GPU)
-train_devices: null        # if null -> falls back to [device]; list of training GPUs (first is primary)
-init_checkpoint: /workspace/klask_rl/logdir/2026-04-05/13-20-17/checkpoint_1700008.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
-load_world_model_only: true
+sim_device: "cuda:0"
+train_devices:
+  - "cuda:1"
+  - "cuda:2"
+init_checkpoint: /workspace/klask_rl/logdir/2026-04-22/10-54-12/checkpoint_564064.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+load_world_model_only: false
 
 hydra:
   run:
@@ -28,33 +33,33 @@ hydra:
   searchpath:
     - file://${script_dir:}/r2dreamer/configs
 
-batch_size: 4
-batch_length: 128
-micro_batch_size: 2
+batch_size: 10
+batch_length: 64
+micro_batch_size: 5
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
   task: "isaaclab_Klask-Rl-Dreamer-Sprite-v0"
-  steps: 1e7
-  env_num: 8
+  steps: 1e+7
+  env_num: 16
   eval_episode_num: 10
   action_repeat: 1
   decimation: 20
-  train_ratio: 128
+  train_ratio: 80
   time_limit: 1000
   sim_dt: 0.001
   seed: ${seed}
   device: ${device}
-  ball_reset_position_x: [-0.15, 0.15]
-  ball_reset_position_y: [-0.10, -0.02]
-  max_velocity: 1.0 # [m/s] Maximum velocity for player movement
-  episode_length_s: 3.0 # [s] Episode length in seconds
+  ball_reset_position_x: [ -0.15, 0.15 ]
+  ball_reset_position_y: [ -0.1, 0.1 ]
+  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
+  episode_length_s: 10.0 # [s] Episode length in seconds
   actuator_model:
     enable: true
-    checkpoint: null
+    checkpoint: /workspace/klask_rl/logs/actuator_model/data/new/checkpoints/model_data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states_train_seed0.pt
   collision_avoidance:
-    enable: false
-  size: [128, 128]
+    enable: true
+  size: [ 128, 128 ]
   encoder:
     mlp_keys: "$^"
     cnn_keys: "image"
@@ -69,69 +74,41 @@ env:
       type: static
       weight: 0.0
     shot_over_middle_line:
-      type: exponential
-      weight: 5000.0
-      decay_rate: 1.0e-07
-    player_in_goal:
       type: static
       weight: 0.0
+    player_in_goal:
+      type: static
+      weight: -1000
     opponent_in_goal:
       type: static
       weight: 0.0
     goal_scored:
       type: static
-      weight: 2500.0
+      weight: 1000.0
     goal_conceded:
       type: static
-      weight: 0.0
+      weight: -1000
     distance_player_ball_own_half:
-      type: schedule
-      phases:
-        - type: static
-          weight: 100.0
-          steps: [0, 500_000]
-        - type: sigmoid
-          weight: [100.0, 10.0]
-          steps: [500_000, 1_000_000]
-          steepness: 6.0
-        - type: static
-          weight: 10.0
-          steps: [1_000_000, -1]
+      type: static
+      weight: 0.0
     distance_ball_opponent_goal:
       type: exponential
       weight: 0.0
-      decay_rate: 1.0e-07
+      decay_rate: 1e-7
     distance_ball_own_goal:
       type: exponential
       weight: 0.0
-      decay_rate: 1.0e-07
+      decay_rate: 1e-7
     ball_speed:
       type: exponential
       weight: 0.0
-      decay_rate: 1.0e-07
+      decay_rate: 1e-7
     ball_stationary:
       type: static
       weight: 0.0
     collision_player_ball:
-      type: schedule
-      phases:
-        - type: static
-          weight: 300.0
-          steps: [0, 1_000_000]
-        - type: sigmoid
-          weight: [300.0, 150.0]
-          steps: [1_000_000, 1_500_000]
-          steepness: 6.0
-        - type: static
-          weight: 150.0
-          steps: [1_500_000, 2_500_000]
-        - type: sigmoid
-          weight: [150.0, 50.0]
-          steps: [2_500_000, 3_000_000]
-          steepness: 6.0
-        - type: static
-          weight: 50.0
-          steps: [3_000_000, -1]
+      type: static
+      weight: 0.0
     ball_in_own_half:
       type: static
       weight: 0.0
@@ -143,7 +120,7 @@ env:
       weight: 0.0
     player_speed:
       type: static
-      weight: 10.0
+      weight: 0.0
     player_speed_exp:
       type: static
       weight: 0.0
@@ -160,37 +137,69 @@ env:
       phases:
         - type: static
           speed: 1.0
-          steps: [0, 1_000_000]
+          steps: [ 0, 1_000_000 ]
         - type: sigmoid
-          speed: [1.0, 0.0]
-          steps: [1_000_000, 3_000_000]
+          speed: [ 1.0, 0.0 ]
+          steps: [ 1_000_000, 3_000_000 ]
           steepness: 6.0
         - type: static
           speed: 0.0
-          steps: [3_000_000, -1]
+          steps: [ 3_000_000, -1 ]
 
 buffer:
   batch_size: ${batch_size}
   batch_length: ${batch_length}
-  max_size: 5e5
+  max_size: 5e+5
   device: ${device}
   storage_device: "cpu"
+  prioritized:
+    enable: true
+    alpha: 0.7 # 0=uniform, 1=fully priority-proportional
+    beta: 0.4 # importance-sampling correction (0=off)
+    baseline_priority: 1.0
+    debug_metrics: true
+    tags:
+      - name: "ball_contact"
+        priority: 20.0
+        reward_term: "collision_player_ball_simple"
+      - name: "goal_scored"
+        priority: 20.0
+        termination_term: "goal_scored"
+      - name: "goal_conceded"
+        priority: 5.0
+        termination_term: "goal_conceded"
+      - name: "player_in_goal"
+        priority: 2.0
+        termination_term: "player_in_goal"
 
 trainer:
   steps: ${env.steps}
   pretrain: 0
-  eval_every: 4e4
+  eval_every: 4e+4
   eval_episode_num: ${env.eval_episode_num}
   batch_size: ${batch_size}
   batch_length: ${batch_length}
   train_ratio: ${env.train_ratio}
   video_pred_log: True
   params_hist_log: False
-  update_log_every: 5e3
+  update_log_every: 5e+3
   action_repeat: ${env.action_repeat}
   save_checkpoint_every: 100_000 # Save checkpoint every N steps (0 = only save at the end)
+  profiling:
+    torch_profiler: false # Periodic chrome traces (Perfetto)
+    torch_profiler_wait: 2000 # Updates between profiling windows
+    torch_profiler_active: 5 # Updates per profiling window
+    cprofile: false # Periodic cProfile dumps
+    cprofile_every: 10000 # Steps between cProfile dumps
 
 self_play:
   enabled: true
-  update_score: 0.2 # opponent updated only when rolling mean score > this
+  update_score: 0.3 # opponent updated only when rolling mean score > this
   games_to_track: 4096 # rolling window size for score averaging
+
+opponent_separation:
+  enabled: true # Feed explicit opponent actions to the world model (4D = player + opponent)
+  imag_opponent: "selfplay" # Opponent policy during imagination: "random" | "zero" | "selfplay"
+  trajectory_mirroring:
+    enabled: true # Compute opponent rewards + mirror trajectories at sampling time
+    warm_start: true # Use opponent RSSM states to warm-start mirrored trajectories

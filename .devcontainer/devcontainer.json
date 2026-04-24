@@ -12,7 +12,8 @@
         "ACCEPT_EULA": "Y",
         "PRIVACY_CONSENT": "Y",
         "DISPLAY": "${localEnv:DISPLAY}",
-        "LIVESTREAM": "1"
+        "LIVESTREAM": "1",
+        "HISTFILE": "/root/.shell_history/.bash_history"
     },
     "mounts": [
         "source=${localEnv:HOME}/.Xauthority,target=/root/.Xauthority,type=bind",
@@ -25,10 +26,12 @@
         "source=isaac-lab-klask-rl-devcontainer_data,target=/root/.local/share/ov/data,type=volume",
         "source=isaac-lab-klask-rl-devcontainer_documents,target=/root/Documents,type=volume",
         "source=isaac-lab-klask-rl-devcontainer_claude,target=/root/.claude,type=volume",
-        "source=isaac-lab-klask-rl-devcontainer_shell_history,target=/root/.bash_history,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_shell_history,target=/root/.shell_history,type=volume",
+        "source=isaac-lab-klask-rl-devcontainer_torch_cache,target=/workspace/klask_rl/.torch_cache,type=volume",
         "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",
         "source=${localWorkspaceFolder}/third_party/dreamerv3-torch,target=/workspace/klask_rl/scripts/dreamer/dreamerv3torch,type=bind",
-        "source=${localWorkspaceFolder}/third_party/r2dreamer,target=/workspace/klask_rl/scripts/dreamer/r2dreamer,type=bind"
+        "source=${localWorkspaceFolder}/third_party/r2dreamer,target=/workspace/klask_rl/scripts/dreamer/r2dreamer,type=bind",
+        "source=${localWorkspaceFolder}/third_party/fast_sac,target=/workspace/klask_rl/scripts/fast_sac,type=bind"
     ],
     "workspaceFolder": "/workspace/klask_rl",
     "customizations": {
@@ -39,7 +42,7 @@
                 "ms-python.flake8",
                 "ms-python.isort",
                 "redhat.vscode-yaml",
-                "streetsidesoftware.code-spell-checker", 
+                "streetsidesoftware.code-spell-checker",
                 "anthropic.claude-code"
             ],
             "settings": {
@@ -83,7 +86,8 @@
                     "/workspace/isaaclab/_isaac_sim/extscache/omni.kit.pip_archive-0.0.0+69cbf6ad.lx64.cp311/pip_prebundle",
                     "/workspace/isaaclab/_isaac_sim/exts/omni.pip.compute/pip_prebundle",
                     "/workspace/klask_rl/source/klask_rl",
-                    "/workspace/klask_rl/scripts/dreamer/r2dreamer"
+                    "/workspace/klask_rl/scripts/dreamer/r2dreamer",
+                    "/workspace/klask_rl/scripts/fast_sac/klask_her"
                 ]
             }
         }

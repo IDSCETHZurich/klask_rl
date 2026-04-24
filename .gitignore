@@ -237,3 +237,6 @@ logdir/
 
 # Renderer Debug Outputs
 src/klask_rl/scripts/dreamer/sprite_renderer/debug/test_renders
+
+# Fast SAC
+src/klask_rl/runs/

@@ -7,7 +7,8 @@ from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import TiledCameraCfg
 from isaaclab.utils import configclass
-from klask_rl.assets.robots.klask import KLASK_CFG, KLASK_PARAMS
+from klask_rl.assets.robots.klask_cfg import KLASK_CFG
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 
 @configclass

@@ -4,12 +4,14 @@ from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 from ..utils_manager_based import (
     angle_ball_goal,
     angle_ball_opp,
     body_xy_pos_w,
+    direction_ball_goal,
+    direction_to_ball,
     distance_ball_to_player,
     distance_to_goal,
     goal_position_obs,
@@ -17,8 +19,8 @@ from ..utils_manager_based import (
     padded_image_rotated,
     root_lin_xy_vel_w,
     root_xy_pos_w,
-    sprite_rendered_image,
-    sprite_rendered_image_rotated,
+    sprite_rendered_image_parity_opponent,
+    sprite_rendered_image_parity_player,
 )
 
 
@@ -29,8 +31,6 @@ def _peg_obs_group(
     other_body: str,
     other_x_joint: str,
     other_y_joint: str,
-    own_goal: tuple,
-    other_goal: tuple,
     rotate: bool = False,
 ) -> type:
     """Factory: returns a @configclass ObsGroup for one player's full policy observations.
@@ -167,6 +167,38 @@ def _peg_obs_group_extended(
     return _PegObsGroupExtended
 
 
+def _peg_obs_group_extended_vec(
+    base: type,
+    own_body: str,
+    other_body: str,
+    own_goal: tuple,
+    other_goal: tuple,
+) -> type:
+    """Factory: returns a @configclass ObsGroup that extends the basic peg obs with
+    vector auxiliary terms, from the perspective of ``own``.
+    """
+
+    @configclass
+    class _PegObsGroupExtendedVec(base):
+
+        ball_own_peg_vec = ObsTerm(
+            func=direction_to_ball,
+            params={
+                "ball_cfg": SceneEntityCfg(name="ball"),
+                "player_cfg": SceneEntityCfg(name="klask", body_names=[own_body]),
+            },
+        )
+        ball_oppo_goal_vec = ObsTerm(
+            func=direction_ball_goal,
+            params={
+                "ball_cfg": SceneEntityCfg(name="ball"),
+                "goal": other_goal,
+            },
+        )
+
+    return _PegObsGroupExtendedVec
+
+
 def _action_history_obs_group(base: type, action_name: str, history_length: int) -> type:
     """Factory: returns a @configclass ObsGroup that extends a base obs group with a history of past actions."""
 
@@ -220,8 +252,6 @@ _PlayerPolicyCfg = _fix_pickle(
         other_body="Peg_2",
         other_x_joint="slider_to_peg_2",
         other_y_joint="ground_to_slider_2",
-        own_goal=KLASK_PARAMS["player_goal"],
-        other_goal=KLASK_PARAMS["opponent_goal"],
     ),
     "_PlayerPolicyCfg",
 )
@@ -233,8 +263,6 @@ _OpponentPolicyCfg = _fix_pickle(
         other_body="Peg_1",
         other_x_joint="slider_to_peg_1",
         other_y_joint="ground_to_slider_1",
-        own_goal=KLASK_PARAMS["opponent_goal"],
-        other_goal=KLASK_PARAMS["player_goal"],
         rotate=True,
     ),
     "_OpponentPolicyCfg",
@@ -261,6 +289,27 @@ _OpponentPolicyExtendedCfg = _fix_pickle(
     "_OpponentPolicyExtendedCfg",
 )
 
+_PlayerPolicyExtendedVecCfg = _fix_pickle(
+    _peg_obs_group_extended_vec(
+        base=_PlayerPolicyCfg,
+        own_body="Peg_1",
+        other_body="Peg_2",
+        own_goal=KLASK_PARAMS["player_goal"],
+        other_goal=KLASK_PARAMS["opponent_goal"],
+    ),
+    "_PlayerPolicyExtendedVecCfg",
+)
+_OpponentPolicyExtendedVecCfg = _fix_pickle(
+    _peg_obs_group_extended_vec(
+        base=_OpponentPolicyCfg,
+        own_body="Peg_2",
+        other_body="Peg_1",
+        own_goal=KLASK_PARAMS["opponent_goal"],
+        other_goal=KLASK_PARAMS["player_goal"],
+    ),
+    "_OpponentPolicyExtendedVecCfg",
+)
+
 _PlayerPolicyActionHistoryCfg = _fix_pickle(
     _action_history_obs_group(
         base=_PlayerPolicyCfg, action_name="player", history_length=KLASK_PARAMS["action_history"]
@@ -281,6 +330,142 @@ _TwoStageHerPlayerPolicyCfg = _fix_pickle(
 _TwoStageHerOpponentPolicyCfg = _fix_pickle(
     _peg_obs_group_with_goal(_OpponentPolicyCfg, KLASK_PARAMS["player_goal"], rotate=True),
     "_TwoStageHerOpponentPolicyCfg",
+)
+
+
+_TwoStageHerPlayerPolicyExtendedCfg = _fix_pickle(
+    _peg_obs_group_with_goal(_PlayerPolicyExtendedVecCfg, KLASK_PARAMS["opponent_goal"]),
+    "_TwoStageHerPlayerPolicyExtendedCfg",
+)
+_TwoStageHerOpponentPolicyExtendedCfg = _fix_pickle(
+    _peg_obs_group_with_goal(_OpponentPolicyExtendedVecCfg, KLASK_PARAMS["player_goal"], rotate=True),
+    "_TwoStageHerOpponentPolicyExtendedCfg",
+)
+
+
+def _fast_sac_obs_group(
+    own_body: str,
+    own_x_joint: str,
+    own_y_joint: str,
+    other_body: str,
+    other_x_joint: str,
+    other_y_joint: str,
+    own_goal: tuple,
+    other_goal: tuple,
+    rotate: bool = False,
+) -> type:
+    """Factory: returns a @configclass ObsGroup for the FastSAC 18-dim layout.
+
+    Observation order:
+      [0:2]   ball XY         [2:4]   ball vel XY
+      [4:6]   own peg XY      [6:8]   other peg XY
+      [8]     own peg vx       [9]     own peg vy
+      [10]    other peg vx     [11]    other peg vy
+      [12:14] ball-own diff XY [14:16] ball-goal diff XY
+      [16:18] goal XY
+
+    When ``rotate=True`` a 180° rotation is applied (all outputs are negated).
+    """
+    s2 = (-1.0, -1.0) if rotate else None
+    s1 = -1.0 if rotate else None
+
+    @configclass
+    class _FastSACObsGroup(ObsGroup):
+        ball_pos = ObsTerm(
+            func=root_xy_pos_w,
+            params={"asset_cfg": SceneEntityCfg(name="ball")},
+            scale=s2,
+        )
+        ball_vel = ObsTerm(
+            func=root_lin_xy_vel_w,
+            params={"asset_cfg": SceneEntityCfg(name="ball")},
+            scale=s2,
+        )
+        own_pos = ObsTerm(
+            func=body_xy_pos_w,
+            params={"asset_cfg": SceneEntityCfg(name="klask", body_names=[own_body])},
+            scale=s2,
+        )
+        other_pos = ObsTerm(
+            func=body_xy_pos_w,
+            params={"asset_cfg": SceneEntityCfg(name="klask", body_names=[other_body])},
+            scale=s2,
+        )
+        own_x_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[own_x_joint])},
+            scale=s1,
+        )
+        own_y_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[own_y_joint])},
+            scale=s1,
+        )
+        other_x_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[other_x_joint])},
+            scale=s1,
+        )
+        other_y_vel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params={"asset_cfg": SceneEntityCfg(name="klask", joint_names=[other_y_joint])},
+            scale=s1,
+        )
+        ball_own_diff = ObsTerm(
+            func=direction_to_ball,
+            params={
+                "player_cfg": SceneEntityCfg(name="klask", body_names=[own_body]),
+                "ball_cfg": SceneEntityCfg(name="ball"),
+            },
+            scale=s2,
+        )
+        ball_goal_diff = ObsTerm(
+            func=direction_ball_goal,
+            params={
+                "ball_cfg": SceneEntityCfg(name="ball"),
+                "goal": other_goal,
+            },
+            scale=s2,
+        )
+        goal_pos = ObsTerm(
+            func=goal_position_obs,
+            params={"goal": other_goal[:2]},
+            scale=s2,
+        )
+
+        def __post_init__(self) -> None:
+            self.enable_corruption = False
+            self.concatenate_terms = True
+
+    return _FastSACObsGroup
+
+
+_FastSACPlayerPolicyCfg = _fix_pickle(
+    _fast_sac_obs_group(
+        own_body="Peg_1",
+        own_x_joint="slider_to_peg_1",
+        own_y_joint="ground_to_slider_1",
+        other_body="Peg_2",
+        other_x_joint="slider_to_peg_2",
+        other_y_joint="ground_to_slider_2",
+        own_goal=KLASK_PARAMS["player_goal"],
+        other_goal=KLASK_PARAMS["opponent_goal"],
+    ),
+    "_FastSACPlayerPolicyCfg",
+)
+_FastSACOpponentPolicyCfg = _fix_pickle(
+    _fast_sac_obs_group(
+        own_body="Peg_2",
+        own_x_joint="slider_to_peg_2",
+        own_y_joint="ground_to_slider_2",
+        other_body="Peg_1",
+        other_x_joint="slider_to_peg_1",
+        other_y_joint="ground_to_slider_1",
+        own_goal=KLASK_PARAMS["opponent_goal"],
+        other_goal=KLASK_PARAMS["player_goal"],
+        rotate=True,
+    ),
+    "_FastSACOpponentPolicyCfg",
 )
 
 
@@ -316,8 +501,21 @@ class TwoStageHerObservationsCfg:
     """
 
     # observation groups
-    policy: ObsGroup = _TwoStageHerPlayerPolicyCfg()
-    opponent: ObsGroup = _TwoStageHerOpponentPolicyCfg()
+    policy: ObsGroup = _TwoStageHerPlayerPolicyExtendedCfg()
+    opponent: ObsGroup = _TwoStageHerOpponentPolicyExtendedCfg()
+
+
+@configclass
+class FastSACObservationsCfg:
+    """18-dim observation layout matching fast_sac's expected format.
+
+    Uses IsaacLab native coordinates (X=short axis, Y=long/playing axis).
+    Both ``policy`` and ``opponent`` groups produce [N, 18] tensors.
+    The opponent group applies 180° rotation and swaps peg roles.
+    """
+
+    policy: ObsGroup = _FastSACPlayerPolicyCfg()
+    opponent: ObsGroup = _FastSACOpponentPolicyCfg()
 
 
 @configclass
@@ -373,7 +571,7 @@ class DreamerSpriteObservationsCfg(DreamerObservationsCfg):
     @configclass
     class SpriteImageObsGroup(ObsGroup):
         image = ObsTerm(
-            func=sprite_rendered_image,
+            func=sprite_rendered_image_parity_player,
             params={
                 "peg1_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
                 "peg2_cfg": SceneEntityCfg("klask", body_names=["Peg_2"]),
@@ -391,8 +589,10 @@ class DreamerSpriteObservationsCfg(DreamerObservationsCfg):
     @configclass
     class SpriteOpponentImageObsGroup(ObsGroup):
         image = ObsTerm(
-            func=sprite_rendered_image_rotated,
+            func=sprite_rendered_image_parity_opponent,
             params={
+                # peg_cfgs unused at runtime but kept so apply_camera_size_to_env_cfg
+                # can find and override target_h / target_w.
                 "peg1_cfg": SceneEntityCfg("klask", body_names=["Peg_1"]),
                 "peg2_cfg": SceneEntityCfg("klask", body_names=["Peg_2"]),
                 "ball_cfg": SceneEntityCfg("ball"),

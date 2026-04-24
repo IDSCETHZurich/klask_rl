@@ -10,14 +10,15 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_wpt_chcj0m6t_4M_with_AM_0.4m/s
+wandb_name: dreamer_pretraining_vision_PER
 
 # Initialization
-logdir: /workspace/klask_rl/logdir/2026-03-31/19-45-07 # logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
+logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
 init_checkpoint: null # Path to checkpoint for weight-only init (pretrain -> finetune)
+load_world_model_only: false
 
 hydra:
   run:
@@ -25,15 +26,15 @@ hydra:
   searchpath:
     - file://${script_dir:}/r2dreamer/configs
 
-batch_size: 8
-batch_length: 128
-micro_batch_size: 8
+batch_size: 16
+batch_length: 64
+micro_batch_size: 16
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
   task: "isaaclab_Klask-Rl-Dreamer-v0"
-  steps: 2e7
-  env_num: 16
+  steps: 1e7
+  env_num: 32
   eval_episode_num: 10
   action_repeat: 1
   decimation: 20
@@ -43,9 +44,9 @@ env:
   seed: ${seed}
   device: ${device}
   ball_reset_position_x: [-0.15, 0.15]
-  ball_reset_position_y: [-0.10, -0.04]
-  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
-  episode_length_s: 5.0 # [s] Episode length in seconds
+  ball_reset_position_y: [-0.10, -0.02]
+  max_velocity: 1.0 # [m/s] Maximum velocity for player movement
+  episode_length_s: 10.0 # [s] Episode length in seconds
   actuator_model:
     enable: true
     checkpoint: null
@@ -69,58 +70,38 @@ env:
       type: static
       weight: 0.0
     player_in_goal:
-      type: schedule
-      phases:
-        - type: static
-          weight: 0.0
-          steps: [0, 2_000_000]
-        - type: sigmoid
-          weight: [0.0, -1500.0]
-          steps: [2_000_000, 2_500_000]
-          steepness: 6.0
-        - type: static
-          weight: -1500.0
-          steps: [2_500_000, -1]
+      type: static
+      weight: -1000.0
     opponent_in_goal:
       type: static
       weight: 0.0
     goal_scored:
       type: static
-      weight: 5000.0
+      weight: 1000.0
     goal_conceded:
-      type: schedule
-      phases:
-        - type: static
-          weight: 0.0
-          steps: [0, 2_500_000]
-        - type: sigmoid
-          weight: [0.0, -1500.0]
-          steps: [2_500_000, 3_000_000]
-          steepness: 6.0
-        - type: static
-          weight: -1500.0
-          steps: [3_000_000, -1]
+      type: static
+      weight: -1000.0
     distance_player_ball_own_half:
       type: static
       weight: 0.0
     distance_ball_opponent_goal:
       type: exponential
       weight: 0.0
-      decay_rate: 1.0e-6
+      decay_rate: 1.0e-07
     distance_ball_own_goal:
       type: exponential
       weight: 0.0
-      decay_rate: 1.0e-6
+      decay_rate: 1.0e-07
     ball_speed:
-      type: static
+      type: exponential
       weight: 0.0
+      decay_rate: 1.0e-07
     ball_stationary:
       type: static
       weight: 0.0
     collision_player_ball:
-      type: exponential
+      type: static
       weight: 0.0
-      decay_rate: 1.0e-6
     ball_in_own_half:
       type: static
       weight: 0.0
@@ -130,6 +111,12 @@ env:
     player_strategically_positioned:
       type: static
       weight: 0.0
+    player_speed:
+      type: static
+      weight: 0.0
+    player_speed_exp:
+      type: static
+      weight: 0.0
   terminations:
     time_out: true
     goal_scored: true
@@ -137,12 +124,43 @@ env:
     player_in_goal: true
     opponent_in_goal: true
 
+  initialization:
+    init_velocity:
+      type: schedule
+      phases:
+        - type: static
+          speed: 1.0
+          steps: [0, 1_000_000]
+        - type: sigmoid
+          speed: [1.0, 0.0]
+          steps: [1_000_000, 3_000_000]
+          steepness: 6.0
+        - type: static
+          speed: 0.0
+          steps: [3_000_000, -1]
+
 buffer:
   batch_size: ${batch_size}
   batch_length: ${batch_length}
   max_size: 5e5
   device: ${device}
   storage_device: "cpu"
+  prioritized:
+    enable: true
+    alpha: 0.7 # 0=uniform, 1=fully priority-proportional
+    beta: 0.4 # importance-sampling correction (0=off)
+    baseline_priority: 1.0
+    debug_metrics: true
+    tags:
+      - name: "ball_contact"
+        priority: 20.0
+        reward_term: "collision_player_ball_simple"
+      - name: "goal_scored"
+        priority: 20.0
+        termination_term: "goal_scored"
+      - name: "goal_conceded"
+        priority: 10.0
+        termination_term: "goal_conceded"
 
 trainer:
   steps: ${env.steps}
@@ -160,5 +178,5 @@ trainer:
 
 self_play:
   enabled: true
-  update_score: 0.3 # opponent updated only when rolling mean score > this
+  update_score: 0.2 # opponent updated only when rolling mean score > this
   games_to_track: 4096 # rolling window size for score averaging

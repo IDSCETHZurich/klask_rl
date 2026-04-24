@@ -7,7 +7,7 @@ from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import Camera, RayCasterCamera, TiledCamera
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 
 def _pad_image_to_target(images: torch.Tensor, target_h: int, target_w: int) -> torch.Tensor:
@@ -111,11 +111,19 @@ def sprite_rendered_image(
     ball_cfg: SceneEntityCfg,
     target_h: int = 128,
     target_w: int = 128,
+    rotate: bool = False,
 ) -> torch.Tensor:
     """Render sprite-based board images from sim state positions.
 
     Returns a ``(N, target_h, target_w, 3)`` uint8 RGB tensor on the env device.
     The unpadded render is cached so ``sprite_rendered_image_rotated`` can reuse it.
+
+    When ``rotate=True`` the three 2D positions (peg1, peg2, ball) are negated
+    before being passed to the renderer — equivalent to a 180° rotation of the
+    board around its centre. Combined with swapping the ``peg1_cfg`` / ``peg2_cfg``
+    arguments this produces the opponent's ego-frame view: the opponent's own
+    peg is drawn at the bottom with the ``left_peg`` sprite (matching how the
+    player was trained).
     """
     cfg = env.cfg
     cam_h, cam_w = _sprite_camera_params(min(target_h, target_w))
@@ -125,6 +133,11 @@ def sprite_rendered_image(
     peg1_pos = body_xy_pos_w(env, peg1_cfg)  # (N, 2) GPU tensor
     peg2_pos = body_xy_pos_w(env, peg2_cfg)  # (N, 2) GPU tensor
     ball_pos = root_xy_pos_w(env, ball_cfg)  # (N, 2) GPU tensor
+
+    if rotate:
+        peg1_pos = -peg1_pos
+        peg2_pos = -peg2_pos
+        ball_pos = -ball_pos
 
     # Transfer to CPU once (batch)
     peg1_np = peg1_pos.cpu().numpy()
@@ -168,6 +181,109 @@ def sprite_rendered_image_rotated(
     images = _sprite_image_cache.pop("images")
     rotated = torch.rot90(images, k=2, dims=[1, 2])
     return _pad_image_to_target(rotated, target_h, target_w)
+
+
+def sprite_rendered_image_parity_player(
+    env: ManagerBasedRLEnv,
+    peg1_cfg: SceneEntityCfg,
+    peg2_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    target_h: int = 128,
+    target_w: int = 128,
+) -> torch.Tensor:
+    """Render player images with even/odd env parity split.
+
+    Even envs: natural render — left_peg sprite at bottom (player's own peg).
+    Odd  envs: rot90 of the opponent-ego render — right_peg style at bottom.
+
+    Both renders are cached under ``_sprite_image_cache["natural"]`` and
+    ``_sprite_image_cache["opp_ego"]`` for ``sprite_rendered_image_parity_opponent``
+    to consume. This function must be called before that one (image group before
+    opponent_image group in DreamerSpriteObservationsCfg).
+
+    After trajectory mirroring in the replay buffer the encoder sees a 50/50
+    split between left_peg-at-bottom and right_peg-at-bottom views, which
+    trains the model to generalise across both physical board sides.
+    """
+    cfg = env.cfg
+    cam_h, cam_w = _sprite_camera_params(min(target_h, target_w))
+    renderer = _get_renderer(cfg.sprite_dir, cfg.background_path, cam_w, cam_h)
+    N = env.num_envs
+
+    # Extract positions (env frame, origin at board centre).
+    peg1_pos = body_xy_pos_w(env, peg1_cfg)  # Peg_1 — player half, y < 0
+    peg2_pos = body_xy_pos_w(env, peg2_cfg)  # Peg_2 — opponent half, y > 0
+    ball_pos = root_xy_pos_w(env, ball_cfg)
+
+    # CPU transfer — one trip for both render passes.
+    p1_np = peg1_pos.cpu().numpy()
+    p2_np = peg2_pos.cpu().numpy()
+    b_np = ball_pos.cpu().numpy()
+    # Negated/swapped positions for the opponent-ego render.
+    p1r_np = -p2_np  # Peg_2 negated → appears at bottom in opp-ego frame
+    p2r_np = -p1_np  # Peg_1 negated → appears at top
+    br_np = -b_np
+
+    # Single combined loop: render natural AND opp_ego per env.
+    natural_np = np.empty((N, cam_h, cam_w, 3), dtype=np.uint8)
+    opp_ego_np = np.empty((N, cam_h, cam_w, 3), dtype=np.uint8)
+    for i in range(N):
+        bgr = renderer.render(p1_np[i], p2_np[i], b_np[i])
+        cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB, dst=natural_np[i])
+        bgr = renderer.render(p1r_np[i], p2r_np[i], br_np[i])
+        cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB, dst=opp_ego_np[i])
+
+    natural = torch.from_numpy(natural_np).to(env.device)
+    opp_ego = torch.from_numpy(opp_ego_np).to(env.device)
+
+    # Cache both for the opponent function.
+    _sprite_image_cache.clear()
+    _sprite_image_cache["natural"] = natural
+    _sprite_image_cache["opp_ego"] = opp_ego
+
+    # Even envs → natural; odd envs → rot90(opp_ego).
+    even_mask = torch.arange(N, device=env.device) % 2 == 0
+    result = natural.clone()
+    result[~even_mask] = torch.rot90(opp_ego[~even_mask], k=2, dims=[1, 2])
+
+    return _pad_image_to_target(result, target_h, target_w)
+
+
+def sprite_rendered_image_parity_opponent(
+    env: ManagerBasedRLEnv,
+    peg1_cfg: SceneEntityCfg,
+    peg2_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    target_h: int = 128,
+    target_w: int = 128,
+) -> torch.Tensor:
+    """Return opponent images that mirror the parity split from the player function.
+
+    Even envs: rot90(natural) — right_peg style at bottom (opponent's self).
+    Odd  envs: opp_ego render — left_peg sprite at bottom (opponent's self).
+
+    Reads both renders from the cache written by
+    ``sprite_rendered_image_parity_player``, which must run first.
+    The peg_cfg arguments are unused at runtime but kept so that
+    ``apply_camera_size_to_env_cfg`` can find and override ``target_h``/``target_w``.
+    """
+    if "natural" not in _sprite_image_cache or "opp_ego" not in _sprite_image_cache:
+        raise RuntimeError(
+            "sprite_rendered_image_parity_opponent called before "
+            "sprite_rendered_image_parity_player. Ensure the 'image' obs group "
+            "is defined before 'opponent_image' in DreamerSpriteObservationsCfg."
+        )
+    natural = _sprite_image_cache.pop("natural")
+    opp_ego = _sprite_image_cache.pop("opp_ego")
+
+    N = env.num_envs
+    even_mask = torch.arange(N, device=env.device) % 2 == 0
+
+    # Even envs → rot90(natural); odd envs → opp_ego.
+    result = opp_ego.clone()
+    result[even_mask] = torch.rot90(natural[even_mask], k=2, dims=[1, 2])
+
+    return _pad_image_to_target(result, target_h, target_w)
 
 
 def set_joint_position_limits(
@@ -565,13 +681,20 @@ def body_xy_pos_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Te
     return asset.data.body_pos_w[:, asset_cfg.body_ids, :2].squeeze(dim=1) - env.scene.env_origins[:, :2]
 
 
-def shot_over_middle(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, weight: float | None = None) -> torch.Tensor:
+def shot_over_middle(
+    env: ManagerBasedRLEnv,
+    ball_cfg: SceneEntityCfg,
+    weight: float | None = None,
+    direction_sign: float = 1.0,
+) -> torch.Tensor:
     ball_pos = root_xy_pos_w(env, ball_cfg)  # shape: (num_envs, 2)
     ball_vel = root_lin_xy_vel_w(env, ball_cfg)  # shape: (num_envs, 2)
 
-    # Detect near center line and moving forward in +y direction
+    # Detect near center line and moving in the specified direction.
+    # direction_sign=1.0 (player): ball moving in +y toward opponent goal.
+    # direction_sign=-1.0 (opponent): ball moving in -y toward player goal.
     is_near_center = (ball_pos[:, 1] >= 0.0) & (ball_pos[:, 1] <= 0.02)
-    is_moving_forward = ball_vel[:, 1] > 0.1
+    is_moving_forward = ball_vel[:, 1] * direction_sign > 0.1
     if weight is None:
         return (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
     return weight * (torch.abs(ball_vel[:, 1]) ** 4 * is_near_center * is_moving_forward).float()
@@ -600,17 +723,19 @@ def goal_position_obs(env: ManagerBasedRLEnv, goal: tuple[float, float]) -> torc
 
 
 def direction_to_ball(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Returns the direction vector from player to ball (2D).
-
-    This is the key observation for learning to move towards the ball.
-    The agent just needs to learn: action ≈ k * direction_to_ball
-
-    The raw displacement is returned (in meters). With observation normalization enabled,
-    this will be normalized by the running mean/std during training.
-    """
+    """Returns the direction vector from player to ball (2D)."""
     ball_pos = root_xy_pos_w(env, ball_cfg)
     player_pos = body_xy_pos_w(env, player_cfg)
     return ball_pos - player_pos
+
+
+def direction_ball_goal(
+    env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, goal: tuple[float, float, float]
+) -> torch.Tensor:
+    """Returns the direction vector from ball to goal center (2D)."""
+    cx, cy, r = goal
+    ball_pos = root_xy_pos_w(env, ball_cfg)
+    return ball_pos - torch.tensor([cx, cy], device=env.device)
 
 
 def distance_player_ball(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -666,10 +791,14 @@ def distance_ball_goal(
 
 
 def distance_player_ball_own_half(
-    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg
+    env: ManagerBasedRLEnv,
+    player_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    own_half_sign: float = -1.0,
 ) -> torch.Tensor:
     ball_pos = root_xy_pos_w(env, ball_cfg)
-    ball_in_own_half = ball_pos[:, 1] < 0.0
+    # own_half_sign=-1.0 (player): own half is y<0. +1.0 (opponent): own half is y>0.
+    ball_in_own_half = ball_pos[:, 1] * own_half_sign > 0.0
     return ball_in_own_half * (
         torch.exp(-5 * distance_player_ball(env, player_cfg, ball_cfg))
     )  # factor 5 because distances are really small
@@ -717,6 +846,13 @@ def collision_player_ball_bool(
     rel_vel = difference_speed(env, player_cfg, ball_cfg)
     ball_vel = ball_speed(env, ball_cfg)
     return (dist < eps) & (rel_vel > min_relative_vel) & (ball_vel > min_ball_speed)
+
+
+def collision_player_ball_simple(
+    env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg, ball_cfg: SceneEntityCfg, eps: float = 0.017
+) -> torch.Tensor:
+    dist = distance_player_ball(env, player_cfg, ball_cfg)
+    return (dist < eps).float()
 
 
 def collision_player_ball_time_decay(
@@ -857,12 +993,19 @@ def termination_reward_time_decay(
     return terminated.float() * time_multiplier
 
 
-def ball_in_own_half(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg):
+def ball_in_own_half(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, own_half_sign: float = -1.0):
     ball_pos = root_xy_pos_w(env, ball_cfg)
-    return 1.0 * (ball_pos[:, 1] < 0.0)
+    # own_half_sign=-1.0 (player): own half is y<0. +1.0 (opponent): own half is y>0.
+    return 1.0 * (ball_pos[:, 1] * own_half_sign > 0.0)
 
 
-def distance_to_wall(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torch.Tensor:
+def distance_to_wall(
+    env: ManagerBasedRLEnv,
+    player_cfg: SceneEntityCfg,
+    y_pos_limit: tuple | None = None,
+) -> torch.Tensor:
+    if y_pos_limit is None:
+        y_pos_limit = KLASK_PARAMS["joint_y1_pos_limit"]
     player_pos = body_xy_pos_w(env, player_cfg)
     device = player_pos.device
     cost = torch.zeros(player_pos.shape[0], device=device)
@@ -875,12 +1018,12 @@ def distance_to_wall(env: ManagerBasedRLEnv, player_cfg: SceneEntityCfg) -> torc
     distance = torch.tensor(KLASK_PARAMS["joint_x_pos_limit"][1]) - player_pos[:, 0]
     cost += x_edge * torch.exp(-5 * distance)
 
-    y_edge = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][0]) < 0.03
-    distance = player_pos[:, 1] - torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][0])
+    y_edge = player_pos[:, 1] - torch.tensor(y_pos_limit[0]) < 0.03
+    distance = player_pos[:, 1] - torch.tensor(y_pos_limit[0])
     cost += y_edge * torch.exp(-5 * distance)
 
-    y_edge = torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][1]) - player_pos[:, 1] < 0.03
-    distance = torch.tensor(KLASK_PARAMS["joint_y1_pos_limit"][1]) - player_pos[:, 1]
+    y_edge = torch.tensor(y_pos_limit[1]) - player_pos[:, 1] < 0.03
+    distance = torch.tensor(y_pos_limit[1]) - player_pos[:, 1]
     cost += y_edge * torch.exp(-5 * distance)
 
     return 1.0 * (cost)

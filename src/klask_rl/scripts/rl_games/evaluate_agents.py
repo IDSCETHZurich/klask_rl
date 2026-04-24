@@ -61,7 +61,7 @@ import torch
 import yaml
 from isaaclab_rl.rl_games import RlGamesVecEnvWrapper
 from isaaclab_tasks.utils import load_cfg_from_registry, parse_env_cfg
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     ObservationNoiseWrapper,
     OpponentObservationWrapper,

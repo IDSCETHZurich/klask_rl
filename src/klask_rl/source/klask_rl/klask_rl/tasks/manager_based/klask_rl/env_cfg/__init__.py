@@ -4,6 +4,7 @@ from .klask_rl_observations_cfg import (
     ObservationsCfg,
     ObservationsExtendedCfg,
     TwoStageHerObservationsCfg,
+    FastSACObservationsCfg,
     DreamerObservationsCfg,
     DreamerSpriteObservationsCfg,
 )
@@ -13,6 +14,7 @@ from .klask_rl_rewards_cfg import (
     RewardsCfgDenseBallHit,
     RewardsCfgSparseHer,
     RewardsCfgTwoStageHer,
+    _opponent_reward_terms,
 )
 from .klask_rl_terminations_cfg import (
     TerminationsCfg,
@@ -29,6 +31,7 @@ __all__ = [
     "ObservationsCfg",
     "ObservationsExtendedCfg",
     "TwoStageHerObservationsCfg",
+    "FastSACObservationsCfg",
     "DreamerObservationsCfg",
     "DreamerSpriteObservationsCfg",
     "EventCfg",

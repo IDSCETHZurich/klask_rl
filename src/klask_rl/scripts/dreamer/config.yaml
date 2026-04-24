@@ -19,6 +19,8 @@ logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # /workspace/klask_rl/logdir/2026
 seed: 0
 deterministic_run: False
 device: "cuda:0"
+sim_device: null           # if null -> falls back to device (simulation + inference GPU)
+train_devices: null        # if null -> falls back to [device]; list of training GPUs (first is primary)
 init_checkpoint: /workspace/klask_rl/logdir/2026-03-19/08-34-27/checkpoint_2200016.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
 load_world_model_only: false # When true + init_checkpoint set: load only world model weights (encoder/rssm/reward/cont/decoder), skip actor/critic
 
@@ -46,7 +48,11 @@ env:
   device: ${device}
   max_velocity: 0.6 # [m/s] Maximum velocity for player movement
   episode_length_s: 5.0 # [s] Episode length in seconds
-  actuator_model: False
+  actuator_model:
+    enable: false
+    checkpoint: null
+  collision_avoidance:
+    enable: false
   size: [64, 64]
   encoder:
     mlp_keys: "policy"
@@ -134,7 +140,7 @@ trainer:
   action_repeat: ${env.action_repeat}
   save_checkpoint_every: 100_000 # Save checkpoint every N steps (0 = only save at the end)
 
-self_play: true
-self_play_config:
+self_play:
+  enabled: true
   update_score: 0.2 # opponent updated only when rolling mean score > this
   games_to_track: 4096 # rolling window size for score averaging

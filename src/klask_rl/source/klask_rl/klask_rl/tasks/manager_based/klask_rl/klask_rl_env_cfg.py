@@ -3,7 +3,7 @@ import os
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.sim import PhysxCfg, RenderCfg, SimulationCfg
 from isaaclab.utils import configclass
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 from .env_cfg import (
     ActionsCfg,
@@ -13,6 +13,7 @@ from .env_cfg import (
     EventCfg,
     EventCfgDreamer,
     EventCfgSac,
+    FastSACObservationsCfg,
     KlaskRlDreamerSceneCfg,
     KlaskRlDreamerSpriteSceneCfg,
     KlaskRlSceneCfg,
@@ -138,6 +139,57 @@ class KlaskRlTwoStageHerEnvCfg(KlaskRlEnvCfg):
         self.decimation = KLASK_PARAMS["decimation"]
         self.sim.dt = KLASK_PARAMS["physics_dt"]
         self.max_episode_length = int(self.episode_length_s / (self.decimation * self.sim.dt))
+
+
+@configclass
+class KlaskRlContactPriorityEnvCfg(KlaskRlEnvCfg):
+    """Configuration for contact-priority SAC training for goal scoring.
+
+    Same env structure as Two-Stage HER (14-dim obs, sparse ball hit + goal
+    scored rewards, ball_hit_timeout termination) but WITHOUT HER wrappers.
+    Instead, the replay buffer over-samples transitions from episodes where
+    ball contact occurred.
+
+    Key features:
+    - Observations: 14 dims (12 base + 2 for opponent goal XY)
+    - Rewards: collision_player_ball and goal_scored (weights set from YAML)
+    - Terminations: timeout, goal scored, or ball_hit_timeout
+    - No HER / no goal relabeling — uses flat MlpPolicy
+    """
+
+    observations = TwoStageHerObservationsCfg()
+    actions = ActionsCfgPlayerOnly()
+    events = EventCfgSac()
+    rewards = RewardsCfgTwoStageHer()
+    terminations = TerminationsCfgTwoStageHer()
+
+    def __post_init__(self):
+        """Post initialization."""
+        super().__post_init__()
+        self.decimation = KLASK_PARAMS["decimation"]
+        self.sim.dt = KLASK_PARAMS["physics_dt"]
+        self.max_episode_length = int(self.episode_length_s / (self.decimation * self.sim.dt))
+
+
+@configclass
+class KlaskRlFastSACEnvCfg(KlaskRlEnvCfg):
+    """Configuration for FastSAC + HER training with self-play.
+
+    Uses the 18-dim FastSAC observation layout (ball pos/vel, peg pos/vel,
+    ball-peg diff, ball-goal diff, goal pos) in IsaacLab native coordinates.
+    Both players are controlled (4-dim action) for self-play.
+    Reward weights are set at runtime in the training script.
+    """
+
+    observations = FastSACObservationsCfg()
+    actions = ActionsCfg()  # 4-dim: both player and opponent
+    events = EventCfg()
+    rewards = RewardsCfg()  # weights set to ±1000 at runtime
+    terminations = TerminationsCfg()
+
+    def __post_init__(self):
+        """Post initialization."""
+        super().__post_init__()
 
 
 @configclass

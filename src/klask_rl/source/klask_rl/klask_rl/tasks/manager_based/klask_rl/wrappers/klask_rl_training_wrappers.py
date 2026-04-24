@@ -2,7 +2,8 @@ import math
 
 import torch
 from gymnasium import Wrapper
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from isaaclab.managers import SceneEntityCfg
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 
 class RewardWeightWrapper(Wrapper):
@@ -248,6 +249,66 @@ class CurriculumWrapper(RewardWeightWrapper):
             self._apply_phase(term_idx, phase)
 
         return self.env.step(actions)
+
+
+class OpponentRewardWrapper(Wrapper):
+    """Computes opponent rewards using the same functions/weights as player rewards.
+
+    Calls opponent reward functions directly (not through the reward manager,
+    since it skips 0-weight terms — see ``RewardManager.compute``).  Reads
+    current player weights from the reward manager so the opponent reward
+    automatically follows the same curriculum schedule.
+
+    Adds ``obs["opponent_reward"]`` (shape ``(B,)``) to the step output.
+
+    Parameters
+    ----------
+    env : gymnasium.Env
+        The wrapped environment (must be below ``CurriculumWrapper``).
+    term_mapping : dict[str, tuple[callable, dict]]
+        Maps player reward term name to ``(opponent_func, opponent_params)``.
+        Built from ``_opponent_reward_terms`` in ``klask_rl_rewards_cfg.py``.
+    """
+
+    def __init__(self, env, term_mapping: dict):
+        super().__init__(env)
+        self._term_mapping = term_mapping
+        rm = self.env.unwrapped.reward_manager
+        self._player_term_indices = {}
+        for player_name in term_mapping:
+            if player_name in rm.active_terms:
+                self._player_term_indices[player_name] = rm.active_terms.index(player_name)
+
+        # Resolve SceneEntityCfg objects (body_names → body_ids) that would
+        # normally be resolved by the reward manager during _prepare_terms().
+        scene = self.env.unwrapped.scene
+        for _func, params in term_mapping.values():
+            for v in params.values():
+                if isinstance(v, SceneEntityCfg):
+                    v.resolve(scene)
+
+    def step(self, actions):
+        obs, rew, terminated, truncated, info = self.env.step(actions)
+
+        rm = self.env.unwrapped.reward_manager
+        dt = self.env.unwrapped.step_dt
+        opp_reward = torch.zeros(self.env.unwrapped.num_envs, device=self.env.unwrapped.device)
+
+        for player_name, (opp_func, opp_params) in self._term_mapping.items():
+            if player_name not in self._player_term_indices:
+                continue
+            player_idx = self._player_term_indices[player_name]
+            weight = rm._term_cfgs[player_idx].weight
+            if isinstance(weight, torch.Tensor):
+                if weight.item() == 0.0:
+                    continue
+            elif weight == 0.0:
+                continue
+            raw = opp_func(rm._env, **opp_params)
+            opp_reward += raw * weight * dt
+
+        obs["opponent_reward"] = opp_reward
+        return obs, rew, terminated, truncated, info
 
 
 class KlaskRlCollisionAvoidanceWrapper(Wrapper):

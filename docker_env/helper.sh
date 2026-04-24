@@ -74,9 +74,11 @@ cmd_run() {
         --volume="${CONTAINER_NAME}_logs:/root/.nvidia-omniverse/logs:rw" \
         --volume="${CONTAINER_NAME}_data:/root/.local/share/ov/data:rw" \
         --volume="${CONTAINER_NAME}_documents:/root/Documents:rw" \
+        --volume="${CONTAINER_NAME}_torch_cache:/workspace/klask_rl/.torch_cache:rw" \
         --volume="$SCRIPT_DIR/../src/klask_rl:/workspace/klask_rl:rw" \
         --volume="$SCRIPT_DIR/../third_party/dreamerv3-torch:/workspace/klask_rl/scripts/dreamer/dreamerv3torch:rw" \
         --volume="$SCRIPT_DIR/../third_party/r2dreamer:/workspace/klask_rl/scripts/dreamer/r2dreamer:rw" \
+        --volume="$SCRIPT_DIR/../third_party/fast_sac:/workspace/klask_rl/scripts/fast_sac:rw" \
         "${IMAGE_NAME}:${TAG}"
 
     echo -e "${GREEN}${MODE_DISPLAY} container started! Use '$0 ${MODE_FLAG}connect' to attach.${NC}"

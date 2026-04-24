@@ -80,7 +80,7 @@ from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
 from isaaclab_rl.rl_games import RlGamesGpuEnv, RlGamesVecEnvWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     ActionHistoryWrapper,

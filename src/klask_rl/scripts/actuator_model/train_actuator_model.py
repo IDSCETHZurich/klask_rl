@@ -1,3 +1,4 @@
+import argparse
 import multiprocessing as mp
 import random
 import threading
@@ -367,23 +368,49 @@ def train_model_with_cv(
 
 if __name__ == "__main__":
 
-    data_file = "data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states.npz"
+    parser = argparse.ArgumentParser(description="Train the actuator model across multiple seeds.")
+    parser.add_argument(
+        "--data-file",
+        type=Path,
+        default=Path(
+            "/workspace/klask_rl/logs/actuator_model/data/train_traj/train/data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states_train.npz"
+        ),
+        help="Path to the .npz dataset file.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(__file__).parent.resolve(),
+        help=(
+            "Base output directory. Logs go to <output-dir>/logs/seed_runs and checkpoints to <output-dir>/checkpoints."
+        ),
+    )
+    parser.add_argument("--seed-start", type=int, default=0, help="First seed value.")
+    parser.add_argument("--seed-count", type=int, default=8, help="Number of seeds to train.")
+    parser.add_argument("--seed-workers", type=int, default=4, help="Number of parallel worker processes.")
+    parser.add_argument("--n-splits", type=int, default=5, help="Number of time-series CV folds.")
+    parser.add_argument("--epochs", type=int, default=20, help="Training epochs per fold and for final training.")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate.")
+    parser.add_argument("--batch-size", type=int, default=512, help="Batch size.")
+    parser.add_argument("--smoothness-weight", type=float, default=0.0, help="Smoothness loss weight.")
+    parser.add_argument("--hidden-dim", type=int, default=64, help="Hidden layer dimension of the actuator network.")
+    args = parser.parse_args()
 
-    run_name = data_file[5:-4]
-    data_file = Path(__file__).parent.resolve() / "data" / data_file
+    data_file = args.data_file
+    run_name = Path(data_file).stem
 
-    seed_start = 0
-    seed_count = 8
-    seed_workers = 4
-    logs_dir = Path(__file__).parent.resolve() / "logs" / "seed_runs"
+    seed_start = args.seed_start
+    seed_count = args.seed_count
+    seed_workers = args.seed_workers
+    logs_dir = args.output_dir / "logs" / "seed_runs"
 
-    checkpoints_dir = Path(__file__).parent.resolve() / "checkpoints"
+    checkpoints_dir = args.output_dir / "checkpoints"
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
     ctx = mp.get_context("spawn")
     seeds = list(range(seed_start, seed_start + seed_count))
     results = []
-    total_epochs = (5 + 1) * 20
+    total_epochs = (args.n_splits + 1) * args.epochs
 
     manager = mp.Manager()
     progress_queue = manager.Queue()
@@ -425,12 +452,12 @@ if __name__ == "__main__":
                 seed,
                 data_file,
                 run_name,
-                5,
-                20,
-                1e-3,
-                512,
-                0.0,
-                64,
+                args.n_splits,
+                args.epochs,
+                args.lr,
+                args.batch_size,
+                args.smoothness_weight,
+                args.hidden_dim,
                 True,
                 True,
                 str(checkpoints_dir),
@@ -443,10 +470,9 @@ if __name__ == "__main__":
         for future in as_completed(futures):
             result = future.result()
             results.append(result)
-            print(
+            tqdm.write(
                 f"Seed {result['seed']} done | best_fold_loss={result['best_fold_loss']:.6f},"
-                f" avg_cv_loss={result['avg_cv_loss']:.6f} | log={result['log_path']}",
-                flush=True,
+                f" avg_cv_loss={result['avg_cv_loss']:.6f} | log={result['log_path']}"
             )
 
     stop_event.set()

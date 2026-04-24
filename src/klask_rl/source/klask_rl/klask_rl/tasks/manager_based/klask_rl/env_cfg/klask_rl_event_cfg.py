@@ -3,7 +3,7 @@ import isaaclab.envs.mdp as mdp
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
-from klask_rl.assets.robots.klask import KLASK_PARAMS
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 from ..utils_manager_based import (
     reset_ball_hit_timer,
@@ -79,13 +79,19 @@ class EventCfg:
         },
     )
 
-    # -- domain randomization (configured at runtime from YAML) --
+    # -- domain randomization (defaults = nominal values, i.e. no-op) --
+    # When no DR config is provided, ranges equal the nominal KLASK_PARAMS
+    # value so the "randomization" is effectively disabled.  Training scripts
+    # widen these ranges (or set to None) at runtime from YAML.
     add_ball_mass: EventTerm | None = EventTerm(
         func=mdp.randomize_rigid_body_mass,
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("ball"),
-            "mass_distribution_params": (0.0, 0.0),  # overridden from YAML
+            "mass_distribution_params": (
+                KLASK_PARAMS["ball_mass_initial"],
+                KLASK_PARAMS["ball_mass_initial"],
+            ),
             "operation": "abs",
         },
     )
@@ -95,9 +101,18 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("ball"),
-            "static_friction_range": (0.0, 0.0),  # overridden from YAML
-            "dynamic_friction_range": (0.0, 0.0),  # overridden from YAML
-            "restitution_range": (0.0, 0.0),  # overridden from YAML
+            "static_friction_range": (
+                KLASK_PARAMS["ball_static_friction"],
+                KLASK_PARAMS["ball_static_friction"],
+            ),
+            "dynamic_friction_range": (
+                KLASK_PARAMS["ball_dynamic_friction"],
+                KLASK_PARAMS["ball_dynamic_friction"],
+            ),
+            "restitution_range": (
+                KLASK_PARAMS["ball_restitution"],
+                KLASK_PARAMS["ball_restitution"],
+            ),
             "num_buckets": 100,
             "make_consistent": True,
         },
@@ -108,9 +123,18 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("klask", body_names=["Wall_.*", "Ground", "peg_.*_slider"]),
-            "static_friction_range": (0.0, 0.0),  # overridden from YAML
-            "dynamic_friction_range": (0.0, 0.0),  # overridden from YAML
-            "restitution_range": (0.0, 0.0),  # overridden from YAML
+            "static_friction_range": (
+                KLASK_PARAMS["board_static_friction"],
+                KLASK_PARAMS["board_static_friction"],
+            ),
+            "dynamic_friction_range": (
+                KLASK_PARAMS["board_dynamic_friction"],
+                KLASK_PARAMS["board_dynamic_friction"],
+            ),
+            "restitution_range": (
+                KLASK_PARAMS["board_restitution"],
+                KLASK_PARAMS["board_restitution"],
+            ),
             "num_buckets": 100,
             "make_consistent": True,
         },
@@ -121,9 +145,18 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("klask", body_names=["Peg_1", "Peg_2"]),
-            "static_friction_range": (0.0, 0.0),  # overridden from YAML
-            "dynamic_friction_range": (0.0, 0.0),  # overridden from YAML
-            "restitution_range": (0.0, 0.0),  # overridden from YAML
+            "static_friction_range": (
+                KLASK_PARAMS["peg_static_friction"],
+                KLASK_PARAMS["peg_static_friction"],
+            ),
+            "dynamic_friction_range": (
+                KLASK_PARAMS["peg_dynamic_friction"],
+                KLASK_PARAMS["peg_dynamic_friction"],
+            ),
+            "restitution_range": (
+                KLASK_PARAMS["peg_restitution"],
+                KLASK_PARAMS["peg_restitution"],
+            ),
             "num_buckets": 100,
             "make_consistent": True,
         },
@@ -135,7 +168,10 @@ class EventCfg:
         params={
             "asset_cfg": SceneEntityCfg("klask", joint_names=["slider_to_peg_1", "slider_to_peg_2"]),
             "stiffness_distribution_params": (0.0, 0.0),
-            "damping_distribution_params": (0.0, 0.0),  # overridden from YAML
+            "damping_distribution_params": (
+                KLASK_PARAMS["actuator_x_damping"],
+                KLASK_PARAMS["actuator_x_damping"],
+            ),
             "operation": "abs",
         },
     )
@@ -146,7 +182,10 @@ class EventCfg:
         params={
             "asset_cfg": SceneEntityCfg("klask", joint_names=["ground_to_slider_1", "ground_to_slider_2"]),
             "stiffness_distribution_params": (0.0, 0.0),
-            "damping_distribution_params": (0.0, 0.0),  # overridden from YAML
+            "damping_distribution_params": (
+                KLASK_PARAMS["actuator_y_damping"],
+                KLASK_PARAMS["actuator_y_damping"],
+            ),
             "operation": "abs",
         },
     )
@@ -259,7 +298,7 @@ class EventCfgDreamer(EventCfg):
             "asset_cfg": SceneEntityCfg("ball"),
             "pose_range": {
                 "x": KLASK_PARAMS["ball_reset_position_x"],  # Full x range
-                "y": KLASK_PARAMS["ball_reset_position_y"], # (-0.10, -0.02),  # (-0.21, -0.02),  # Only player's half (y < 0), avoiding goal area
+                "y": KLASK_PARAMS["ball_reset_position_y"],  # (-0.10, -0.02),  # Only player's half (y < 0)
                 "z": (0.032, 0.032),
             },
             "velocity_range": {
