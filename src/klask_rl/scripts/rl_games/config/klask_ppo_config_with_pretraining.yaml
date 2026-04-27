@@ -123,7 +123,7 @@ rewards:
     weight: 0.0
   goal_scored:
     type: static
-    weight: 250.0/workspace/isaaclab/_isaac_sim/python.sh scripts/rl_games/train_klask.py     --config /workspace/klask_rl/scripts/rl_games/config/klask_ppo_config_with_pretraining.yaml     --headless  --num_envs 4096   --wandb-project-name KLASK_PPO
+    weight: 250.0
   goal_conceded:
     type: static
     weight: -150
@@ -141,7 +141,7 @@ rewards:
     decay_rate: 1.0e-7
   ball_speed:
     type: exponential
-    weight: 0.0/workspace/isaaclab/_isaac_sim/python.sh scripts/rl_games/train_klask.py     --config /workspace/klask_rl/scripts/rl_games/config/klask_ppo_config_with_pretraining.yaml     --headless  --num_envs 4096   --wandb-project-name KLASK_PPO
+    weight: 0.0
     decay_rate: 1.0e-7
   ball_stationary:
     type: static
