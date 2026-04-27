@@ -21,7 +21,10 @@ _BOARD_HEIGHT_M = 0.42
 # ---------------------------------------------------------------------------
 # Image frame (as published on /board_state): landscape, origin top-left,
 # x → right along the long axis, y → down along the short axis.
-# Sim frame: portrait, origin at board center. 90° CCW rotation + translation.
+# Sim frame: portrait, origin at board center, x → right on short axis,
+# y → up on long axis. The image frame is left-handed (y-down), the sim
+# frame is right-handed (y-up); the axis swap (x↔y) already flips handedness,
+# so no additional sign flip is needed — only a centering shift on positions.
 
 _CENTER_X_IMG = _BOARD_HEIGHT_M / 2.0  # long axis (raw_x)
 _CENTER_Y_IMG = _BOARD_WIDTH_M / 2.0  # short axis (raw_y)
@@ -30,19 +33,19 @@ _CENTER_Y_IMG = _BOARD_WIDTH_M / 2.0  # short axis (raw_y)
 def _transform_object_state(px, py, vx, vy):
     """Image frame → centered sim portrait.
 
-    Positions: 90° CCW rotation + translation to board center.
-    Velocities: rotation only (no translation).
+    Positions: axis swap + translation to board center.
+    Velocities: axis swap only (no translation).
     """
-    sim_px = _CENTER_Y_IMG - py
+    sim_px = py - _CENTER_Y_IMG
     sim_py = px - _CENTER_X_IMG
-    sim_vx = -vy
+    sim_vx = vy
     sim_vy = vx
     return sim_px, sim_py, sim_vx, sim_vy
 
 
 def _transform_command(linear_x, linear_y):
-    """Rotation-only image → sim."""
-    return -linear_y, linear_x
+    """Image cmd → sim cmd: axis swap only."""
+    return linear_y, linear_x
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +172,9 @@ def build_dataset_interpolated(
 def load_data_from_db3(bag_dir, state_topic="/board_state", command_topic="/cmd_vel/left_player"):
     """Load state and command data from a ROS 2 bag (.db3) directory.
 
-    Applies the image-frame → centered sim-portrait transform (90° CCW
-    rotation + translation for positions, rotation-only for velocities and
-    commands) to every field.
+    Applies the image-frame → centered sim-portrait transform (axis swap +
+    translation for positions, axis swap only for velocities and commands)
+    to every field.
 
     Returns:
         (state_times,       # (N,) int64 ns
