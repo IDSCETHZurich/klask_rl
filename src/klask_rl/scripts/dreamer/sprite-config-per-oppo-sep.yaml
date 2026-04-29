@@ -13,10 +13,10 @@ model:
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_sprite_new_AM_and_boarder_coll_acc_limit
+wandb_name: dreamer_sprite_new_AM_and_boarder_coll_acc_limit_sat_penalty
 
 # Initialization
-logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
+logdir: /workspace/klask_rl/logdir/2026-04-27/15-20-01 # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
@@ -24,7 +24,7 @@ sim_device: "cuda:0"
 train_devices:
   - "cuda:1"
   - "cuda:2"
-init_checkpoint: /workspace/klask_rl/logdir/2026-04-22/19-46-33/checkpoint_3115824.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+init_checkpoint: /workspace/klask_rl/logdir/2026-04-24/18-33-44/checkpoint_4095456.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
 load_world_model_only: false
 
 hydra:
@@ -125,6 +125,18 @@ env:
     player_speed_exp:
       type: static
       weight: 0.0
+    action_rate_cap_saturation:
+      # P3: sparse, binary saturation indicator
+      type: static
+      weight: 0.0
+    action_smooth_hinge:
+      # PB: smooth hinge above the rate cap
+      type: static
+      weight: 0.0
+    action_delta_l2:
+      # PA: classic L2 action-delta smoothness
+      type: static
+      weight: -0.1
   terminations:
     time_out: true
     goal_scored: true
