@@ -16,7 +16,7 @@ wandb_entity: null
 wandb_name: dreamer_sprite_new_AM_and_boarder_coll_acc_limit_5
 
 # Initialization
-logdir: /workspace/klask_rl/logdir/2026-04-27/15-20-01 # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
+logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
