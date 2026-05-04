@@ -38,7 +38,7 @@
             "extensions": [
                 "ms-python.python",
                 "ms-python.black-formatter",
-                "ms-python.flake8",
+                "ms-python.flake8@2025.2.0",
                 "ms-python.isort",
                 "redhat.vscode-yaml",
                 "streetsidesoftware.code-spell-checker",
