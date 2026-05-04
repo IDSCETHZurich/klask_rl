@@ -48,12 +48,6 @@ def _transform_command(linear_x, linear_y):
     return linear_y, linear_x
 
 
-# ---------------------------------------------------------------------------
-# Windowing helpers (copied from old_mcap_dataloader.py — cannot import
-# because rosbag2_py/rclpy are not installed)
-# ---------------------------------------------------------------------------
-
-
 def find_nearest_indices(time_array, target_time):
     idx = np.searchsorted(time_array, target_time)
     if idx == 0:

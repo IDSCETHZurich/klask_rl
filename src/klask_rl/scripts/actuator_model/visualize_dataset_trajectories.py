@@ -20,7 +20,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-
 REQUIRED_KEYS = ("player_pos", "player_vel", "player_actions")
 
 
