@@ -6,6 +6,9 @@ from isaaclab.utils import configclass
 from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 from ..utils_manager_based import (
+    action_delta_l2,
+    action_rate_cap_saturation,
+    action_smooth_hinge,
     ball_in_goal,
     ball_in_own_half,
     ball_speed,
@@ -64,6 +67,11 @@ def _perspective_reward_terms(
     # direction_sign for shot_over_middle: +1 means ball moving in +y (toward
     # opponent goal), -1 means ball moving in -y (toward player goal).
     direction_sign = -own_half_sign  # player (own_half_sign=-1) → direction=+1
+
+    # Action dims for this perspective: (0, 1) is the player's slice of the
+    # 4-dim action vector, (2, 3) is the opponent's. Used by the action-
+    # smoothness reward terms.
+    action_dims = (0, 1) if own_half_sign < 0 else (2, 3)
 
     return {
         "time_punishment": RewTerm(func=mdp.is_alive, weight=0.0),
@@ -169,6 +177,21 @@ def _perspective_reward_terms(
             },
             weight=0.0,
         ),
+        "action_rate_cap_saturation": RewTerm(
+            func=action_rate_cap_saturation,
+            params={"action_dims": action_dims},
+            weight=0.0,
+        ),
+        "action_smooth_hinge": RewTerm(
+            func=action_smooth_hinge,
+            params={"action_dims": action_dims},
+            weight=0.0,
+        ),
+        "action_delta_l2": RewTerm(
+            func=action_delta_l2,
+            params={"action_dims": action_dims},
+            weight=0.0,
+        ),
     }
 
 
@@ -225,6 +248,9 @@ class RewardsCfg:
     player_speed_exp = _player_reward_terms["player_speed_exp"]
     close_to_boundaries = _player_reward_terms["close_to_boundaries"]
     player_strategically_positioned = _player_reward_terms["player_strategically_positioned"]
+    action_rate_cap_saturation = _player_reward_terms["action_rate_cap_saturation"]
+    action_smooth_hinge = _player_reward_terms["action_smooth_hinge"]
+    action_delta_l2 = _player_reward_terms["action_delta_l2"]
 
 
 @configclass

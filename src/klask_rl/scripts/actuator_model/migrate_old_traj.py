@@ -7,12 +7,18 @@ IN_PATH = "/workspace/klask_rl/scripts/actuator_model/data/original/sim2real_tra
 OUT_PATH = "/workspace/klask_rl/scripts/actuator_model/data/real_trajectories_05.npz"
 
 OBS_LABELS = [
-    "Player Pos X (m)", "Player Pos Y (m)",
-    "Player Vel X (m/s)", "Player Vel Y (m/s)",
-    "Opponent Pos X (m)", "Opponent Pos Y (m)",
-    "Opponent Vel X (m/s)", "Opponent Vel Y (m/s)",
-    "Ball Pos X (m)", "Ball Pos Y (m)",
-    "Ball Vel X (m/s)", "Ball Vel Y (m/s)",
+    "Player Pos X (m)",
+    "Player Pos Y (m)",
+    "Player Vel X (m/s)",
+    "Player Vel Y (m/s)",
+    "Opponent Pos X (m)",
+    "Opponent Pos Y (m)",
+    "Opponent Vel X (m/s)",
+    "Opponent Vel Y (m/s)",
+    "Ball Pos X (m)",
+    "Ball Pos Y (m)",
+    "Ball Vel X (m/s)",
+    "Ball Vel Y (m/s)",
 ]
 
 

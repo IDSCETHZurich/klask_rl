@@ -67,7 +67,7 @@ from datetime import datetime
 
 import gymnasium as gym
 import isaaclab_tasks  # noqa: F401
-import yaml
+from omegaconf import OmegaConf
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -85,12 +85,14 @@ from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWr
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     ActionHistoryWrapper,
     CurriculumWrapper,
+    InitializationWrapper,
     KlaskRlCollisionAvoidanceWrapper,
     KlaskRlRandomOpponentWrapper,
     ObservationNoiseWrapper,
     OpponentActionWrapper,
     OpponentObservationWrapper,
     RlGamesGpuEnvSelfPlay,
+    VelocityScaleWrapper,
     configure_domain_randomization,
 )
 from klask_rl_games import KlaskRlAlgoObserver, KlaskRlRunner
@@ -100,10 +102,11 @@ from rl_games.common import env_configurations, vecenv
 @hydra_task_config(args_cli.task, "rl_games_cfg_entry_point")
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
     """Train with RL-Games agent."""
-    # override configurations with non-hydra CLI arguments
+    # override configurations with non-hydra CLI arguments.
+    # Use OmegaConf (YAML 1.2) instead of yaml.safe_load (YAML 1.1) so that
+    # unquoted scientific-notation literals like `1e-7` are parsed as floats.
     if args_cli.config is not None:
-        with open(args_cli.config, "r") as file:
-            config = yaml.safe_load(file)
+        config = OmegaConf.to_container(OmegaConf.load(args_cli.config), resolve=True)
         agent_cfg.update(config)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
@@ -181,6 +184,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # Configure domain randomization events from YAML BEFORE env construction.
     configure_domain_randomization(env_cfg, agent_cfg.get("domain_randomization"))
 
+    # Apply env-level overrides from the top-level `env:` block in the YAML.
+    env_block = agent_cfg.get("env", {})
+    if env_block.get("sim_dt") is not None:
+        env_cfg.sim.dt = float(env_block["sim_dt"])
+    if env_block.get("decimation") is not None:
+        env_cfg.decimation = int(env_block["decimation"])
+    if env_block.get("episode_length_s") is not None:
+        env_cfg.episode_length_s = float(env_block["episode_length_s"])
+
+    ball_reset_x = env_block.get("ball_reset_position_x")
+    ball_reset_y = env_block.get("ball_reset_position_y")
+    if ball_reset_x is not None and hasattr(env_cfg, "ball_reset_position_x"):
+        env_cfg.ball_reset_position_x = tuple(ball_reset_x)
+        env_cfg.ball_reset_position_y = tuple(ball_reset_y)
+        env_cfg.events.reset_ball_position.params["pose_range"]["x"] = env_cfg.ball_reset_position_x
+        env_cfg.events.reset_ball_position.params["pose_range"]["y"] = env_cfg.ball_reset_position_y
+
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     # wrap for video recording
@@ -199,20 +219,60 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
-    # Negate opponent actions to convert from player frame back to world frame.
-    # Must be innermost wrapper so the actuator model sees player-frame data.
+    # --- Action manager pass-through (VelocityScaleWrapper owns [-1, 1] -> m/s) ---
+    max_velocity = env_block.get("max_velocity")
+    if max_velocity is None:
+        raise ValueError(
+            "agent_cfg['env'].max_velocity is required; VelocityScaleWrapper needs it to scale [-1, 1] -> m/s."
+        )
+    action_mgr = env.unwrapped.action_manager
+    for term in action_mgr._terms.values():
+        term._scale = 1.0
+
+    # --- Wrapper chain (innermost -> outermost), mirrors train_dreamer.py ---
+
+    # 0. Collision avoidance (innermost; world-frame m/s clipping).
+    #    Sits INSIDE OpponentActionWrapper so it sees world-frame actions.
+    collision_cfg = env_block.get("collision_avoidance")
+    if isinstance(collision_cfg, dict) and collision_cfg.get("enable", False):
+        env = KlaskRlCollisionAvoidanceWrapper(env, max_vel=float(max_velocity))
+
+    # 1. Opponent action frame transform (ego -> world; negates opponent dims).
     env = OpponentActionWrapper(env)
 
-    if agent_cfg["env"].get("actuator_model", False):
-        env = ActuatorModelWrapper(env)
+    # 2. Actuator model (expects m/s in, outputs m/s). Must sit inside
+    #    VelocityScaleWrapper so it sees physical units, not [-1, 1].
+    actuator_cfg = env_block.get("actuator_model")
+    if isinstance(actuator_cfg, dict) and actuator_cfg.get("enable", False):
+        env = ActuatorModelWrapper(env, model_file=actuator_cfg.get("checkpoint"))
 
-    if agent_cfg["env"].get("collision_avoidance", False):
-        env = KlaskRlCollisionAvoidanceWrapper(env, max_vel=clip_actions)
+    # 3. Velocity scaling: [-1, 1] (policy output) -> [-max_velocity, max_velocity] m/s.
+    max_acceleration = env_block.get("max_acceleration")
+    _act_space = env.unwrapped.single_action_space
+    env = VelocityScaleWrapper(
+        env,
+        max_velocity=float(max_velocity),
+        max_acceleration=None if max_acceleration is None else float(max_acceleration),
+        num_envs=int(env.unwrapped.num_envs),
+        action_dim=int(_act_space.shape[0]),
+        device=env.unwrapped.device,
+    )
 
+    # 4. Initialization schedule (sets env.unwrapped._init_velocity_speed).
+    init_cfg = agent_cfg.get("initialization")
+    if init_cfg:
+        env = InitializationWrapper(env, dict(init_cfg))
+
+    # 5. Reward curriculum.
+    if "rewards" in agent_cfg.keys():
+        env = CurriculumWrapper(env, agent_cfg["rewards"])
+
+    # 6. PPO-specific observation wrappers (dreamer doesn't have these).
+    #    Kept in their original relative position: outside curriculum, before opponent.
     if KLASK_PARAMS["action_history"] > 0:
         env = ActionHistoryWrapper(env, history_length=KLASK_PARAMS["action_history"])
 
-    obs_noise = agent_cfg["env"].get("obs_noise", 0.0)
+    obs_noise = env_block.get("obs_noise", 0.0)
     if obs_noise > 0.0:
         env = ObservationNoiseWrapper(
             env, obs_noise,
@@ -220,18 +280,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             other_goal=KLASK_PARAMS["opponent_goal"],
         )
 
-    # configure active reward terms and curricula as specified in agent_cfg:
-    if "rewards" in agent_cfg.keys():
-        env = CurriculumWrapper(env, agent_cfg["rewards"])
-
-    # if self-play, use opponent observation wrapper to get access to opponent player's observations:
+    # 7. Opponent wrapper.
     if agent_cfg["params"]["config"].get("self_play", False):
         env = OpponentObservationWrapper(env)
-    # if no self-play, pick random actions for the opponent:
     else:
         env = KlaskRlRandomOpponentWrapper(env)
 
-    # wrap around environment for rl-games
+    # 8. rl-games adapter (outermost).
     env = RlGamesVecEnvWrapper(env, rl_device, clip_obs, clip_actions)
 
     # register the environment to rl-games registry

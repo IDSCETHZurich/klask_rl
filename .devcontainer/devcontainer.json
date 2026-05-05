@@ -29,9 +29,8 @@
         "source=isaac-lab-klask-rl-devcontainer_shell_history,target=/root/.shell_history,type=volume",
         "source=isaac-lab-klask-rl-devcontainer_torch_cache,target=/workspace/klask_rl/.torch_cache,type=volume",
         "source=${localWorkspaceFolder}/src/klask_rl,target=/workspace/klask_rl,type=bind",
-        "source=${localWorkspaceFolder}/third_party/dreamerv3-torch,target=/workspace/klask_rl/scripts/dreamer/dreamerv3torch,type=bind",
         "source=${localWorkspaceFolder}/third_party/r2dreamer,target=/workspace/klask_rl/scripts/dreamer/r2dreamer,type=bind",
-        "source=${localWorkspaceFolder}/third_party/fast_sac,target=/workspace/klask_rl/scripts/fast_sac,type=bind"
+        "source=${localWorkspaceFolder}/third_party/fast_sac,target=/workspace/klask_rl/scripts/fast_sac/klask_her,type=bind"
     ],
     "workspaceFolder": "/workspace/klask_rl",
     "customizations": {
@@ -39,7 +38,7 @@
             "extensions": [
                 "ms-python.python",
                 "ms-python.black-formatter",
-                "ms-python.flake8",
+                "ms-python.flake8@2025.2.0",
                 "ms-python.isort",
                 "redhat.vscode-yaml",
                 "streetsidesoftware.code-spell-checker",

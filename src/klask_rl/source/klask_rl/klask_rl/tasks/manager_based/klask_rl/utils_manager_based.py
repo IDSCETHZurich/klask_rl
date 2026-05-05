@@ -1123,3 +1123,47 @@ def distance_ball_to_player(
     player_pos = body_xy_pos_w(env, player_cfg)  # (N, 2)
     dist = torch.norm(ball_pos - player_pos, dim=1)  # (N,)
     return dist.unsqueeze(-1)
+
+
+def action_rate_cap_saturation(
+    env: ManagerBasedRLEnv,
+    action_dims: tuple[int, ...] = (0, 1),
+) -> torch.Tensor:
+    """P3: per-step fraction of dims demanding more accel than the rate cap allows.
+
+    Reads the saturation flag tensor exposed by `VelocityScaleWrapper`.
+    `action_dims`: (0, 1) for the player perspective, (2, 3) for the opponent.
+    Returns (num_envs,) in [0, 1].
+    """
+    sat = getattr(env, "_action_rate_cap_saturation", None)
+    if sat is None:
+        return torch.zeros(env.num_envs, device=env.device)
+    return sat[:, list(action_dims)].float().mean(dim=-1)
+
+
+def action_delta_l2(
+    env: ManagerBasedRLEnv,
+    action_dims: tuple[int, ...] = (0, 1),
+) -> torch.Tensor:
+    """PA: ‖a_t − a_{t−1}‖² over this side's dims (mean across the two dims)."""
+    da = getattr(env, "_action_delta", None)
+    if da is None:
+        return torch.zeros(env.num_envs, device=env.device)
+    return da[:, list(action_dims)].pow(2).mean(dim=-1)
+
+
+def action_smooth_hinge(
+    env: ManagerBasedRLEnv,
+    action_dims: tuple[int, ...] = (0, 1),
+) -> torch.Tensor:
+    """PB: relu(|Δa| / max_dv_norm − 1)² — zero inside the rate-cap envelope, quadratic outside.
+
+    `max_dv_norm = max_acceleration · step_dt / max_velocity` is set by
+    `VelocityScaleWrapper`. Returns 0 if rate limiting is disabled.
+    """
+    da = getattr(env, "_action_delta", None)
+    norm = getattr(env, "_action_max_dv_norm", None)
+    if da is None or norm is None or norm <= 0.0:
+        return torch.zeros(env.num_envs, device=env.device)
+    excess = (da[:, list(action_dims)].abs() / norm - 1.0).clamp(min=0.0)
+    return excess.pow(2).mean(dim=-1)

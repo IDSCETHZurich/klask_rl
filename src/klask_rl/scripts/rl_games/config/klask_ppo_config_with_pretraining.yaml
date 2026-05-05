@@ -2,7 +2,7 @@ params:
   seed: 3
   env:
     clip_observations: 10.0
-    clip_actions: 0.2
+    clip_actions: 1.0
   algo:
     name: a2c_continuous
   model:
@@ -34,7 +34,7 @@ params:
   load_checkpoint: true
   load_path: /workspace/klask_rl/logs/rl_games/klask/pretrained_agent_action_1.0/nn/last_klask_ep_35_rew_3.9405801.pth
   config:
-    full_experiment_name: new_agent_from_pretrained/v_0.2_no_AM/
+    full_experiment_name: null
     name: klask
     env_name: rlgpu
     device: cuda:0
@@ -50,7 +50,7 @@ params:
     normalize_advantage: true
     gamma: 0.996
     tau: 0.95
-    learning_rate: 1e-4
+    learning_rate: 1.0e-4
     lr_schedule: adaptive
     kl_threshold: 0.01
     max_epochs: -1
@@ -67,7 +67,7 @@ params:
     critic_coef: 2.0
     clip_value: true
     seq_length: 128
-    bounds_loss_coef: 1.0e-07
+    bounds_loss_coef: 1.0e-7
     self_play: true
     games_to_track: 4096
     self_play_config:
@@ -78,8 +78,32 @@ params:
     train_dir: /home/student/klask_rl/IsaacLab/logs/rl_games/klask
 env:
   obs_noise: 0.0
-  actuator_model: false
-  collision_avoidance: false
+  sim_dt: 0.001
+  decimation: 20
+  episode_length_s: 10.0
+  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
+  max_acceleration: 10.0 # [m/s^2] Max rate-of-change; null to disable rate limiting
+  ball_reset_position_x: [ -0.15, 0.15 ]
+  ball_reset_position_y: [ -0.1, 0.1 ]
+  actuator_model:
+    enable: true
+    checkpoint: /workspace/klask_rl/logs/actuator_model/data/new/checkpoints/model_data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states_train_seed0.pt
+  collision_avoidance:
+    enable: true
+initialization:
+  init_velocity:
+    type: schedule
+    phases:
+      - type: static
+        speed: 1.0
+        steps: [ 0, 1_000_000 ]
+      - type: sigmoid
+        speed: [ 1.0, 0.0 ]
+        steps: [ 1_000_000, 3_000_000 ]
+        steepness: 6.0
+      - type: static
+        speed: 0.0
+        steps: [ 3_000_000, -1 ]
 rewards:
   time_punishment:
     type: static
@@ -93,7 +117,7 @@ rewards:
     decay_rate: 1.0e-7
   player_in_goal:
     type: static
-    weight: -150.0
+    weight: -150
   opponent_in_goal:
     type: static
     weight: 0.0
@@ -102,7 +126,7 @@ rewards:
     weight: 250.0
   goal_conceded:
     type: static
-    weight: -150.0
+    weight: -150
   distance_player_ball_own_half:
     type: exponential
     weight: 0.0
@@ -147,23 +171,23 @@ terminations:
 domain_randomization:
   ball_mass:
     enable: false
-    range: [0.0013, 0.0021]
+    range: [ 0.0013, 0.0021 ]
   material_ball:
     enable: false
-    static_friction_range: [0.1, 0.28] # [0.2, 0.5] # s2r: [0.1, 0.5]
-    dynamic_friction_range: [0.06, 0.2] # [0.3, 0.45] # s2r: [0.2, 0.4]
-    restitution_range: [0.25, 0.6] # [0.95, 0.99] # s2r: [0.25, 0.4]
+    static_friction_range: [ 0.1, 0.28 ] # [0.2, 0.5] # s2r: [0.1, 0.5]
+    dynamic_friction_range: [ 0.06, 0.2 ] # [0.3, 0.45] # s2r: [0.2, 0.4]
+    restitution_range: [ 0.25, 0.6 ] # [0.95, 0.99] # s2r: [0.25, 0.4]
   material_board:
     enable: false
-    static_friction_range: [0.04, 0.14]
-    dynamic_friction_range: [0.02, 0.1]
-    restitution_range: [0.05, 0.3]
+    static_friction_range: [ 0.04, 0.14 ]
+    dynamic_friction_range: [ 0.02, 0.1 ]
+    restitution_range: [ 0.05, 0.3 ]
   material_peg:
     enable: false
-    static_friction_range: [0.04, 0.14]
-    dynamic_friction_range: [0.02, 0.1]
-    restitution_range: [0.05, 0.3]
+    static_friction_range: [ 0.04, 0.14 ]
+    dynamic_friction_range: [ 0.02, 0.1 ]
+    restitution_range: [ 0.05, 0.3 ]
   actuator:
     enable: false
-    x_damping_range: [10.0, 10.0]
-    y_damping_range: [100.0, 100.0]
+    x_damping_range: [ 10.0, 10.0 ]
+    y_damping_range: [ 100.0, 100.0 ]

@@ -99,9 +99,12 @@ def _set_state_range(term_cfg, pos, vel):
 
 
 _STRUCTURED_KEYS = {
-    "player_pos", "player_vel",
-    "opponent_pos", "opponent_vel",
-    "ball_pos", "ball_vel",
+    "player_pos",
+    "player_vel",
+    "opponent_pos",
+    "opponent_vel",
+    "ball_pos",
+    "ball_vel",
     "player_actions",
 }
 
@@ -178,13 +181,11 @@ def main():
     for fp in candidates:
         data = _load_trajectory(fp)
         if data is None:
-            print(f"[WARN] Skipping {fp}: unrecognised npz layout.")
+            print(f"[WARN] Skipping {fp}: unrecognized npz layout.")
             continue
         loaded.append((fp, data))
     if not loaded:
-        raise FileNotFoundError(
-            f"No supported trajectory .npz files found under {args_cli.trajectory_dir}"
-        )
+        raise FileNotFoundError(f"No supported trajectory .npz files found under {args_cli.trajectory_dir}")
     print(f"[INFO]: Found {len(loaded)} playable trajectory file(s) under {args_cli.trajectory_dir}")
 
     if args_cli.video:

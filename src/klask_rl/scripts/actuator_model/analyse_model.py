@@ -189,12 +189,12 @@ def compute_frequency_response_single(model, freqs, dt, amplitudes, num_cycles, 
         # Batch: 2 experiments (v_x, v_y) × n_amps amplitudes.
         cmds = np.zeros((2 * n_amps, n_steps, 2), dtype=np.float32)
         for a_idx, amp in enumerate(amplitudes):
-            cmds[2 * a_idx, :, 0] = amp * sin_wave       # v_x excitation
-            cmds[2 * a_idx + 1, :, 1] = amp * sin_wave   # v_y excitation
+            cmds[2 * a_idx, :, 0] = amp * sin_wave  # v_x excitation
+            cmds[2 * a_idx + 1, :, 1] = amp * sin_wave  # v_y excitation
         out = run_model_synthetic(model, cmds, device)  # (2*n_amps, n_steps, 2)
 
         for a_idx, amp in enumerate(amplitudes):
-            out_vx = out[2 * a_idx]      # v_x excitation output
+            out_vx = out[2 * a_idx]  # v_x excitation output
             out_vy = out[2 * a_idx + 1]  # v_y excitation output
 
             for out_idx, tf in zip([0, 1], ["vx_ux", "vx_uy"]):
@@ -321,9 +321,9 @@ def compute_step_response(model, amplitudes, dt, num_steps, device):
     # Batch: 3 experiments × n_amps amplitudes.
     cmds = np.zeros((3 * n_amps, num_steps, 2), dtype=np.float32)
     for a_idx, amp in enumerate(amplitudes):
-        cmds[3 * a_idx, :, 0] = amp          # v_x only
-        cmds[3 * a_idx + 1, :, 1] = amp      # v_y only
-        cmds[3 * a_idx + 2, :, :] = amp      # v_x + v_y
+        cmds[3 * a_idx, :, 0] = amp  # v_x only
+        cmds[3 * a_idx + 1, :, 1] = amp  # v_y only
+        cmds[3 * a_idx + 2, :, :] = amp  # v_x + v_y
     out = run_model_synthetic(model, cmds, device)  # (3*n_amps, num_steps, 2)
 
     return {
@@ -502,19 +502,35 @@ def main():
     print("\nComputing single-input frequency response...")
     fr_single_per_model = []
     for model, label in zip(models, args.labels):
-        fr_single_per_model.append(compute_frequency_response_single(
-            model, freqs, args.dt, amplitudes,
-            args.num_cycles, args.discard_cycles, device, label=label,
-        ))
+        fr_single_per_model.append(
+            compute_frequency_response_single(
+                model,
+                freqs,
+                args.dt,
+                amplitudes,
+                args.num_cycles,
+                args.discard_cycles,
+                device,
+                label=label,
+            )
+        )
 
     # --- Frequency response: simultaneous ---
     print("\nComputing simultaneous (quadrature) frequency response...")
     fr_sim_per_model = []
     for model, label in zip(models, args.labels):
-        fr_sim_per_model.append(compute_frequency_response_simultaneous(
-            model, freqs, args.dt, amplitudes,
-            args.num_cycles, args.discard_cycles, device, label=label,
-        ))
+        fr_sim_per_model.append(
+            compute_frequency_response_simultaneous(
+                model,
+                freqs,
+                args.dt,
+                amplitudes,
+                args.num_cycles,
+                args.discard_cycles,
+                device,
+                label=label,
+            )
+        )
 
     # --- Step response ---
     print("\nComputing step response...")
@@ -530,23 +546,30 @@ def main():
 
         plot_bode(
             [r[amp] for r in fr_single_per_model],
-            args.labels, freqs,
+            args.labels,
+            freqs,
             title=f"Frequency Response — Single Input (A = {amp} m/s)",
             filename=f"analyse_model_01_bode_single_A{amp_tag}.png",
-            output_dir=args.output_dir, dpi=args.dpi,
+            output_dir=args.output_dir,
+            dpi=args.dpi,
         )
         plot_bode_simultaneous(
             [r[amp] for r in fr_sim_per_model],
-            args.labels, freqs,
+            args.labels,
+            freqs,
             title=f"Frequency Response — Simultaneous Quadrature (A = {amp} m/s)",
             filename=f"analyse_model_02_bode_simultaneous_A{amp_tag}.png",
-            output_dir=args.output_dir, dpi=args.dpi,
+            output_dir=args.output_dir,
+            dpi=args.dpi,
         )
         plot_step_response(
             [r[amp] for r in step_per_model],
-            args.labels, args.dt, amp,
+            args.labels,
+            args.dt,
+            amp,
             filename=f"analyse_model_03_step_A{amp_tag}.png",
-            output_dir=args.output_dir, dpi=args.dpi,
+            output_dir=args.output_dir,
+            dpi=args.dpi,
         )
 
     print("\nDone.")
