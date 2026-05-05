@@ -2,5 +2,5 @@
 	path = third_party/r2dreamer
 	url = git@github.com-MeierTobias:MeierTobias/r2dreamer.git
 [submodule "third_party/fast_sac/klask_her"]
-	path = third_party/fast_sac/klask_her
+	path = third_party/fast_sac
 	url = git@github.com-MeierTobias:thomasbi1/klask_her.git
