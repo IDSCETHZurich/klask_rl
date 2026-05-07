@@ -73,6 +73,11 @@ parser.add_argument(
     choices=["dreamer", "ppo"],
     help="Type of opponent agent: 'dreamer' or 'ppo' (rl_games).",
 )
+parser.add_argument(
+    "--boxplot",
+    action="store_true",
+    help="After saving the per-checkpoint eval-metrics .npz, also generate a box-plot PNG next to it.",
+)
 
 args_cli = parser.parse_args()
 
@@ -118,8 +123,10 @@ from env_cfg_utils import apply_camera_size_to_env_cfg
 from envs.isaaclab import IsaacLabVecEnv
 from isaaclab.sim import RenderCfg
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
+from klask_rl.tasks.manager_based.klask_rl.eval_metrics import EvalMetricsTracker
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     KlaskRlAgentOpponentWrapper,
+    KlaskRlCollisionAvoidanceWrapper,
     OpponentActionWrapper,
     VelocityScaleWrapper,
     configure_domain_randomization,
@@ -154,6 +161,8 @@ def _make_eval_env(
     """Create an evaluation env with the appropriate opponent wrapper.
 
     Simplified wrapper chain (no curriculum/logging, innermost → outermost):
+      0. KlaskRlCollisionAvoidanceWrapper (if config.collision_avoidance.enable —
+         innermost; clips world-frame m/s actions near board boundaries)
       1. OpponentActionWrapper — negate opponent actions for coordinate frame
       2. ActuatorModelWrapper (if config.actuator_model.enable — expects m/s)
       3. VelocityScaleWrapper — scales [-1, 1] → m/s; action manager _scale = 1.0
@@ -222,25 +231,41 @@ def _make_eval_env(
     # --- Create base env ---
     isaac_env = gym.make(task_name, cfg=env_cfg)
 
-    # --- 1. Opponent action frame transform (innermost) ---
-    isaac_env = OpponentActionWrapper(isaac_env)
-
-    # --- 2. Action manager scale = 1.0 (pass-through, m/s in → m/s out) ---
-    # Velocity scaling is done by VelocityScaleWrapper below so that the
-    # actuator model sees commands in m/s (matching its training units).
+    # max_velocity is needed by both KlaskRlCollisionAvoidanceWrapper (below)
+    # and VelocityScaleWrapper (further down), so look it up once up front.
     max_velocity = getattr(env_config, "max_velocity", None)
     if max_velocity is None:
         raise ValueError("env_config.max_velocity is required; VelocityScaleWrapper needs it to scale [-1, 1] → m/s.")
+
+    # --- Action manager scale = 1.0 (pass-through, m/s in → m/s out) ---
+    # Velocity scaling is done by VelocityScaleWrapper below so that the
+    # actuator model sees commands in m/s (matching its training units).
     action_mgr = isaac_env.unwrapped.action_manager
     for term in action_mgr._terms.values():
         term._scale = 1.0
 
-    # --- 3. Actuator model wrapper (expects m/s commands) ---
+    # --- 0. Collision avoidance (world-frame m/s clipping; innermost gym wrapper) ---
+    # Mirrors train_dreamer.py: sits inside OpponentActionWrapper so it sees
+    # world-frame actions (after opponent dim negation) for both player and opponent.
+    ca_cfg = getattr(env_config, "collision_avoidance", None)
+    if ca_cfg is not None and getattr(ca_cfg, "enable", False):
+        isaac_env = KlaskRlCollisionAvoidanceWrapper(isaac_env, max_vel=float(max_velocity))
+
+    # InitializationWrapper is intentionally skipped at inference. Its _step
+    # counter would start at 0 and select the EARLY curriculum phase, while a
+    # converged agent saw the FINAL phase at end of training. Leaving
+    # _init_velocity_speed unset makes reset_player_velocity_toward_ball a
+    # no-op (utils_manager_based.py:363-365), matching converged-training env.
+
+    # --- 1. Opponent action frame transform ---
+    isaac_env = OpponentActionWrapper(isaac_env)
+
+    # --- 2. Actuator model wrapper (expects m/s commands) ---
     actuator_cfg = getattr(env_config, "actuator_model", None)
     if actuator_cfg is not None and actuator_cfg.enable:
         isaac_env = ActuatorModelWrapper(isaac_env, model_file=actuator_cfg.checkpoint)
 
-    # --- 3a. Velocity scaling: [-1, 1] → [-max_velocity, max_velocity] m/s ---
+    # --- 3. Velocity scaling: [-1, 1] → [-max_velocity, max_velocity] m/s ---
     max_acceleration = getattr(env_config, "max_acceleration", None)
     _act_space = isaac_env.unwrapped.single_action_space
     isaac_env = VelocityScaleWrapper(
@@ -332,10 +357,25 @@ def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device, ppo_obs_s
     opponent.actions_low = opponent.actions_low.to(device)
     opponent.actions_high = opponent.actions_high.to(device)
 
+    # init_rnn() is deferred to _init_ppo_opponent_batch() — we need a real
+    # post-reset opponent obs to call get_batch_size() first so rl-games sets
+    # has_batch_dimension/batch_size correctly before allocating RNN state.
+    return opponent
+
+
+def _init_ppo_opponent_batch(opponent, vec_env):
+    """Run rl-games' batch-size handshake against a freshly reset env.
+
+    Mirrors play_klask.py:354,357,381: opponent.get_batch_size(obs, 1) sets
+    has_batch_dimension/batch_size from the actual obs shape, and only then
+    is init_rnn() safe to call (it sizes hidden state from batch_size).
+
+    Must be called AFTER vec_env.reset() and BEFORE the first vec_env.step().
+    """
+    opp_obs = vec_env._env.unwrapped.observation_manager.compute()["opponent"]
+    _ = opponent.get_batch_size(opp_obs, 1)
     if opponent.is_rnn:
         opponent.init_rnn()
-
-    return opponent
 
 
 def _load_dreamer_agent(full_cfg, obs_space, act_space, checkpoint_path, device):
@@ -453,15 +493,6 @@ def main():
         )
         opponent_wrapper.add_opponent(ppo_opponent)
 
-    TERM_NAME_MAP = {
-        "goal_scored": "player_scored",
-        "goal_conceded": "opponent_scored",
-        "player_in_goal": "player_in_goal",
-        "opponent_in_goal": "opponent_in_goal",
-        "time_out": "time_expired",
-    }
-    term_manager = vec_env._env.unwrapped.termination_manager
-
     # Collect per-checkpoint results for aggregate summary.
     all_results = []
     interrupted = False
@@ -476,14 +507,7 @@ def main():
         player = _load_dreamer_agent(player_cfg, obs_space, act_space, ckpt_path, device)
 
         # --- Reset tracking state ---
-        term_counts = {
-            "player_scored": 0,
-            "opponent_scored": 0,
-            "player_in_goal": 0,
-            "opponent_in_goal": 0,
-            "time_expired": 0,
-        }
-        total_games = 0
+        tracker = EvalMetricsTracker(vec_env._env)
 
         # --- Game loop ---
         pbar = tqdm(total=args_cli.num_games, desc="Games")
@@ -491,59 +515,48 @@ def main():
         try:
             with torch.inference_mode():
                 vec_env.reset()
+                # PPO opponent needs to see a real post-reset obs for rl-games to
+                # set has_batch_dimension/batch_size before init_rnn() runs. Must
+                # happen after every reset(), since init_rnn() reallocates state.
+                if opponent_type == "ppo":
+                    _init_ppo_opponent_batch(opponent_wrapper.opponent, vec_env)
                 done = torch.ones(num_envs, dtype=torch.bool, device=device)
                 agent_state = player.get_initial_state(num_envs)
                 act = agent_state["action"].clone()
 
-                while total_games < args_cli.num_games and simulation_app.is_running():
+                while tracker.total_games < args_cli.num_games and simulation_app.is_running():
                     # Step env (opponent actions generated inside the opponent wrapper).
                     trans, done = vec_env.step(act.detach(), done.detach())
 
                     # Player agent inference (deterministic).
                     act, agent_state = player.act(trans, agent_state, eval=True)
 
+                    # Per-step metric accumulation (must run before finalize).
+                    tracker.update()
+
                     # Track terminations.
                     if done.any():
                         num_done = int(done.sum().item())
-                        total_games += num_done
-
-                        done_mask = done.bool().to(term_manager._term_dones.device)
-                        for i, term_name in enumerate(term_manager._term_names):
-                            if term_name in TERM_NAME_MAP:
-                                count_key = TERM_NAME_MAP[term_name]
-                                term_counts[count_key] += int(term_manager._term_dones[done_mask, i].sum().item())
-
-                        # Update tqdm with live stats.
+                        tracker.finalize(done)
                         pbar.update(min(num_done, args_cli.num_games - pbar.n))
-                        p_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
-                        o_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
-                        pbar.set_postfix(
-                            P_wins=p_wins,
-                            O_wins=o_wins,
-                            Draws=term_counts["time_expired"],
-                            P_wr=f"{p_wins / total_games * 100:.1f}%",
-                        )
+                        pbar.set_postfix(**tracker.live_postfix())
         except KeyboardInterrupt:
             interrupted = True
             print(
-                f"\n[INFO] Evaluation interrupted by user after {total_games} games. "
+                f"\n[INFO] Evaluation interrupted by user after {tracker.total_games} games. "
                 "Printing summary for completed games..."
             )
 
         pbar.close()
 
         # --- Print and save results ---
-        player_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
-        opponent_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
-        draws = term_counts["time_expired"]
-
         all_results.append({
             "checkpoint": ckpt_path,
-            "total_games": total_games,
-            "player_wins": player_wins,
-            "opponent_wins": opponent_wins,
-            "draws": draws,
-            "term_counts": dict(term_counts),
+            "total_games": tracker.total_games,
+            "player_wins": tracker.player_wins,
+            "opponent_wins": tracker.opponent_wins,
+            "draws": tracker.draws,
+            "term_counts": dict(tracker.term_counts),
         })
 
         summary_lines = [
@@ -553,20 +566,10 @@ def main():
             f"  Player checkpoint  : {ckpt_path}",
             f"  Opponent type      : {opponent_type}",
             f"  Opponent checkpoint: {args_cli.opponent_checkpoint}",
-            f"  Total games played : {total_games}",
+            f"  Total games played : {tracker.total_games}",
             "-" * 50,
-            f"  Player scored (goal_scored)      : {term_counts['player_scored']}",
-            f"  Opponent scored (goal_conceded)   : {term_counts['opponent_scored']}",
-            f"  Player fell in goal (player_in)   : {term_counts['player_in_goal']}",
-            f"  Opponent fell in goal (opp_in)    : {term_counts['opponent_in_goal']}",
-            f"  Time expired (time_out)           : {term_counts['time_expired']}",
-            "-" * 50,
-            f"  Player wins  : {player_wins}",
-            f"  Opponent wins: {opponent_wins}",
-            f"  Draws        : {draws}",
         ]
-        if total_games > 0:
-            summary_lines.append(f"  Player win rate: {player_wins / total_games * 100:.1f}%")
+        summary_lines += tracker.summary_body_lines()
         summary_lines.append("=" * 50 + "\n")
 
         summary_text = "\n".join(summary_lines)
@@ -580,6 +583,27 @@ def main():
         with open(results_file, "w") as f:
             f.write(summary_text)
         print(f"[INFO] Head-to-head results saved to: {results_file}")
+
+        npz_file = os.path.join(results_dir, f"h2h_results_{timestamp}.npz")
+        tracker.save_npz(
+            npz_file,
+            metadata={
+                "player_checkpoint": ckpt_path,
+                "opponent_type": opponent_type,
+                "opponent_checkpoint": args_cli.opponent_checkpoint or "",
+            },
+        )
+        print(f"[INFO] Per-game metrics saved to:    {npz_file}")
+
+        if args_cli.boxplot:
+            import importlib.util
+
+            _ep_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "eval_plot.py"))
+            _ep_spec = importlib.util.spec_from_file_location("eval_plot", _ep_path)
+            _ep_mod = importlib.util.module_from_spec(_ep_spec)
+            _ep_spec.loader.exec_module(_ep_mod)
+            png_file = _ep_mod.plot_boxplots(npz_file, title_suffix=os.path.basename(ckpt_path))
+            print(f"[INFO] Box-plot saved to:            {png_file}")
 
         # Free player model before loading the next one.
         del player

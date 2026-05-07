@@ -69,6 +69,11 @@ parser.add_argument(
     default=None,
     help="Override episode length in seconds. Takes precedence over the YAML's env.episode_length_s.",
 )
+parser.add_argument(
+    "--boxplot",
+    action="store_true",
+    help="After saving the eval-metrics .npz, also generate a box-plot PNG next to it.",
+)
 
 
 # append AppLauncher cli args
@@ -82,6 +87,11 @@ if args_cli.video:
 # launch omniverse app
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
+
+# Isaac Sim may override SIGINT; restore Python's default so Ctrl-C works.
+import signal
+
+signal.signal(signal.SIGINT, signal.default_int_handler)
 
 """Rest everything follows."""
 
@@ -106,6 +116,7 @@ from isaaclab_tasks.utils import (
 )
 from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
+from klask_rl.tasks.manager_based.klask_rl.eval_metrics import EvalMetricsTracker
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     configure_domain_randomization,
     ActionHistoryWrapper,
@@ -390,24 +401,8 @@ def main():
         opponent.set_weights(agent.get_weights())
         find_wrapper(env, KlaskRlAgentOpponentWrapper).add_opponent(opponent)
 
-    # -- Termination tracking for head-to-head mode --
-    term_counts = {
-        "player_scored": 0,  # Episode_Termination/goal_scored
-        "opponent_scored": 0,  # Episode_Termination/goal_conceded
-        "player_in_goal": 0,  # Episode_Termination/player_in_goal
-        "opponent_in_goal": 0,  # Episode_Termination/opponent_in_goal
-        "time_expired": 0,  # Episode_Termination/time_out
-    }
-    total_games = 0
-
-    TERM_NAME_MAP = {
-        "goal_scored": "player_scored",
-        "goal_conceded": "opponent_scored",
-        "player_in_goal": "player_in_goal",
-        "opponent_in_goal": "opponent_in_goal",
-        "time_out": "time_expired",
-    }
-    term_manager = env.unwrapped.termination_manager
+    # -- Per-game metrics tracker (termination counts + new per-game metrics) --
+    tracker = EvalMetricsTracker(env)
 
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
@@ -416,55 +411,54 @@ def main():
     pbar = tqdm(total=args_cli.num_games, desc="Games", disable=not head_to_head) if head_to_head else None
 
     start_time = time.time()
-    while simulation_app.is_running() and (head_to_head or time.time() - start_time < 1000.0):
-        # In head-to-head mode, stop after the requested number of games
-        if head_to_head and total_games >= args_cli.num_games:
-            break
-
-        # run everything in inference mode
-        with torch.inference_mode():
-            # convert obs to agent format
-            obs = agent.obs_to_torch(obs)
-            # agent stepping
-            actions = agent.get_action(obs, is_deterministic=True)
-            # env stepping
-            obs, rew, dones, info = env.step(actions)
-            rewards.append(rew.detach().cpu())
-            # perform operations for terminated episodes
-            if len(dones) > 0:
-                # --- accumulate termination stats ---
-                num_done = int(dones.sum().item()) if isinstance(dones, torch.Tensor) else int(sum(dones))
-                if num_done > 0:
-                    total_games += num_done
-                    # Use per-env termination data, counting only envs that terminated this step
-                    done_mask = dones.bool().to(term_manager._term_dones.device)
-                    for i, term_name in enumerate(term_manager._term_names):
-                        if term_name in TERM_NAME_MAP:
-                            count_key = TERM_NAME_MAP[term_name]
-                            term_counts[count_key] += int(term_manager._term_dones[done_mask, i].sum().item())
-                    # update progress bar with live stats
-                    if pbar is not None:
-                        pbar.update(min(num_done, args_cli.num_games - pbar.n))
-                        p_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
-                        o_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
-                        pbar.set_postfix(
-                            P_wins=p_wins,
-                            O_wins=o_wins,
-                            Draws=term_counts["time_expired"],
-                            P_wr=f"{p_wins / total_games * 100:.1f}%",
-                        )
-                # reset rnn state for terminated episodes
-                if agent.is_rnn and agent.states is not None:
-                    for s in agent.states:
-                        s[:, dones, :] = 0.0
-                if head_to_head and opponent.is_rnn and opponent.states is not None:
-                    for s in opponent.states:
-                        s[:, dones, :] = 0.0
-        if args_cli.video:
-            timestep += 1
-            # Exit the play loop after recording one video
-            if timestep == args_cli.video_length:
+    try:
+        while simulation_app.is_running() and (head_to_head or time.time() - start_time < 1000.0):
+            # In head-to-head mode, stop after the requested number of games
+            if head_to_head and tracker.total_games >= args_cli.num_games:
                 break
+
+            # run everything in inference mode
+            with torch.inference_mode():
+                # convert obs to agent format
+                obs = agent.obs_to_torch(obs)
+                # agent stepping
+                actions = agent.get_action(obs, is_deterministic=True)
+                # env stepping
+                obs, rew, dones, info = env.step(actions)
+                rewards.append(rew.detach().cpu())
+                # Per-step metric accumulation (head-to-head only — non-h2h skips
+                # to avoid unbounded growth of per-game lists).
+                if head_to_head:
+                    tracker.update()
+                # perform operations for terminated episodes
+                if len(dones) > 0:
+                    num_done = int(dones.sum().item()) if isinstance(dones, torch.Tensor) else int(sum(dones))
+                    if num_done > 0:
+                        if head_to_head:
+                            tracker.finalize(dones)
+                            if pbar is not None:
+                                pbar.update(min(num_done, args_cli.num_games - pbar.n))
+                                pbar.set_postfix(**tracker.live_postfix())
+                    # reset rnn state for terminated episodes
+                    if agent.is_rnn and agent.states is not None:
+                        for s in agent.states:
+                            s[:, dones, :] = 0.0
+                    if head_to_head and opponent.is_rnn and opponent.states is not None:
+                        for s in opponent.states:
+                            s[:, dones, :] = 0.0
+            if args_cli.video:
+                timestep += 1
+                # Exit the play loop after recording one video
+                if timestep == args_cli.video_length:
+                    break
+    except KeyboardInterrupt:
+        if head_to_head:
+            print(
+                f"\n[INFO] Evaluation interrupted by user after {tracker.total_games} games. "
+                "Printing summary for completed games..."
+            )
+        else:
+            print("\n[INFO] Evaluation interrupted by user.")
 
     if pbar is not None:
         pbar.close()
@@ -474,36 +468,19 @@ def main():
 
     # -- Print summary --
     if head_to_head:
-        player_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
-        opponent_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
-        draws = term_counts["time_expired"]
-
-        # Create summary text
         summary_lines = [
             "\n" + "=" * 50,
             "  HEAD-TO-HEAD EVALUATION RESULTS",
             "=" * 50,
             f"  Player checkpoint : {resume_path}",
             f"  Opponent checkpoint: {args_cli.opponent_checkpoint}",
-            f"  Total games played : {total_games}",
+            f"  Total games played : {tracker.total_games}",
             "-" * 50,
-            f"  Player scored (goal_scored)      : {term_counts['player_scored']}",
-            f"  Opponent scored (goal_conceded)   : {term_counts['opponent_scored']}",
-            f"  Player fell in goal (player_in)   : {term_counts['player_in_goal']}",
-            f"  Opponent fell in goal (opp_in)    : {term_counts['opponent_in_goal']}",
-            f"  Time expired (time_out)           : {term_counts['time_expired']}",
-            "-" * 50,
-            f"  Player wins  : {player_wins}",
-            f"  Opponent wins: {opponent_wins}",
-            f"  Draws        : {draws}",
         ]
-        if total_games > 0:
-            summary_lines.append(f"  Player win rate: {player_wins / total_games * 100:.1f}%")
+        summary_lines += tracker.summary_body_lines()
         summary_lines.append("=" * 50 + "\n")
 
         summary_text = "\n".join(summary_lines)
-
-        # Print to console
         print(summary_text)
 
         # Write to file
@@ -514,6 +491,26 @@ def main():
         with open(results_file, "w") as f:
             f.write(summary_text)
         print(f"[INFO] Head-to-head results saved to: {results_file}")
+
+        npz_file = os.path.join(results_dir, f"h2h_results_{timestamp}.npz")
+        tracker.save_npz(
+            npz_file,
+            metadata={
+                "player_checkpoint": resume_path,
+                "opponent_checkpoint": args_cli.opponent_checkpoint or "",
+            },
+        )
+        print(f"[INFO] Per-game metrics saved to:    {npz_file}")
+
+        if args_cli.boxplot:
+            import importlib.util
+
+            _ep_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "eval_plot.py"))
+            _ep_spec = importlib.util.spec_from_file_location("eval_plot", _ep_path)
+            _ep_mod = importlib.util.module_from_spec(_ep_spec)
+            _ep_spec.loader.exec_module(_ep_mod)
+            png_file = _ep_mod.plot_boxplots(npz_file)
+            print(f"[INFO] Box-plot saved to:            {png_file}")
     else:
         plt.plot(rewards, label="Reward")
         plt.legend()
