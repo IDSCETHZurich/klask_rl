@@ -39,8 +39,15 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+
+from sim2real_evaluation import (
+    draw_velocity_comparison,
+    finalize_combined_grid_legend,
+    load_trajectory_arrays,
+    make_combined_grid,
+    save_figure,
+)
 
 
 def natural_sort_key(text: str) -> list[Any]:
@@ -55,25 +62,6 @@ def trajectory_sort_key(name: str) -> tuple[int, str]:
     if match:
         return (int(match.group(1)), name)
     return (10**9, name)
-
-
-def trajectory_label(traj_name: str, fallback_idx: int) -> str:
-    """Create concise label like T01 from trajectory filename."""
-    stem = Path(traj_name).stem
-    match = re.search(r"(\d+)$", stem)
-    if match:
-        return f"T{int(match.group(1)):02d}"
-    return f"T{fallback_idx + 1:02d}"
-
-
-def rmse_speed_from_npz(npz_path: Path) -> float:
-    """Compute combined-speed RMSE from one trajectory npz file."""
-    with np.load(npz_path) as data:
-        obs_real = data["observations_real"]
-        obs_sim = data["observations_sim"]
-        err_x = obs_sim[:, 2] - obs_real[:, 2]
-        err_y = obs_sim[:, 3] - obs_real[:, 3]
-        return float(np.sqrt(np.mean(err_x**2 + err_y**2)))
 
 
 def load_seed_record(seed_dir: Path) -> dict[str, Any]:
@@ -96,25 +84,13 @@ def load_seed_record(seed_dir: Path) -> dict[str, Any]:
     real_vel_by_traj: dict[str, dict[str, np.ndarray]] = {}
     action_by_traj: dict[str, dict[str, np.ndarray]] = {}
     for npz_file in npz_files:
-        with np.load(npz_file) as data:
-            obs_sim = data["observations_sim"]
-            obs_real = data["observations_real"]
-            actions = data["actions"]
-            sim_vel_by_traj[npz_file.name] = {
-                "x": np.asarray(obs_sim[:, 2], dtype=float),
-                "y": np.asarray(obs_sim[:, 3], dtype=float),
-            }
-            real_vel_by_traj[npz_file.name] = {
-                "x": np.asarray(obs_real[:, 2], dtype=float),
-                "y": np.asarray(obs_real[:, 3], dtype=float),
-            }
-            action_by_traj[npz_file.name] = {
-                "x": np.asarray(actions[:, 0], dtype=float),
-                "y": np.asarray(actions[:, 1], dtype=float),
-            }
-            err_x = np.asarray(obs_sim[:, 2] - obs_real[:, 2], dtype=float)
-            err_y = np.asarray(obs_sim[:, 3] - obs_real[:, 3], dtype=float)
-            rmse_speed_by_traj[npz_file.name] = float(np.sqrt(np.mean(err_x**2 + err_y**2)))
+        arr = load_trajectory_arrays(npz_file)
+        sim_vel_by_traj[npz_file.name] = {"x": arr["vel_sim_x"], "y": arr["vel_sim_y"]}
+        real_vel_by_traj[npz_file.name] = {"x": arr["vel_real_x"], "y": arr["vel_real_y"]}
+        action_by_traj[npz_file.name] = {"x": arr["action_x"], "y": arr["action_y"]}
+        err_x = arr["vel_sim_x"] - arr["vel_real_x"]
+        err_y = arr["vel_sim_y"] - arr["vel_real_y"]
+        rmse_speed_by_traj[npz_file.name] = float(np.sqrt(np.mean(err_x**2 + err_y**2)))
 
     metrics_traj_names = set(traj_metrics.keys())
     npz_traj_names = set(sim_vel_by_traj.keys())
@@ -296,27 +272,20 @@ def build_aggregate(seed_records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _draw_velocity_comparison_with_sigma(ax, traj_index, traj_name, temporal, ref):
-    ts = np.asarray(temporal["time_steps"], dtype=int)
-    mean_x = np.asarray(temporal["mean_x"], dtype=float)
-    sigma_x = np.asarray(temporal["sigma_x"], dtype=float)
-    mean_y = np.asarray(temporal["mean_y"], dtype=float)
-    sigma_y = np.asarray(temporal["sigma_y"], dtype=float)
-
-    ax.step(ts, ref["action_x"], label="Commanded Vel X", color="gray", linestyle=":", alpha=0.8)
-    ax.step(ts, ref["action_y"], label="Commanded Vel Y", color="silver", linestyle=":", alpha=0.8)
-    ax.plot(ts, ref["real_x"], label="Real Vel X", color="tab:blue", linestyle="-", linewidth=2)
-    ax.plot(ts, mean_x, label="Sim Vel X (mean)", color="tab:cyan", linestyle="--", linewidth=2)
-    ax.fill_between(ts, mean_x - sigma_x, mean_x + sigma_x, color="tab:cyan", alpha=0.22, label="Sim Vel X ±1σ")
-
-    ax.plot(ts, ref["real_y"], label="Real Vel Y", color="tab:orange", linestyle="-", linewidth=2)
-    ax.plot(ts, mean_y, label="Sim Vel Y (mean)", color="tab:red", linestyle="--", linewidth=2)
-    ax.fill_between(ts, mean_y - sigma_y, mean_y + sigma_y, color="tab:red", alpha=0.18, label="Sim Vel Y ±1σ")
-
-    ax.set_title(f"Trajectory {traj_index + 1}", fontsize=12)
-    ax.set_xlabel("Time Steps")
-    ax.set_ylabel("Velocity (m/s)")
-    ax.grid(True, linestyle=":", alpha=0.6)
+def _draw_velocity_comparison_with_sigma(ax, traj_index, temporal, ref):
+    draw_velocity_comparison(
+        ax,
+        np.asarray(temporal["time_steps"], dtype=int),
+        ref["action_x"],
+        ref["action_y"],
+        ref["real_x"],
+        ref["real_y"],
+        np.asarray(temporal["mean_x"], dtype=float),
+        np.asarray(temporal["mean_y"], dtype=float),
+        sim_x_sigma=np.asarray(temporal["sigma_x"], dtype=float),
+        sim_y_sigma=np.asarray(temporal["sigma_y"], dtype=float),
+        title=f"Trajectory {traj_index + 1}",
+    )
 
 
 def plot_velocity_comparison_with_sigma(
@@ -327,143 +296,153 @@ def plot_velocity_comparison_with_sigma(
     temporal_by_traj = aggregate["temporal_by_traj"]
     reference_by_traj = aggregate["reference_by_traj"]
 
+    suptitle = "Sim-to-Real Actuator Model Validation"
+
     if separate:
         out_paths: list[Path] = []
         for i, traj in enumerate(traj_names):
             fig, ax = plt.subplots(figsize=(9, 5), constrained_layout=True)
-            fig.suptitle(
-                "Sim-to-Real Actuator Model Validation (Cross-Seed Mean ±1σ)",
-                fontsize=13,
-                weight="bold",
-            )
-            _draw_velocity_comparison_with_sigma(ax, i, traj, temporal_by_traj[traj], reference_by_traj[traj])
+            fig.suptitle(suptitle, fontsize=13, weight="bold")
+            _draw_velocity_comparison_with_sigma(ax, i, temporal_by_traj[traj], reference_by_traj[traj])
             ax.legend(loc="best", fontsize=8)
             slug = Path(traj).stem
-            out_path = output_dir / f"sim2real_seed_summary_01_velocity_comparison_with_sigma_{slug}.png"
-            fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+            name = f"sim2real_seed_summary_01_velocity_comparison_with_sigma_{slug}.png"
+            save_figure(fig, name, output_dir, dpi=dpi)
             plt.close(fig)
-            print(f"Saved figure to {out_path}")
-            out_paths.append(out_path)
+            out_paths.append(output_dir / name)
         return out_paths
 
     n_traj = len(traj_names)
-    ncols = 2
-    n_panels = n_traj + 1
-    nrows = int(np.ceil(n_panels / ncols))
-
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(15, 4 * nrows), constrained_layout=True)
-    fig.suptitle("Sim-to-Real Actuator Model Validation (Cross-Seed Mean ±1σ)", fontsize=18, weight="bold")
-    ax_flat = np.atleast_1d(axes).flatten()
+    fig, ax_flat = make_combined_grid(n_traj, suptitle)
 
     for i, traj in enumerate(traj_names):
-        _draw_velocity_comparison_with_sigma(ax_flat[i], i, traj, temporal_by_traj[traj], reference_by_traj[traj])
+        _draw_velocity_comparison_with_sigma(ax_flat[i], i, temporal_by_traj[traj], reference_by_traj[traj])
 
-    legend_ax = ax_flat[n_traj]
-    handles, labels = ax_flat[0].get_legend_handles_labels()
-    legend_ax.legend(handles, labels, loc="center", fontsize=10)
-    legend_ax.axis("off")
+    finalize_combined_grid_legend(ax_flat, n_traj, legend_fontsize=10)
 
-    for j in range(n_traj + 1, len(ax_flat)):
-        ax_flat[j].axis("off")
-
-    out_path = output_dir / "sim2real_seed_summary_01_velocity_comparison_with_sigma.png"
-    fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+    name = "sim2real_seed_summary_01_velocity_comparison_with_sigma.png"
+    save_figure(fig, name, output_dir, dpi=dpi)
     plt.close(fig)
-    print(f"Saved figure to {out_path}")
-    return out_path
+    return output_dir / name
+
+
+def _draw_velocity_rmse_boxplot(ax, n_traj, rmse_speed_data):
+    """Draw the per-trajectory velocity-RMSE boxplot onto ax."""
+    centers = np.arange(n_traj)
+    color = "green"
+
+    box = ax.boxplot(
+        rmse_speed_data,
+        positions=centers,
+        widths=0.5,
+        patch_artist=True,
+        showfliers=False,
+        medianprops={"color": "black", "linewidth": 1.4},
+        whiskerprops={"color": color, "linewidth": 1.1},
+        capprops={"color": color, "linewidth": 1.1},
+    )
+    for patch in box["boxes"]:
+        patch.set_facecolor(color)
+        patch.set_alpha(0.35)
+        patch.set_edgecolor(color)
+
+    rng = np.random.default_rng(42)
+    for pos, vals in zip(centers, rmse_speed_data):
+        vals_arr = np.asarray(vals, dtype=float)
+        jitter = rng.uniform(-0.08, 0.08, size=vals_arr.shape[0])
+        ax.scatter(
+            np.full(vals_arr.shape[0], pos) + jitter,
+            vals_arr,
+            marker="x",
+            color=color,
+            linewidths=1.0,
+            s=36,
+            alpha=0.85,
+            zorder=3,
+        )
+
+    ax.set_xticks(centers)
+    ax.set_xticklabels([str(i + 1) for i in range(n_traj)])
+    ax.set_xlabel("Trajectory")
+    ax.set_ylabel("Velocity RMSE (m/s)")
+    ax.grid(True, linestyle=":", alpha=0.6, axis="y")
+
+    legend_handles = [Patch(facecolor=color, edgecolor=color, alpha=0.35, label="Velocity RMSE")]
+    ax.legend(handles=legend_handles, loc="upper right")
 
 
 def plot_rmse_distributions(aggregate: dict[str, Any], output_dir: Path, dpi: int) -> Path:
-    """Plot grouped boxplots (X/Y/speed RMSE) for each trajectory."""
+    """Plot velocity-RMSE boxplots (one per trajectory) across seeds."""
     traj_names = aggregate["trajectory_names"]
     values_by_traj = aggregate["values_by_traj"]
-
-    rmse_x_data = [values_by_traj[traj]["rmse_x"] for traj in traj_names]
-    rmse_y_data = [values_by_traj[traj]["rmse_y"] for traj in traj_names]
     rmse_speed_data = [values_by_traj[traj]["rmse_speed"] for traj in traj_names]
+    n_traj = len(traj_names)
+
+    fig_width = max(8, 1.0 * n_traj + 3)
+    fig, ax = plt.subplots(figsize=(fig_width, 6), constrained_layout=True)
+    fig.suptitle("Cross-Seed Velocity RMSE Distribution by Trajectory", fontsize=16, weight="bold")
+
+    _draw_velocity_rmse_boxplot(ax, n_traj, rmse_speed_data)
+
+    name = "sim2real_seed_summary_02_rmse_distributions.png"
+    save_figure(fig, name, output_dir, dpi=dpi)
+    plt.close(fig)
+    return output_dir / name
+
+
+def plot_combined(aggregate: dict[str, Any], output_dir: Path, dpi: int) -> Path:
+    """Combined figure: cross-seed velocity comparison panels + RMSE boxplot stacked vertically."""
+    traj_names = aggregate["trajectory_names"]
+    temporal_by_traj = aggregate["temporal_by_traj"]
+    reference_by_traj = aggregate["reference_by_traj"]
+    values_by_traj = aggregate["values_by_traj"]
 
     n_traj = len(traj_names)
-    centers = np.arange(n_traj)
-    offsets = [-0.24, 0.0, 0.24]
-    width = 0.2
-    colors = {
-        "rmse_x": "tab:blue",
-        "rmse_y": "tab:orange",
-        "rmse_speed": "tab:green",
-    }
+    legend_row_h = 0.8
+    vel_row_h = 3.0
+    box_row_h = 4.0
+    width = 7.0
 
-    fig_width = max(11, 2.0 * n_traj + 3)
-    fig, ax = plt.subplots(figsize=(fig_width, 6), constrained_layout=True)
-    fig.suptitle("Cross-Seed RMSE Distributions by Trajectory", fontsize=16, weight="bold")
+    fig = plt.figure(figsize=(width, legend_row_h + vel_row_h * n_traj + box_row_h), constrained_layout=True)
+    fig.suptitle(
+        "Sim-to-Real Actuator Model Validation",
+        fontsize=18,
+        weight="bold",
+    )
 
-    box_specs = [
-        ("rmse_x", rmse_x_data, offsets[0]),
-        ("rmse_y", rmse_y_data, offsets[1]),
-        ("rmse_speed", rmse_speed_data, offsets[2]),
+    gs = fig.add_gridspec(n_traj + 2, 1, height_ratios=[legend_row_h] + [vel_row_h] * n_traj + [box_row_h])
+
+    # Top gridspec row: dedicated slot for the shared horizontal legend.
+    legend_ax = fig.add_subplot(gs[0, 0])
+    legend_ax.axis("off")
+
+    vel_axes = []
+    for i, traj in enumerate(traj_names):
+        ax = fig.add_subplot(gs[1 + i, 0])
+        _draw_velocity_comparison_with_sigma(ax, i, temporal_by_traj[traj], reference_by_traj[traj])
+        vel_axes.append(ax)
+
+    handles, labels = vel_axes[0].get_legend_handles_labels()
+    label_to_handle = dict(zip(labels, handles))
+    desired_rows = [
+        ["Commanded Vel X", "Real Vel X", "Sim Vel X (mean)", "Sim Vel X ±1σ"],
+        ["Commanded Vel Y", "Real Vel Y", "Sim Vel Y (mean)", "Sim Vel Y ±1σ"],
     ]
+    n_rows = len(desired_rows)
+    n_cols = len(desired_rows[0])
+    # Matplotlib fills legends column-major; supply items column-by-column to render row-major.
+    ordered_labels = [desired_rows[r][c] for c in range(n_cols) for r in range(n_rows)]
+    ordered_handles = [label_to_handle[lbl] for lbl in ordered_labels]
+    legend_ax.legend(ordered_handles, ordered_labels, loc="center", ncol=n_cols, fontsize=9)
 
-    rng = np.random.default_rng(42)
+    box_ax = fig.add_subplot(gs[n_traj + 1, 0])
+    rmse_speed_data = [values_by_traj[traj]["rmse_speed"] for traj in traj_names]
+    _draw_velocity_rmse_boxplot(box_ax, n_traj, rmse_speed_data)
 
-    for metric_name, metric_data, offset in box_specs:
-        positions = centers + offset
-        box = ax.boxplot(
-            metric_data,
-            positions=positions,
-            widths=width,
-            patch_artist=True,
-            showfliers=False,
-            medianprops={"color": "black", "linewidth": 1.4},
-            whiskerprops={"color": colors[metric_name], "linewidth": 1.1},
-            capprops={"color": colors[metric_name], "linewidth": 1.1},
-        )
-        for patch in box["boxes"]:
-            patch.set_facecolor(colors[metric_name])
-            patch.set_alpha(0.35)
-            patch.set_edgecolor(colors[metric_name])
-
-        for pos, vals in zip(positions, metric_data):
-            vals_arr = np.asarray(vals, dtype=float)
-            jitter = rng.uniform(-0.04, 0.04, size=vals_arr.shape[0])
-            ax.scatter(
-                np.full(vals_arr.shape[0], pos) + jitter,
-                vals_arr,
-                color=colors[metric_name],
-                edgecolors="black",
-                linewidths=0.3,
-                s=26,
-                alpha=0.85,
-                zorder=3,
-            )
-
-    x_labels = [trajectory_label(name, i) for i, name in enumerate(traj_names)]
-    ax.set_xticks(centers)
-    ax.set_xticklabels(x_labels)
-    ax.set_xlabel("Trajectory")
-    ax.set_ylabel("RMSE (m/s)")
-    ax.grid(True, linestyle=":", alpha=0.6, axis="y")
-
-    legend_handles = [
-        Patch(facecolor=colors["rmse_x"], edgecolor=colors["rmse_x"], alpha=0.35, label="RMSE X"),
-        Patch(facecolor=colors["rmse_y"], edgecolor=colors["rmse_y"], alpha=0.35, label="RMSE Y"),
-        Patch(facecolor=colors["rmse_speed"], edgecolor=colors["rmse_speed"], alpha=0.35, label="RMSE Speed"),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="w",
-            markerfacecolor="gray",
-            markeredgecolor="black",
-            label="Seed values",
-            markersize=6,
-        ),
-    ]
-    ax.legend(handles=legend_handles, loc="upper right")
-
-    out_path = output_dir / "sim2real_seed_summary_02_rmse_distributions.png"
-    fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+    name = "sim2real_seed_summary_combined.png"
+    save_figure(fig, name, output_dir, dpi=dpi)
     plt.close(fig)
-    print(f"Saved figure to {out_path}")
-    return out_path
+    return output_dir / name
 
 
 def write_seed_traj_metrics_json(aggregate: dict[str, Any], output_dir: Path) -> Path:
@@ -608,13 +587,22 @@ def parse_args() -> argparse.Namespace:
         default=150,
         help="Figure DPI (default: 150)",
     )
-    parser.add_argument(
+    layout_group = parser.add_mutually_exclusive_group()
+    layout_group.add_argument(
         "--separate",
         action="store_true",
         help=(
             "Emit the per-trajectory velocity comparison panels as individual PNGs "
             "instead of one combined subplot figure. The RMSE distribution plot is "
             "always a single figure."
+        ),
+    )
+    layout_group.add_argument(
+        "--combine",
+        action="store_true",
+        help=(
+            "Emit a single PNG with the velocity comparison subplots above and the "
+            "RMSE boxplot stacked beneath. Mutually exclusive with --separate."
         ),
     )
     return parser.parse_args()
@@ -647,8 +635,11 @@ def main() -> None:
 
     aggregate = build_aggregate(seed_records)
 
-    plot_velocity_comparison_with_sigma(aggregate, output_dir, dpi=args.dpi, separate=args.separate)
-    plot_rmse_distributions(aggregate, output_dir, dpi=args.dpi)
+    if args.combine:
+        plot_combined(aggregate, output_dir, dpi=args.dpi)
+    else:
+        plot_velocity_comparison_with_sigma(aggregate, output_dir, dpi=args.dpi, separate=args.separate)
+        plot_rmse_distributions(aggregate, output_dir, dpi=args.dpi)
 
     write_summary_json(aggregate, root_dir, output_dir)
     write_seed_traj_metrics_json(aggregate, output_dir)
