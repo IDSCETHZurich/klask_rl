@@ -74,6 +74,19 @@ parser.add_argument(
     help="Type of opponent agent: 'dreamer' or 'ppo' (rl_games).",
 )
 parser.add_argument(
+    "--opponent_action_method",
+    type=str,
+    default=None,
+    choices=["zero", "random"],
+    help=(
+        "Override what each agent's RSSM ingests in the OTHER agent's action "
+        "slot of prev_action. 'zero' feeds zeros; 'random' feeds samples in "
+        "[-1, 1]. The simulator still receives both agents' real actions; "
+        "only the RSSM inputs are overridden. Requires opponent_separation=True "
+        "in the player config and --opponent_type=dreamer. Omit for normal behavior."
+    ),
+)
+parser.add_argument(
     "--boxplot",
     action="store_true",
     help="After saving the per-checkpoint eval-metrics .npz, also generate a box-plot PNG next to it.",
@@ -91,6 +104,7 @@ simulation_app = app_launcher.app
 import glob as glob_module
 import importlib
 import os
+import shlex
 import signal
 import warnings
 from datetime import datetime
@@ -157,6 +171,7 @@ def _make_eval_env(
     num_envs,
     episode_length_s=None,
     opponent_type="dreamer",
+    opponent_action_method=None,
 ):
     """Create an evaluation env with the appropriate opponent wrapper.
 
@@ -282,6 +297,7 @@ def _make_eval_env(
         opponent_wrapper = DreamerSelfPlayWrapper(
             isaac_env,
             eval_mode=True,
+            opponent_action_method=opponent_action_method,
         )
     elif opponent_type == "ppo":
         opponent_wrapper = KlaskRlAgentOpponentWrapper(isaac_env, is_deterministic=True)
@@ -447,6 +463,9 @@ def main():
     device = args_cli.device
     opponent_type = args_cli.opponent_type
 
+    # Reconstruct the exact invocation for posterity in the saved results files.
+    invocation_cmd = shlex.join([sys.executable, *sys.argv])
+
     # --- Resolve checkpoint glob pattern ---
     checkpoint_pattern = args_cli.checkpoint
     if any(c in checkpoint_pattern for c in ("*", "?", "[")):
@@ -462,6 +481,28 @@ def main():
     # --- Load player config ---
     player_cfg = _load_config(args_cli.config, device)
 
+    # --- Validate --opponent_action_method preconditions before building the env ---
+    # The flag overrides what each agent's RSSM sees in the OTHER agent's slot of
+    # prev_action. The player-side override always fires when the flag is set
+    # (works against any opponent type). The opponent-side override only fires
+    # when the opponent has its own RSSM (i.e. --opponent_type=dreamer); for a
+    # PPO opponent there is no RSSM to override, which is fine.
+    if args_cli.opponent_action_method is not None:
+        _opp_sep_raw = getattr(player_cfg, "opponent_separation", None)
+        if OmegaConf.is_config(_opp_sep_raw):
+            _opp_sep_enabled = bool(
+                OmegaConf.to_container(_opp_sep_raw, resolve=True).get("enabled", False)
+            )
+        elif isinstance(_opp_sep_raw, bool):
+            _opp_sep_enabled = _opp_sep_raw
+        else:
+            _opp_sep_enabled = False
+        if not _opp_sep_enabled:
+            raise SystemExit(
+                "--opponent_action_method requires the player checkpoint to be "
+                "trained with opponent_separation=True; this checkpoint has it disabled."
+            )
+
     # --- Create evaluation environment (shared across all player checkpoints) ---
     num_envs = args_cli.num_envs
     vec_env, opponent_wrapper = _make_eval_env(
@@ -469,6 +510,7 @@ def main():
         num_envs,
         args_cli.episode_length_s,
         opponent_type=opponent_type,
+        opponent_action_method=args_cli.opponent_action_method,
     )
     obs_space = vec_env.observation_space
     act_space = vec_env.action_space
@@ -528,6 +570,14 @@ def main():
                     # Step env (opponent actions generated inside the opponent wrapper).
                     trans, done = vec_env.step(act.detach(), done.detach())
 
+                    # Override the opponent slot in the player's prev_action.
+                    # Works for any opponent type (PPO opponents don't add
+                    # opponent_action to obs, so this also fills it in for them).
+                    if args_cli.opponent_action_method == "zero":
+                        trans["opponent_action"] = torch.zeros_like(act)
+                    elif args_cli.opponent_action_method == "random":
+                        trans["opponent_action"] = 2.0 * torch.rand_like(act) - 1.0
+
                     # Player agent inference (deterministic).
                     act, agent_state = player.act(trans, agent_state, eval=True)
 
@@ -563,6 +613,7 @@ def main():
             "\n" + "=" * 50,
             "  HEAD-TO-HEAD EVALUATION RESULTS",
             "=" * 50,
+            f"  Command            : {invocation_cmd}",
             f"  Player checkpoint  : {ckpt_path}",
             f"  Opponent type      : {opponent_type}",
             f"  Opponent checkpoint: {args_cli.opponent_checkpoint}",
@@ -621,6 +672,8 @@ def main():
             "\n" + "=" * 70,
             "  AGGREGATE RESULTS ACROSS ALL CHECKPOINTS",
             "=" * 70,
+            f"  Command: {invocation_cmd}",
+            "-" * 70,
             f"  {'Checkpoint':<45} {'Win%':>6}  {'W':>5}  {'L':>5}  {'D':>5}",
             "-" * 70,
         ]

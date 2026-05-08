@@ -226,5 +226,9 @@ class KlaskRlAgentOpponentWrapper(Wrapper):
         full_action = torch.cat([action, opponent_action], dim=1)
         obs, reward, terminated, truncated, info = self.env.step(full_action, *args, **kwargs)
 
+        # Expose the opponent's action so a Dreamer player using opponent_separation=True
+        # can feed it into its RSSM prev_action slot (matches DreamerSelfPlayWrapper).
+        obs["opponent_action"] = opponent_action
+
         self.opponent_obs = obs["opponent"]
         return obs, reward, terminated, truncated, info
