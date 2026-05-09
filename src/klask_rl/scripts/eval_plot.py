@@ -190,8 +190,10 @@ def plot_boxplots(
 
     scored_idx = _outcome_index(outcome_legend, "goal_scored")
     conceded_idx = _outcome_index(outcome_legend, "goal_conceded")
+    timeout_idx = _outcome_index(outcome_legend, "time_out")
     scored_mask = outcome == scored_idx if scored_idx is not None else np.zeros_like(outcome, dtype=bool)
     conceded_mask = outcome == conceded_idx if conceded_idx is not None else np.zeros_like(outcome, dtype=bool)
+    timeout_mask = outcome == timeout_idx if timeout_idx is not None else np.zeros_like(outcome, dtype=bool)
 
     matchup = _format_matchup(_read_meta(data))
 
@@ -229,11 +231,21 @@ def plot_boxplots(
         title="Ball speed",
     )
 
-    # ---------- 3. half occupancy (2 boxes) ----------
+    # ---------- 3. half occupancy (4 boxes: all + timed-out only) ----------
     _box(
         axes[2],
-        data=[frac_player_half, frac_opponent_half],
-        labels=["player half", "opponent half"],
+        data=[
+            frac_player_half,
+            frac_opponent_half,
+            frac_player_half[timeout_mask],
+            frac_opponent_half[timeout_mask],
+        ],
+        labels=[
+            "player half\nall games",
+            "opponent half\nall games",
+            "player half\n| timed out",
+            "opponent half\n| timed out",
+        ],
         ylabel="fraction of game",
         title="Ball half occupancy",
     )

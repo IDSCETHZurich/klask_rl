@@ -248,6 +248,7 @@ class EvalMetricsTracker:
         outcome = np.asarray(self.outcome, dtype=np.int64)
         scored_mask = outcome == 0  # goal_scored
         conceded_mask = outcome == 1  # goal_conceded
+        timeout_mask = outcome == 4  # time_out
 
         def _slice_mean(values: list[float], mask: np.ndarray) -> float:
             if len(values) == 0 or not mask.any():
@@ -267,6 +268,8 @@ class EvalMetricsTracker:
             f"  Mean ball speed [m/s] / game       : {_fmt(_mean_or_nan(self.mean_ball_speed))}",
             f"  Frac time ball in player half      : {_fmt(_mean_or_nan(self.frac_player_half))}",
             f"  Frac time ball in opponent half    : {_fmt(_mean_or_nan(self.frac_opponent_half))}",
+            f"  Frac player half | time_out        : {_fmt(_slice_mean(self.frac_player_half, timeout_mask))}",
+            f"  Frac opponent half | time_out      : {_fmt(_slice_mean(self.frac_opponent_half, timeout_mask))}",
             f"  Time until player scored [s]       : {_fmt(_slice_mean(self.game_length_s, scored_mask))}",
             f"  Time until player conceded [s]     : {_fmt(_slice_mean(self.game_length_s, conceded_mask))}",
             f"  Game length [s]                    : {_fmt(_mean_or_nan(self.game_length_s))}",
