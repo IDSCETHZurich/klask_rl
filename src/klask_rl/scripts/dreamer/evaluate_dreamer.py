@@ -23,11 +23,14 @@ AppLauncher.add_app_launcher_args(parser)
 parser.add_argument(
     "--checkpoint",
     type=str,
+    nargs="+",
     required=True,
     help=(
-        "Path (or glob pattern) to the player agent checkpoint(s) (.pt). "
-        "Supports wildcards such as 'runs/*/checkpoint_*.pt' to evaluate "
-        "multiple checkpoints sequentially against the same opponent."
+        "One or more paths or glob patterns to the player agent checkpoint(s) (.pt). "
+        "Each entry is resolved independently — literal paths are kept as-is, glob "
+        "patterns (containing '*', '?' or '[') are expanded. Pass multiple values to "
+        "evaluate specific files: --checkpoint a.pt b.pt, or mix patterns: "
+        "--checkpoint 'runs/A/*.pt' 'runs/B/last.pt'."
     ),
 )
 parser.add_argument(
@@ -520,17 +523,28 @@ def main():
     # Reconstruct the exact invocation for posterity in the saved results files.
     invocation_cmd = shlex.join([sys.executable, *sys.argv])
 
-    # --- Resolve checkpoint glob pattern ---
-    checkpoint_pattern = args_cli.checkpoint
-    if any(c in checkpoint_pattern for c in ("*", "?", "[")):
-        checkpoint_paths = sorted(glob_module.glob(checkpoint_pattern, recursive=True))
-        if not checkpoint_paths:
-            raise FileNotFoundError(f"No checkpoints matched pattern: {checkpoint_pattern}")
-        print(f"[INFO] Found {len(checkpoint_paths)} checkpoints matching '{checkpoint_pattern}':")
+    # --- Resolve checkpoint patterns ---
+    # Each --checkpoint entry is resolved independently: literal paths kept as-is,
+    # glob patterns expanded. Order is preserved across entries; within an
+    # expanded pattern matches are sorted; duplicates are dropped.
+    checkpoint_paths: list[str] = []
+    seen: set[str] = set()
+    for entry in args_cli.checkpoint:
+        if any(c in entry for c in ("*", "?", "[")):
+            matches = sorted(glob_module.glob(entry, recursive=True))
+            if not matches:
+                raise FileNotFoundError(f"No checkpoints matched pattern: {entry}")
+            resolved = matches
+        else:
+            resolved = [entry]
+        for p in resolved:
+            if p not in seen:
+                seen.add(p)
+                checkpoint_paths.append(p)
+    if len(checkpoint_paths) > 1 or any(c in e for e in args_cli.checkpoint for c in ("*", "?", "[")):
+        print(f"[INFO] Resolved {len(checkpoint_paths)} checkpoint(s):")
         for i, cp in enumerate(checkpoint_paths, 1):
             print(f"  {i}. {os.path.basename(cp)}")
-    else:
-        checkpoint_paths = [checkpoint_pattern]
 
     # --- Load player config ---
     player_cfg = _load_config(args_cli.config, device)
@@ -598,6 +612,7 @@ def main():
 
     # Collect per-checkpoint results for aggregate summary.
     all_results = []
+    npz_paths_written: list[str] = []
     interrupted = False
 
     # --- Evaluate each player checkpoint ---
@@ -705,6 +720,7 @@ def main():
                 "opponent_checkpoint": args_cli.opponent_checkpoint or "",
             },
         )
+        npz_paths_written.append(npz_file)
         print(f"[INFO] Per-game metrics saved to:    {npz_file}")
 
         if args_cli.boxplot:
@@ -729,30 +745,26 @@ def main():
 
     # --- Aggregate summary (when multiple checkpoints) ---
     if len(all_results) > 1:
-        agg_lines = [
-            "\n" + "=" * 70,
-            "  AGGREGATE RESULTS ACROSS ALL CHECKPOINTS",
-            "=" * 70,
-            f"  Command: {invocation_cmd}",
-            "-" * 70,
-            f"  {'Checkpoint':<45} {'Win%':>6}  {'W':>5}  {'L':>5}  {'D':>5}",
-            "-" * 70,
-        ]
-        for r in all_results:
-            ckpt_name = os.path.basename(r["checkpoint"])
-            wr = f"{r['player_wins'] / r['total_games'] * 100:.1f}%" if r["total_games"] > 0 else "N/A"
-            agg_lines.append(
-                f"  {ckpt_name:<45} {wr:>6}  {r['player_wins']:>5}  {r['opponent_wins']:>5}  {r['draws']:>5}"
-            )
-        agg_lines.append("=" * 70 + "\n")
-        agg_text = "\n".join(agg_lines)
-        print(agg_text)
+        import importlib.util
 
-        # Save aggregate results.
+        _ea_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "eval_aggregate.py"))
+        _ea_spec = importlib.util.spec_from_file_location("eval_aggregate", _ea_path)
+        _ea_mod = importlib.util.module_from_spec(_ea_spec)
+        _ea_spec.loader.exec_module(_ea_mod)
         agg_file = os.path.join(results_dir, f"h2h_aggregate_{timestamp}.txt")
-        with open(agg_file, "w") as f:
-            f.write(agg_text)
-        print(f"[INFO] Aggregate results saved to: {agg_file}")
+        agg_plot = os.path.join(results_dir, f"h2h_aggregate_{timestamp}.png")
+        agg_term_plot = os.path.join(results_dir, f"h2h_aggregate_{timestamp}_terminations.png")
+        agg_text, _, _, _ = _ea_mod.aggregate_from_npz_files(
+            npz_paths_written,
+            out_path=agg_file,
+            invocation_cmd=invocation_cmd,
+            plot_path=agg_plot,
+            term_plot_path=agg_term_plot,
+        )
+        print(agg_text)
+        print(f"[INFO] Aggregate results saved to:  {agg_file}")
+        print(f"[INFO] Win-rate plot saved to:      {agg_plot}")
+        print(f"[INFO] Termination plot saved to:   {agg_term_plot}")
 
     # Cleanup.
     vec_env._env.close()
