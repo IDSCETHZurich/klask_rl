@@ -284,10 +284,14 @@ def main():
     if KLASK_PARAMS["action_history"] > 0:
         env = ActionHistoryWrapper(env, history_length=KLASK_PARAMS["action_history"])
 
-    obs_noise = env_block.get("obs_noise", 0.0)
-    if obs_noise > 0.0:
+    noise_cfg = agent_cfg.get("observation_noise") or {}
+    if noise_cfg.get("enable", False):
         env = ObservationNoiseWrapper(
-            env, obs_noise,
+            env,
+            peg_position_std=float(noise_cfg.get("peg_position_std", 0.0)),
+            peg_velocity_std=float(noise_cfg.get("peg_velocity_std", 0.0)),
+            ball_position_std=float(noise_cfg.get("ball_position_std", 0.0)),
+            ball_velocity_std=float(noise_cfg.get("ball_velocity_std", 0.0)),
             own_goal=KLASK_PARAMS["player_goal"],
             other_goal=KLASK_PARAMS["opponent_goal"],
         )

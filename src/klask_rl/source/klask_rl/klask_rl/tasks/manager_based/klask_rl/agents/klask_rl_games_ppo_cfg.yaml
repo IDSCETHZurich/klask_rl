@@ -97,9 +97,12 @@ params:
 # Custom Config Parameters
 ###########################################
 
-env:
-  # std of Gaussian noise added to the observations (implemented as ObservationNoiseWrapper)
-  obs_noise: 0.0
+observation_noise:
+  enable: false
+  peg_position_std: 0.0      # m
+  peg_velocity_std: 0.0      # m/s
+  ball_position_std: 0.0     # m
+  ball_velocity_std: 0.0     # m/s
 
 rewards:
   # reward terms and their weights:

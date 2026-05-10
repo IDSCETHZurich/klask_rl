@@ -91,6 +91,35 @@ parser.add_argument(
     action="store_true",
     help="After saving the per-checkpoint eval-metrics .npz, also generate a box-plot PNG next to it.",
 )
+parser.add_argument(
+    "--peg_position_std",
+    type=float,
+    default=0.0,
+    help=(
+        "Std [m] of Gaussian noise added to peg positions in the observation. "
+        "Applied to both 'policy' and 'opponent' obs keys (independent samples) "
+        "for any opponent type. Extended obs dims are recomputed from the noisy "
+        "base positions. Default 0.0 (no noise)."
+    ),
+)
+parser.add_argument(
+    "--peg_velocity_std",
+    type=float,
+    default=0.0,
+    help="Std [m/s] of Gaussian noise added to peg velocities (any opponent type).",
+)
+parser.add_argument(
+    "--ball_position_std",
+    type=float,
+    default=0.0,
+    help="Std [m] of Gaussian noise added to the ball position (any opponent type).",
+)
+parser.add_argument(
+    "--ball_velocity_std",
+    type=float,
+    default=0.0,
+    help="Std [m/s] of Gaussian noise added to the ball velocity (any opponent type).",
+)
 
 args_cli = parser.parse_args()
 
@@ -136,11 +165,13 @@ from dreamer_self_play import DreamerSelfPlayWrapper
 from env_cfg_utils import apply_camera_size_to_env_cfg
 from envs.isaaclab import IsaacLabVecEnv
 from isaaclab.sim import RenderCfg
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
 from klask_rl.tasks.manager_based.klask_rl.eval_metrics import EvalMetricsTracker
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     KlaskRlAgentOpponentWrapper,
     KlaskRlCollisionAvoidanceWrapper,
+    ObservationNoiseWrapper,
     OpponentActionWrapper,
     VelocityScaleWrapper,
     configure_domain_randomization,
@@ -172,6 +203,7 @@ def _make_eval_env(
     episode_length_s=None,
     opponent_type="dreamer",
     opponent_action_method=None,
+    obs_noise_stds=None,
 ):
     """Create an evaluation env with the appropriate opponent wrapper.
 
@@ -181,9 +213,15 @@ def _make_eval_env(
       1. OpponentActionWrapper — negate opponent actions for coordinate frame
       2. ActuatorModelWrapper (if config.actuator_model.enable — expects m/s)
       3. VelocityScaleWrapper — scales [-1, 1] → m/s; action manager _scale = 1.0
-      4. Opponent wrapper (emits opponent action in [-1, 1]):
+      4. ObservationNoiseWrapper (when any std > 0; noises both 'policy' and
+         'opponent' obs keys with independent samples, recomputes extended dims)
+      5. Opponent wrapper (emits opponent action in [-1, 1]):
          DreamerSelfPlayWrapper or KlaskRlAgentOpponentWrapper
-      5. IsaacLabVecEnv — r2dreamer adapter
+      6. IsaacLabVecEnv — r2dreamer adapter
+
+    ``obs_noise_stds`` is an optional dict with keys ``peg_position_std``,
+    ``peg_velocity_std``, ``ball_position_std``, ``ball_velocity_std`` (all in
+    m and m/s). Wrapper is skipped when ``None`` or when all stds are zero.
 
     Returns (vec_env, opponent_wrapper).
     """
@@ -292,7 +330,23 @@ def _make_eval_env(
         device=isaac_env.unwrapped.device,
     )
 
-    # --- 4. Opponent wrapper ---
+    # --- 4. Observation noise (any opponent type, when any std > 0) ---
+    # Mirrors train_klask.py's wrapper position: noise is applied to both the
+    # 'policy' and 'opponent' obs keys before either model reads them. The
+    # extended obs dims are recomputed from the noisy base positions inside
+    # the wrapper. Skipped entirely when all stds are zero.
+    if obs_noise_stds is not None and any(v > 0.0 for v in obs_noise_stds.values()):
+        isaac_env = ObservationNoiseWrapper(
+            isaac_env,
+            peg_position_std=float(obs_noise_stds["peg_position_std"]),
+            peg_velocity_std=float(obs_noise_stds["peg_velocity_std"]),
+            ball_position_std=float(obs_noise_stds["ball_position_std"]),
+            ball_velocity_std=float(obs_noise_stds["ball_velocity_std"]),
+            own_goal=KLASK_PARAMS["player_goal"],
+            other_goal=KLASK_PARAMS["opponent_goal"],
+        )
+
+    # --- 5. Opponent wrapper ---
     if opponent_type == "dreamer":
         opponent_wrapper = DreamerSelfPlayWrapper(
             isaac_env,
@@ -305,7 +359,7 @@ def _make_eval_env(
         raise ValueError(f"Unknown opponent type: {opponent_type}")
     isaac_env = opponent_wrapper
 
-    # --- 5. IsaacLabVecEnv adapter ---
+    # --- 6. IsaacLabVecEnv adapter ---
     vec_env = IsaacLabVecEnv(isaac_env, simulation_app=simulation_app)
 
     return vec_env, opponent_wrapper
@@ -505,12 +559,19 @@ def main():
 
     # --- Create evaluation environment (shared across all player checkpoints) ---
     num_envs = args_cli.num_envs
+    obs_noise_stds = {
+        "peg_position_std": args_cli.peg_position_std,
+        "peg_velocity_std": args_cli.peg_velocity_std,
+        "ball_position_std": args_cli.ball_position_std,
+        "ball_velocity_std": args_cli.ball_velocity_std,
+    }
     vec_env, opponent_wrapper = _make_eval_env(
         player_cfg.env,
         num_envs,
         args_cli.episode_length_s,
         opponent_type=opponent_type,
         opponent_action_method=args_cli.opponent_action_method,
+        obs_noise_stds=obs_noise_stds,
     )
     obs_space = vec_env.observation_space
     act_space = vec_env.action_space
