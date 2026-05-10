@@ -40,8 +40,10 @@ import dataclasses
 import importlib
 import math
 import random
+import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import gymnasium as gym
@@ -154,17 +156,16 @@ class KlaskTrainingConfig:
     """Peg acceleration cap (m/s^2). None to disable rate limiting."""
 
     # --- Actuator model ---
-    enable_actuator_model: bool = False
+    enable_actuator_model: bool = True
     """Wrap the env with the learned actuator model (sim-to-real transfer)."""
     actuator_model_checkpoint: str = (
         "/workspace/klask_rl/logs/actuator_model/data/new/checkpoints/"
         "model_data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_"
         "horizon3_with_states_train_seed0.pt"
     )
-    """Default matches klask_ppo_config_with_pretraining.yaml."""
 
     # --- Collision avoidance ---
-    enable_collision_avoidance: bool = False
+    enable_collision_avoidance: bool = True
     """Innermost wrapper that decelerates pegs near board edges (world-frame m/s)."""
 
     # --- Initialization schedule ---
@@ -196,7 +197,7 @@ class KlaskTrainingConfig:
 
     # --- Logging & saving ---
     seed: int = 0
-    output_dir: str = "runs/fast_sac_isaaclab"
+    output_dir: str = "logs/fast_sac_isaaclab/training/${now:%Y-%m-%d}/${now:%H-%M-%S}"
     logging_interval: int = 10
     save_interval: int = 1000
     device: str = "cuda:0"
@@ -286,6 +287,15 @@ def update_actor(data, actor, qnet, actor_optimizer, log_alpha, scaler, config, 
     return actor_loss.detach()
 
 
+_NOW_PATTERN = re.compile(r"\$\{now:([^}]*)\}")
+
+
+def resolve_now_placeholders(template: str, now: datetime | None = None) -> str:
+    """Expand Hydra-style ``${now:FMT}`` placeholders using ``datetime.strftime``."""
+    now = now or datetime.now()
+    return _NOW_PATTERN.sub(lambda m: now.strftime(m.group(1)), template)
+
+
 # --------------------------------------------------------------------------
 # Environment creation
 # --------------------------------------------------------------------------
@@ -319,13 +329,16 @@ def make_isaaclab_env(config: KlaskTrainingConfig) -> FastSACEnvWrapper:
     env_cfg.events.reset_ball_position.params["pose_range"]["y"] = env_cfg.ball_reset_position_y
 
     # All-disabled DR matches the PPO yaml; same hook in case it's enabled later.
-    configure_domain_randomization(env_cfg, {
-        "ball_mass": {"enable": False},
-        "material_ball": {"enable": False},
-        "material_board": {"enable": False},
-        "material_peg": {"enable": False},
-        "actuator": {"enable": False},
-    })
+    configure_domain_randomization(
+        env_cfg,
+        {
+            "ball_mass": {"enable": False},
+            "material_ball": {"enable": False},
+            "material_board": {"enable": False},
+            "material_peg": {"enable": False},
+            "actuator": {"enable": False},
+        },
+    )
 
     # Set reward weights: ±goal_reward for terminal events
     env_cfg.rewards.goal_scored.weight = config.goal_reward
@@ -353,8 +366,8 @@ def make_isaaclab_env(config: KlaskTrainingConfig) -> FastSACEnvWrapper:
         isaac_env = KlaskRlCollisionAvoidanceWrapper(
             isaac_env,
             max_vel=float(config.max_velocity),
-            peg1_idx=slice(4, 6),   # FastSAC: own_pos
-            peg2_idx=slice(6, 8),   # FastSAC: other_pos
+            peg1_idx=slice(4, 6),  # FastSAC: own_pos
+            peg2_idx=slice(6, 8),  # FastSAC: other_pos
         )
 
     # 1. Opponent action frame transform (ego -> world; negates opponent dims).
@@ -366,8 +379,8 @@ def make_isaaclab_env(config: KlaskTrainingConfig) -> FastSACEnvWrapper:
         isaac_env = ActuatorModelWrapper(
             isaac_env,
             model_file=config.actuator_model_checkpoint,
-            pos_idx=slice(4, 6),    # FastSAC: own_pos
-            vel_idx=slice(8, 10),   # FastSAC: own_vel
+            pos_idx=slice(4, 6),  # FastSAC: own_pos
+            vel_idx=slice(8, 10),  # FastSAC: own_vel
         )
 
     # 3. Velocity scaling: [-1, 1] (policy output) -> [-max_velocity, max_velocity] m/s.
@@ -407,11 +420,15 @@ def main():
     # Seed
     torch.manual_seed(config.seed)
 
-    # Output directory
-    output_dir = Path(config.output_dir)
+    # Output directory: resolve ${now:FMT} placeholders to a single timestamp
+    # captured here so the date/time stamp is consistent across all paths.
+    resolved_output_dir = resolve_now_placeholders(config.output_dir)
+    output_dir = Path(resolved_output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    saved_config = dataclasses.asdict(config)
+    saved_config["output_dir"] = resolved_output_dir
     with open(output_dir / "config.yaml", "w") as f:
-        yaml.safe_dump(dataclasses.asdict(config), f)
+        yaml.safe_dump(saved_config, f)
     writer = SummaryWriter(log_dir=str(output_dir / "tb"))
 
     # --- Environment ---
