@@ -257,6 +257,14 @@ class EventCfg:
         params={},
     )
 
+    # Apply scheduled player init velocity (no-op when InitializationWrapper is absent).
+    # Runs last so that ball and player positions are already finalized.
+    reset_player_velocity = EventTerm(
+        func=reset_player_velocity_toward_ball,
+        mode="reset",
+        params={},
+    )
+
 
 @configclass
 class EventCfgSac(EventCfg):
@@ -306,12 +314,4 @@ class EventCfgDreamer(EventCfg):
                 "y": (0.0, 0.0),
             },  # Ball starts stationary
         },
-    )
-
-    # Apply scheduled player init velocity (no-op when InitializationWrapper is absent).
-    # Runs last so that ball and player positions are already finalized.
-    reset_player_velocity = EventTerm(
-        func=reset_player_velocity_toward_ball,
-        mode="reset",
-        params={},
     )

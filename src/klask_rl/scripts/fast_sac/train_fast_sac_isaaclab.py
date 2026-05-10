@@ -61,7 +61,13 @@ from klask_her.agents.fast_sac import Actor, Critic
 from klask_her.agents.fast_sac_utils import EmpiricalNormalization, save_params
 from klask_her.buffers.gpu_her_replay_buffer import GPUHERReplayBuffer
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
-from klask_rl.tasks.manager_based.klask_rl.wrappers import FastSACEnvWrapper
+from klask_rl.tasks.manager_based.klask_rl.wrappers import (
+    FastSACEnvWrapper,
+    InitializationWrapper,
+    KlaskRlCollisionAvoidanceWrapper,
+    VelocityScaleWrapper,
+    configure_domain_randomization,
+)
 from klask_rl.tasks.manager_based.klask_rl.wrappers.klask_rl_ovservation_wrappers import OpponentActionWrapper
 from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
@@ -133,9 +139,39 @@ class KlaskTrainingConfig:
     obs_normalization: bool = True
     weight_decay: float = 0.001
 
+    # --- Environment dynamics (parity with train_klask.py PPO pipeline) ---
+    sim_dt: float = 0.001
+    """Physics step (s)."""
+    decimation: int = 20
+    """Sim steps per env step."""
+    ball_reset_x: tuple[float, float] = (-0.15, 0.15)
+    """Ball reset X range (m)."""
+    ball_reset_y: tuple[float, float] = (-0.1, 0.1)
+    """Ball reset Y range (m). Matches PPO config (narrower than env default)."""
+    max_velocity: float = 0.4
+    """Peg velocity scale (m/s); maps policy [-1, 1] -> [-max_velocity, max_velocity]."""
+    max_acceleration: float | None = 10.0
+    """Peg acceleration cap (m/s^2). None to disable rate limiting."""
+
     # --- Actuator model ---
     enable_actuator_model: bool = False
     """Wrap the env with the learned actuator model (sim-to-real transfer)."""
+    actuator_model_checkpoint: str = (
+        "/workspace/klask_rl/logs/actuator_model/data/new/checkpoints/"
+        "model_data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_"
+        "horizon3_with_states_train_seed0.pt"
+    )
+    """Default matches klask_ppo_config_with_pretraining.yaml."""
+
+    # --- Collision avoidance ---
+    enable_collision_avoidance: bool = False
+    """Innermost wrapper that decelerates pegs near board edges (world-frame m/s)."""
+
+    # --- Initialization schedule ---
+    enable_initialization: bool = False
+    """Apply InitializationWrapper to set env.unwrapped._init_velocity_speed."""
+    init_velocity_speed: float = 1.0
+    """Constant init speed when initialization is on. (PPO uses a 3-phase schedule via YAML; SAC uses a constant.)"""
 
     # --- Self-play ---
     self_play: bool = True
@@ -256,7 +292,14 @@ def update_actor(data, actor, qnet, actor_optimizer, log_alpha, scaler, config, 
 
 
 def make_isaaclab_env(config: KlaskTrainingConfig) -> FastSACEnvWrapper:
-    """Create and configure the IsaacLab Klask environment."""
+    """Create and configure the IsaacLab Klask environment.
+
+    Wrapper chain mirrors train_klask.py (PPO) so the two pipelines apply the
+    same action scaling, reset distribution, and dynamics. Reward curriculum,
+    observation noise, action history, and OpponentObservationWrapper are
+    intentionally not applied (SAC uses simple goal rewards and its own
+    in-script self-play opponent).
+    """
     gym_id = "Klask-Rl-FastSAC-v0"
 
     # Resolve the env config class and instantiate it
@@ -265,9 +308,24 @@ def make_isaaclab_env(config: KlaskTrainingConfig) -> FastSACEnvWrapper:
     env_cfg_class = getattr(importlib.import_module(module_name), class_name)
     env_cfg = env_cfg_class()
 
-    # Apply runtime configuration
+    # --- Pre-construction overrides (mirrors train_klask.py:179-202) ---
     env_cfg.scene.num_envs = config.num_envs
+    env_cfg.sim.dt = config.sim_dt
+    env_cfg.decimation = config.decimation
     env_cfg.episode_length_s = config.episode_length_s
+    env_cfg.ball_reset_position_x = tuple(config.ball_reset_x)
+    env_cfg.ball_reset_position_y = tuple(config.ball_reset_y)
+    env_cfg.events.reset_ball_position.params["pose_range"]["x"] = env_cfg.ball_reset_position_x
+    env_cfg.events.reset_ball_position.params["pose_range"]["y"] = env_cfg.ball_reset_position_y
+
+    # All-disabled DR matches the PPO yaml; same hook in case it's enabled later.
+    configure_domain_randomization(env_cfg, {
+        "ball_mass": {"enable": False},
+        "material_ball": {"enable": False},
+        "material_board": {"enable": False},
+        "material_peg": {"enable": False},
+        "actuator": {"enable": False},
+    })
 
     # Set reward weights: ±goal_reward for terminal events
     env_cfg.rewards.goal_scored.weight = config.goal_reward
@@ -283,17 +341,54 @@ def make_isaaclab_env(config: KlaskTrainingConfig) -> FastSACEnvWrapper:
         render_mode=None,
     )
 
-    # Negate opponent actions to convert from player frame to world frame.
-    # Must be innermost so the actuator model sees player-frame data for both pegs.
-    isaac_env = OpponentActionWrapper(isaac_env)
+    # Action-manager pass-through: VelocityScaleWrapper owns [-1, 1] -> m/s.
+    for term in isaac_env.unwrapped.action_manager._terms.values():
+        term._scale = 1.0
 
-    # Wrap with learned actuator model for sim-to-real transfer.
-    # FastSAC obs layout: own_pos at [4:6], own_vel at [8:10].
-    if config.enable_actuator_model:
-        isaac_env = ActuatorModelWrapper(
-            isaac_env, pos_idx=slice(4, 6), vel_idx=slice(8, 10),
+    # --- Wrapper chain (innermost -> outermost), mirrors train_klask.py:232-294 ---
+
+    # 0. Collision avoidance (innermost; world-frame m/s clipping).
+    #    Inside OpponentActionWrapper so it sees world-frame actions.
+    if config.enable_collision_avoidance:
+        isaac_env = KlaskRlCollisionAvoidanceWrapper(
+            isaac_env,
+            max_vel=float(config.max_velocity),
+            peg1_idx=slice(4, 6),   # FastSAC: own_pos
+            peg2_idx=slice(6, 8),   # FastSAC: other_pos
         )
 
+    # 1. Opponent action frame transform (ego -> world; negates opponent dims).
+    isaac_env = OpponentActionWrapper(isaac_env)
+
+    # 2. Actuator model (m/s in, m/s out). Must sit inside VelocityScaleWrapper
+    #    so it sees physical units, not [-1, 1].
+    if config.enable_actuator_model:
+        isaac_env = ActuatorModelWrapper(
+            isaac_env,
+            model_file=config.actuator_model_checkpoint,
+            pos_idx=slice(4, 6),    # FastSAC: own_pos
+            vel_idx=slice(8, 10),   # FastSAC: own_vel
+        )
+
+    # 3. Velocity scaling: [-1, 1] (policy output) -> [-max_velocity, max_velocity] m/s.
+    act_space = isaac_env.unwrapped.single_action_space
+    isaac_env = VelocityScaleWrapper(
+        isaac_env,
+        max_velocity=float(config.max_velocity),
+        max_acceleration=None if config.max_acceleration is None else float(config.max_acceleration),
+        num_envs=int(isaac_env.unwrapped.num_envs),
+        action_dim=int(act_space.shape[0]),
+        device=isaac_env.unwrapped.device,
+    )
+
+    # 4. Initialization (sets env.unwrapped._init_velocity_speed for the event manager).
+    if config.enable_initialization:
+        isaac_env = InitializationWrapper(
+            isaac_env,
+            {"init_velocity": {"type": "static", "speed": config.init_velocity_speed}},
+        )
+
+    # 5. FastSAC adapter (outermost).
     return FastSACEnvWrapper(isaac_env)
 
 

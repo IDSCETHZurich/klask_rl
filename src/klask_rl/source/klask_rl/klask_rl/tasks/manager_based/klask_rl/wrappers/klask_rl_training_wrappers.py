@@ -320,14 +320,16 @@ class KlaskRlCollisionAvoidanceWrapper(Wrapper):
     Y_EDGE_1 = KLASK_PARAMS["joint_y1_pos_limit"]  # [0]=outer, [1]=inner
     Y_EDGE_2 = KLASK_PARAMS["joint_y2_pos_limit"]  # [0]=inner, [1]=outer
 
-    def __init__(self, env, max_vel=0.2):
+    def __init__(self, env, max_vel=0.2, peg1_idx=slice(0, 2), peg2_idx=slice(4, 6)):
         super().__init__(env)
         self.MAX_VEL = max_vel
+        self._peg1_idx = peg1_idx
+        self._peg2_idx = peg2_idx
 
     def reset(self, *args, **kwargs):
         obs, info = self.env.reset(*args, **kwargs)
-        self.state_1 = obs["policy"].clone()[:, :2]  # Peg_1 world xy
-        self.state_2 = obs["policy"].clone()[:, 4:6]  # Peg_2 world xy (unrotated)
+        self.state_1 = obs["policy"].clone()[:, self._peg1_idx]  # Peg_1 world xy
+        self.state_2 = obs["policy"].clone()[:, self._peg2_idx]  # Peg_2 world xy (unrotated)
         return obs, info
 
     def _apply_decel_axis(self, vel, pos, edge_min, edge_max):
@@ -361,8 +363,8 @@ class KlaskRlCollisionAvoidanceWrapper(Wrapper):
         self._apply_decel_axis(actions[:, 3], self.state_2[:, 1], self.Y_EDGE_2[0], self.Y_EDGE_2[1])
 
         obs, rew, terminated, truncated, info = self.env.step(actions, *args, **kwargs)
-        self.state_1 = obs["policy"].clone()[:, :2]
-        self.state_2 = obs["policy"].clone()[:, 4:6]
+        self.state_1 = obs["policy"].clone()[:, self._peg1_idx]
+        self.state_2 = obs["policy"].clone()[:, self._peg2_idx]
         return obs, rew, terminated, truncated, info
 
     def interpolate_vel(self, distance):
