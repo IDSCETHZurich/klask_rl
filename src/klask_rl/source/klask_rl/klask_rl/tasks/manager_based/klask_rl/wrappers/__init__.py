@@ -1,6 +1,7 @@
 from .fast_sac_env_wrapper import FastSACEnvWrapper
 from .klask_rl_opponet_wrappers import (
     KlaskRlAgentOpponentWrapper,
+    KlaskRlFastSACOpponentWrapper,
     KlaskRlRandomOpponentWrapper,
     RlGamesGpuEnvSelfPlay,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "KlaskRlRandomOpponentWrapper",
     "RlGamesGpuEnvSelfPlay",
     "KlaskRlAgentOpponentWrapper",
+    "KlaskRlFastSACOpponentWrapper",
     "RewardWeightWrapper",
     "CurriculumWrapper",
     "InitializationWrapper",

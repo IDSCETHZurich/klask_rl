@@ -73,8 +73,13 @@ parser.add_argument(
     "--opponent_type",
     type=str,
     default="dreamer",
-    choices=["dreamer", "ppo"],
-    help="Type of opponent agent: 'dreamer' or 'ppo' (rl_games).",
+    choices=["dreamer", "ppo", "fast_sac"],
+    help=(
+        "Type of opponent agent: 'dreamer', 'ppo' (rl_games), or 'fast_sac' "
+        "(distributional SAC trained by train_fast_sac_isaaclab.py; distinct "
+        "from any SB3 SAC). For 'fast_sac', --opponent_config is ignored — the "
+        "actor hyperparameters are read from the checkpoint's embedded config."
+    ),
 )
 parser.add_argument(
     "--opponent_action_method",
@@ -174,6 +179,7 @@ from klask_rl.tasks.manager_based.klask_rl.eval_metrics import EvalMetricsTracke
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     KlaskRlAgentOpponentWrapper,
     KlaskRlCollisionAvoidanceWrapper,
+    KlaskRlFastSACOpponentWrapper,
     ObservationNoiseWrapper,
     OpponentActionWrapper,
     VelocityScaleWrapper,
@@ -238,6 +244,18 @@ def _make_eval_env(
         env_cfg_class = env_cfg_entry
 
     env_cfg = env_cfg_class()
+
+    # When a FastSAC opponent is requested, attach its 18-dim observation
+    # group to the env so the env emits obs["fast_sac_opponent"] in the exact
+    # layout the SAC actor was trained on. Uses the same ObsTerm functions as
+    # FastSACObservationsCfg, so scaling / 180° rotation / peg role-swap match
+    # training exactly.
+    if opponent_type == "fast_sac":
+        from klask_rl.tasks.manager_based.klask_rl.env_cfg.klask_rl_observations_cfg import (
+            _FastSACOpponentPolicyCfg,
+        )
+
+        env_cfg.observations.fast_sac_opponent = _FastSACOpponentPolicyCfg()
 
     # Mirror train_dreamer.py: apply ball reset position override from YAML.
     # Without this, the env uses KLASK_PARAMS defaults which put ~90% of resets
@@ -358,6 +376,8 @@ def _make_eval_env(
         )
     elif opponent_type == "ppo":
         opponent_wrapper = KlaskRlAgentOpponentWrapper(isaac_env, is_deterministic=True)
+    elif opponent_type == "fast_sac":
+        opponent_wrapper = KlaskRlFastSACOpponentWrapper(isaac_env, is_deterministic=True)
     else:
         raise ValueError(f"Unknown opponent type: {opponent_type}")
     isaac_env = opponent_wrapper
@@ -449,6 +469,69 @@ def _init_ppo_opponent_batch(opponent, vec_env):
     _ = opponent.get_batch_size(opp_obs, 1)
     if opponent.is_rnn:
         opponent.init_rnn()
+
+
+def _load_fast_sac_opponent(checkpoint_path, device):
+    """Load a FastSAC opponent agent from a train_fast_sac_isaaclab.py checkpoint.
+
+    Returns an object exposing the small interface expected by
+    KlaskRlFastSACOpponentWrapper: ``has_batch_dimension``, ``obs_to_torch``,
+    and ``get_action(obs, is_deterministic)``. Actor hyperparameters come from
+    the checkpoint's embedded ``config`` dict (saved by fast_sac_utils.save_params).
+    Observations are normalized with the saved EmpiricalNormalization state.
+    Inference is deterministic when ``is_deterministic=True`` (mode of the
+    tanh-squashed Gaussian), matching the PPO opponent's behavior.
+    """
+    # The fast_sac package lives under scripts/fast_sac/klask_her — make sure
+    # it's importable when this script is run from elsewhere.
+    fast_sac_pkg_dir = pathlib.Path(_SCRIPT_DIR).parent / "fast_sac" / "klask_her"
+    if fast_sac_pkg_dir.exists() and str(fast_sac_pkg_dir) not in sys.path:
+        sys.path.append(str(fast_sac_pkg_dir))
+
+    from klask_her.agents.fast_sac import Actor
+    from klask_her.agents.fast_sac_utils import EmpiricalNormalization
+
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    cfg = ckpt.get("config", {}) or {}
+
+    obs_dim = 18  # _FastSACOpponentPolicyCfg always emits 18
+    act_dim = 2
+    hidden_dim = int(cfg.get("actor_hidden_dim", 512))
+    # train_fast_sac_isaaclab.py uses action_scale=1.0; Actor's default is 0.5.
+    action_scale = float(cfg.get("action_scale", 1.0))
+
+    actor = Actor(
+        obs_dim=obs_dim,
+        act_dim=act_dim,
+        hidden_dim=hidden_dim,
+        action_scale=action_scale,
+        device=device,
+    )
+    actor.load_state_dict(ckpt["actor_state_dict"])
+    actor.eval()
+
+    obs_normalizer = EmpiricalNormalization(shape=obs_dim, device=device)
+    obs_normalizer.load_state_dict(ckpt["obs_normalizer_state"])
+    obs_normalizer.eval()
+    if int(obs_normalizer.count.item()) <= 0:
+        raise RuntimeError(
+            f"FastSAC obs_normalizer in {checkpoint_path} has count=0 — "
+            "running stats look uninitialized; cannot evaluate."
+        )
+
+    class _FastSACOpponent:
+        has_batch_dimension = True
+
+        def obs_to_torch(self, obs):
+            if not torch.is_tensor(obs):
+                obs = torch.as_tensor(obs, device=device)
+            return obs.to(device=device, dtype=torch.float32)
+
+        def get_action(self, obs, is_deterministic):
+            norm = obs_normalizer(obs, update=False)
+            return actor.explore(norm, deterministic=bool(is_deterministic))
+
+    return _FastSACOpponent()
 
 
 def _load_dreamer_agent(full_cfg, obs_space, act_space, checkpoint_path, device):
@@ -609,6 +692,9 @@ def main():
             ppo_obs_space,
         )
         opponent_wrapper.add_opponent(ppo_opponent)
+    elif opponent_type == "fast_sac":
+        fast_sac_opponent = _load_fast_sac_opponent(args_cli.opponent_checkpoint, device)
+        opponent_wrapper.add_opponent(fast_sac_opponent)
 
     # Collect per-checkpoint results for aggregate summary.
     all_results = []
