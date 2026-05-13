@@ -330,6 +330,11 @@ def _make_env(
     env_cfg.seed = int(config.seed)
     env_cfg.episode_length_s = config.episode_length_s
 
+    # Sprite-renderer color/lighting augmentation (only present on Dreamer-sprite cfgs).
+    aug_cfg = getattr(config, "augmentation", None)
+    if aug_cfg is not None and hasattr(env_cfg, "augmentation_cfg"):
+        env_cfg.augmentation_cfg = dict(aug_cfg) if not isinstance(aug_cfg, dict) else aug_cfg
+
     # IsaacLab defaults to DLSS which smooths the image significantly
     # so we disable the antialiasing for a more pixelated (and hence more realistic) image.
     env_cfg.sim.render = RenderCfg(antialiasing_mode="Off")

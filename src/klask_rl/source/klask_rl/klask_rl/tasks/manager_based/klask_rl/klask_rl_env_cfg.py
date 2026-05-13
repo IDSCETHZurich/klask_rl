@@ -12,6 +12,7 @@ from .env_cfg import (
     DreamerSpriteObservationsCfg,
     EventCfg,
     EventCfgDreamer,
+    EventCfgDreamerSprite,
     EventCfgSac,
     FastSACObservationsCfg,
     KlaskRlDreamerSceneCfg,
@@ -244,7 +245,9 @@ class KlaskRlDreamerSpriteEnvCfg(KlaskRlDreamerEnvCfg):
 
     scene = KlaskRlDreamerSpriteSceneCfg(num_envs=1, env_spacing=1.0)
     observations = DreamerSpriteObservationsCfg()
+    events = EventCfgDreamerSprite()
 
     # Sprite asset paths (overridable from YAML).
     sprite_dir: str = os.path.join(_SPRITE_ASSETS_DIR, "sprites")
     background_path: str = os.path.join(_SPRITE_ASSETS_DIR, "background", "median_background.png")
+    augmentation_cfg: dict | None = None

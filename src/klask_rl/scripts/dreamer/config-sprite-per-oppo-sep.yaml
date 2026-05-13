@@ -52,8 +52,8 @@ env:
   sim_dt: 0.001
   seed: ${seed}
   device: ${device}
-  ball_reset_position_x: [ -0.15, 0.15 ]
-  ball_reset_position_y: [ -0.1, 0.1 ]
+  ball_reset_position_x: [-0.15, 0.15]
+  ball_reset_position_y: [-0.1, 0.1]
   max_velocity: 0.4 # [m/s] Maximum velocity for player movement
   max_acceleration: 10.0 # [m/s^2] Max rate-of-change.
   episode_length_s: 10.0 # [s] Episode length in seconds
@@ -62,7 +62,15 @@ env:
     checkpoint: /workspace/klask_rl/logs/actuator_model/data/new/checkpoints/model_data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states_train_seed0.pt
   collision_avoidance:
     enable: true
-  size: [ 128, 128 ]
+  size: [128, 128]
+  augmentation:
+    hold_per_episode: true # true = sample aug_id once per env at reset (held until next reset); false = resample every render
+    brightness: { enabled: true, range: [0.8, 1.2], levels: 3 } # multiplicative BGR scale; 1.0 = identity, <1 darker, >1 brighter
+    contrast: { enabled: true, range: [0.85, 1.15], levels: 3 } # stretch/compress around mid-gray (128); 1.0 = identity
+    gamma: { enabled: true, range: [0.8, 1.20], levels: 3 } # power curve on midtones; 1.0 = identity, >1 brightens midtones
+    color_temp: { enabled: true, range: [-0.125, 0.125], levels: 3 } # warm/cool shift; +x boosts R reduces B (warm), -x reverses (cool); 0 = identity
+    saturation: { enabled: true, range: [0.70, 1.30], levels: 3 } # HSV chroma scale; 1.0 = identity, <1 washes out, >1 vivid (can swap peg colors if too strong)
+    hue: { enabled: true, range: [-5, 5], levels: 3 } # HSV hue shift in degrees; 0 = identity (caution: strong shifts swap red/black peg identity)
   encoder:
     mlp_keys: "$^"
     cnn_keys: "image"
@@ -152,14 +160,14 @@ env:
       phases:
         - type: static
           speed: 1.0
-          steps: [ 0, 1_000_000 ]
+          steps: [0, 1_000_000]
         - type: sigmoid
-          speed: [ 1.0, 0.0 ]
-          steps: [ 1_000_000, 3_000_000 ]
+          speed: [1.0, 0.0]
+          steps: [1_000_000, 3_000_000]
           steepness: 6.0
         - type: static
           speed: 0.0
-          steps: [ 3_000_000, -1 ]
+          steps: [3_000_000, -1]
 
 buffer:
   batch_size: ${batch_size}
