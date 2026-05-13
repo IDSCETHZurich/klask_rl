@@ -520,11 +520,12 @@ def main():
         current_opp_draws = 0
 
     # --- Training loop ---
-    obs = env.reset_all()
-    # Initialize opponent obs for self-play (first step has no infos yet).
-    # On reset, player and opponent see the same initial state (before any action).
-    # The obs manager will compute both groups on the first env.step().
-    opp_obs = obs.clone() if config.self_play else None
+    reset_out = env.reset_all()
+    if isinstance(reset_out, tuple):
+        obs, opp_obs_init = reset_out
+    else:
+        obs, opp_obs_init = reset_out, None
+    opp_obs = opp_obs_init if config.self_play else None
     infos: dict = {}
     total_goals = 0
     total_own_goals = 0

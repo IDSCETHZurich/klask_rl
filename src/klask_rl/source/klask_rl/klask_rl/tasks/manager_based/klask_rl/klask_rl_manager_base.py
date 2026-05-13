@@ -24,4 +24,3 @@ class ExtendedManagerBasedRLEnv(ManagerBasedRLEnv):
             self.extras["terminal_obs"] = {key: val[env_ids].clone() for key, val in terminal_obs.items()}
             self.extras["terminal_env_ids"] = env_ids
         super()._reset_idx(env_ids)
-        super()._reset_idx(env_ids)
