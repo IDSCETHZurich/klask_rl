@@ -35,9 +35,9 @@ hydra:
   searchpath:
     - file://${script_dir:}/r2dreamer/configs
 
-batch_size: 10
+batch_size: 20
 batch_length: 64
-micro_batch_size: 5
+micro_batch_size: 10
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
