@@ -575,24 +575,26 @@ def main(config):
         train_devices = [config.device]
     train_device = train_devices[0]  # primary training GPU
 
-    # Batch size validation for data-parallel.
+    # Snapshot micro_batch_size before any bump so it doesn't follow batch_size.
+    _mbs = int(getattr(config, "micro_batch_size", config.batch_size))
+    assert config.batch_size % _mbs == 0, "batch_size must be divisible by micro_batch_size"
     num_train_gpus = len(train_devices)
     if num_train_gpus > 1:
-        _mbs = config.model.micro_batch_size if hasattr(config.model, "micro_batch_size") else config.batch_size
-        assert config.batch_size % _mbs == 0, "batch_size must be divisible by micro_batch_size"
         _num_micro = config.batch_size // _mbs
         if _num_micro % num_train_gpus != 0:
             _num_micro = ((_num_micro + num_train_gpus - 1) // num_train_gpus) * num_train_gpus
             with open_dict(config):
                 config.batch_size = _num_micro * _mbs
             print(f"Adjusted batch_size to {config.batch_size} for even GPU distribution")
+    with open_dict(config):
+        config.micro_batch_size = _mbs
 
-    # Propagate into sub-configs (OmegaConf configs are read-only by default).
     with open_dict(config.model):
         config.model.sim_device = sim_device
         config.model.train_device = train_device
         config.model.train_devices = train_devices
-        config.model.device = train_device  # modules created on train_device
+        config.model.device = train_device
+        config.model.micro_batch_size = _mbs
 
     with open_dict(config.buffer):
         config.buffer.device = train_device  # sampled batches go to training GPU
