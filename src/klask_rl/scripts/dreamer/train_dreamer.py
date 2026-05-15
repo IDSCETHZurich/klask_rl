@@ -330,11 +330,11 @@ def _make_env(
     env_cfg.seed = int(config.seed)
     env_cfg.episode_length_s = config.episode_length_s
 
-    # Sprite-renderer color/lighting augmentation (only present on Dreamer-sprite cfgs).
-    aug_dict = getattr(config, "augmentation", None)
-    if aug_dict is not None and hasattr(env_cfg, "augmentation_cfg"):
+    aug_raw = getattr(config, "augmentation", None)
+    if aug_raw is not None and hasattr(env_cfg, "augmentation_cfg"):
         from klask_rl.tasks.manager_based.klask_rl.klask_rl_env_cfg import AugmentationAxisCfg, AugmentationCfg
 
+        aug_dict = OmegaConf.to_container(aug_raw, resolve=True) if OmegaConf.is_config(aug_raw) else dict(aug_raw)
         aug = AugmentationCfg(hold_per_episode=bool(aug_dict.get("hold_per_episode", True)))
         for axis_name in ("brightness", "contrast", "gamma", "color_temp", "saturation", "hue"):
             block = aug_dict.get(axis_name)
