@@ -331,9 +331,25 @@ def _make_env(
     env_cfg.episode_length_s = config.episode_length_s
 
     # Sprite-renderer color/lighting augmentation (only present on Dreamer-sprite cfgs).
-    aug_cfg = getattr(config, "augmentation", None)
-    if aug_cfg is not None and hasattr(env_cfg, "augmentation_cfg"):
-        env_cfg.augmentation_cfg = dict(aug_cfg) if not isinstance(aug_cfg, dict) else aug_cfg
+    aug_dict = getattr(config, "augmentation", None)
+    if aug_dict is not None and hasattr(env_cfg, "augmentation_cfg"):
+        from klask_rl.tasks.manager_based.klask_rl.klask_rl_env_cfg import AugmentationAxisCfg, AugmentationCfg
+
+        aug = AugmentationCfg(hold_per_episode=bool(aug_dict.get("hold_per_episode", True)))
+        for axis_name in ("brightness", "contrast", "gamma", "color_temp", "saturation", "hue"):
+            block = aug_dict.get(axis_name)
+            if not isinstance(block, dict):
+                continue
+            setattr(
+                aug,
+                axis_name,
+                AugmentationAxisCfg(
+                    enabled=bool(block.get("enabled", False)),
+                    range=tuple(block.get("range", (0.0, 0.0))),
+                    levels=int(block.get("levels", 1)),
+                ),
+            )
+        env_cfg.augmentation_cfg = aug
 
     # IsaacLab defaults to DLSS which smooths the image significantly
     # so we disable the antialiasing for a more pixelated (and hence more realistic) image.
