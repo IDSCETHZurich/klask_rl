@@ -2,6 +2,12 @@
 # Phase 1: AppLauncher must run before any IsaacLab / USD / warp imports.
 # =============================================================================
 
+import os
+
+# Reduce caching-allocator fragmentation across the per-checkpoint reload
+# cycle. Must be set before torch initializes CUDA.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import argparse
 import pathlib
 import sys
@@ -138,9 +144,9 @@ simulation_app = app_launcher.app
 # Phase 2: Everything else — safe to import now that the sim is running.
 # =============================================================================
 
+import gc
 import glob as glob_module
 import importlib
-import os
 import shlex
 import signal
 import warnings
@@ -819,8 +825,14 @@ def main():
             png_file = _ep_mod.plot_boxplots(npz_file, title_suffix=os.path.basename(ckpt_path))
             print(f"[INFO] Box-plot saved to:            {png_file}")
 
-        # Free player model before loading the next one.
-        del player
+        # Free per-checkpoint GPU state before loading the next one.
+        del player, tracker, pbar
+        try:
+            del act, agent_state, done
+        except NameError:
+            pass
+        gc.collect()
+        torch.cuda.empty_cache()
 
         # Stop evaluating further checkpoints if user interrupted.
         if interrupted:
