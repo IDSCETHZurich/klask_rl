@@ -26,7 +26,7 @@ sim_device: "cuda:0"
 train_devices:
   - "cuda:1"
   - "cuda:2"
-init_checkpoint: /workspace/klask_rl/logdir/2026-05-09/09-16-19/checkpoint_9000000.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+init_checkpoint: null # /workspace/klask_rl/logdir/2026-05-09/09-16-19/checkpoint_9000000.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
 load_world_model_only: false
 
 hydra:
@@ -65,7 +65,7 @@ env:
   size: [128, 128]
   augmentation:
     hold_per_episode: true # true = sample aug_id once per env at reset (held until next reset); false = resample every render
-    brightness: { enabled: true, range: [0.8, 1.2], levels: 3 } # multiplicative BGR scale; 1.0 = identity, <1 darker, >1 brighter
+    brightness: { enabled: true, range: [0.9, 1.1], levels: 3 } # multiplicative BGR scale; 1.0 = identity, <1 darker, >1 brighter
     contrast: { enabled: true, range: [0.85, 1.15], levels: 3 } # stretch/compress around mid-gray (128); 1.0 = identity
     gamma: { enabled: true, range: [0.8, 1.20], levels: 3 } # power curve on midtones; 1.0 = identity, >1 brightens midtones
     color_temp: { enabled: true, range: [-0.125, 0.125], levels: 3 } # warm/cool shift; +x boosts R reduces B (warm), -x reverses (cool); 0 = identity
