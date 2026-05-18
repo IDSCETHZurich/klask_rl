@@ -9,13 +9,13 @@ model:
   compile: True
   compile_mode: "default"
   inference_compile_mode: "default"
-  loss_scales:
-    smoothness: 0.002
+  # loss_scales:
+  #   smoothness: 0.002
 
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_sprite_new_AM_and_boarder_coll_acc_limit_smoothness_loss_aug
+wandb_name: dreamer_sprite_aug
 
 # Initialization
 logdir: /workspace/klask_rl/logs/dreamer/training/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
@@ -25,9 +25,8 @@ device: "cuda:0"
 sim_device: "cuda:0"
 train_devices:
   - "cuda:1"
-  - "cuda:2"
-init_checkpoint: null # /workspace/klask_rl/logdir/2026-05-09/09-16-19/checkpoint_9000000.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
-load_world_model_only: false
+init_checkpoint: /workspace/klask_rl/logs/dreamer/training/2026-05-15/13-38-45/checkpoint_2200000.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+load_world_model_only: true
 
 hydra:
   run:
@@ -37,7 +36,7 @@ hydra:
 
 batch_size: 20
 batch_length: 64
-micro_batch_size: 10
+micro_batch_size: 20
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
