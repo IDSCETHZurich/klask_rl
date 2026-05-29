@@ -340,11 +340,16 @@ def make_isaaclab_env(config: KlaskTrainingConfig) -> FastSACEnvWrapper:
         },
     )
 
-    # Set reward weights: ±goal_reward for terminal events
-    env_cfg.rewards.goal_scored.weight = config.goal_reward
-    env_cfg.rewards.goal_conceded.weight = -config.goal_reward
-    env_cfg.rewards.player_in_goal.weight = -config.goal_reward
-    env_cfg.rewards.opponent_in_goal.weight = config.goal_reward
+    # Set reward weights: ±goal_reward for terminal events.
+    # IsaacLab's RewardManager multiplies each term by step_dt, so we
+    # pre-divide here to keep the actual per-step reward equal to
+    # ``goal_reward`` (matches the MuJoCo Warp pipeline, which has no
+    # dt scaling, and matches the critic's [v_min, v_max] range).
+    step_dt = config.sim_dt * config.decimation
+    env_cfg.rewards.goal_scored.weight = config.goal_reward / step_dt
+    env_cfg.rewards.goal_conceded.weight = -config.goal_reward / step_dt
+    env_cfg.rewards.player_in_goal.weight = -config.goal_reward / step_dt
+    env_cfg.rewards.opponent_in_goal.weight = config.goal_reward / step_dt
 
     # The gym registration uses FastSACManagerBasedRLEnv as entry_point,
     # so terminal observations are captured before auto-reset.
