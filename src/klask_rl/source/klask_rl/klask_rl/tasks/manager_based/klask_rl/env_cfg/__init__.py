@@ -8,7 +8,7 @@ from .klask_rl_observations_cfg import (
     DreamerObservationsCfg,
     DreamerSpriteObservationsCfg,
 )
-from .klask_rl_event_cfg import EventCfg, EventCfgSac, EventCfgDreamer
+from .klask_rl_event_cfg import EventCfg, EventCfgSac, EventCfgDreamer, EventCfgDreamerSprite
 from .klask_rl_rewards_cfg import (
     RewardsCfg,
     RewardsCfgDenseBallHit,
@@ -37,6 +37,7 @@ __all__ = [
     "EventCfg",
     "EventCfgSac",
     "EventCfgDreamer",
+    "EventCfgDreamerSprite",
     "RewardsCfg",
     "RewardsCfgSparseHer",
     "RewardsCfgDenseBallHit",

@@ -1,0 +1,9 @@
+# Example augmentation config for visualize_augmentations.py.
+# Same schema as the `augmentation:` block in the training YAML.
+hold_per_episode: true # true = sample aug_id once per env at reset; false = resample every render
+brightness: { enabled: true, range: [0.6, 1.4], levels: 5 } # multiplicative BGR scale; 1.0 = identity
+contrast: { enabled: true, range: [0.7, 1.3], levels: 5 } # stretch/compress around mid-gray (128); 1.0 = identity
+gamma: { enabled: true, range: [0.7, 1.3], levels: 5 } # power curve on midtones; 1.0 = identity
+color_temp: { enabled: true, range: [-0.25, 0.25], levels: 5 } # +x warm (more R, less B), -x cool; 0 = identity
+saturation: { enabled: true, range: [0.4, 1.6], levels: 5 } # HSV chroma scale; 1.0 = identity
+hue: { enabled: true, range: [-10, 10], levels: 5 } # HSV hue shift in degrees; 0 = identity

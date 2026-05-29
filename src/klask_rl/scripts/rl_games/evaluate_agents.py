@@ -146,10 +146,14 @@ def main():
     # if isinstance(env.unwrapped, DirectMARLEnv):
     #    env = multi_agent_to_single_agent(env)
 
-    obs_noise = agent_cfg["env"].get("obs_noise", 0.0)
-    if obs_noise > 0.0:
+    noise_cfg = agent_cfg.get("observation_noise") or {}
+    if noise_cfg.get("enable", False):
         env = ObservationNoiseWrapper(
-            env, obs_noise,
+            env,
+            peg_position_std=float(noise_cfg.get("peg_position_std", 0.0)),
+            peg_velocity_std=float(noise_cfg.get("peg_velocity_std", 0.0)),
+            ball_position_std=float(noise_cfg.get("ball_position_std", 0.0)),
+            ball_velocity_std=float(noise_cfg.get("ball_velocity_std", 0.0)),
             own_goal=KLASK_PARAMS["player_goal"],
             other_goal=KLASK_PARAMS["opponent_goal"],
         )

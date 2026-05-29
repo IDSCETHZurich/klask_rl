@@ -9,6 +9,7 @@ from ..utils_manager_based import (
     reset_ball_hit_timer,
     reset_ball_hit_tracking,
     reset_joints_by_absolute,
+    reset_sprite_augmentation,
     set_joint_position_limits,
     set_rigid_body_material,
     reset_player_velocity_toward_ball,
@@ -257,6 +258,14 @@ class EventCfg:
         params={},
     )
 
+    # Apply scheduled player init velocity (no-op when InitializationWrapper is absent).
+    # Runs last so that ball and player positions are already finalized.
+    reset_player_velocity = EventTerm(
+        func=reset_player_velocity_toward_ball,
+        mode="reset",
+        params={},
+    )
+
 
 @configclass
 class EventCfgSac(EventCfg):
@@ -308,10 +317,14 @@ class EventCfgDreamer(EventCfg):
         },
     )
 
-    # Apply scheduled player init velocity (no-op when InitializationWrapper is absent).
-    # Runs last so that ball and player positions are already finalized.
-    reset_player_velocity = EventTerm(
-        func=reset_player_velocity_toward_ball,
-        mode="reset",
-        params={},
-    )
+
+@configclass
+class EventCfgDreamerSprite(EventCfgDreamer):
+    """Event configuration for Dreamer + sprite renderer.
+
+    Adds per-episode sprite-augmentation sampling on top of the Dreamer events.
+    Only wired into ``KlaskRlDreamerSpriteEnvCfg``; the TiledCamera Dreamer env
+    keeps ``EventCfgDreamer`` unchanged.
+    """
+
+    reset_sprite_aug = EventTerm(func=reset_sprite_augmentation, mode="reset", params={})

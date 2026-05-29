@@ -77,7 +77,6 @@ params:
       env_update_num: 4096
     train_dir: /workspace/klask_rl/logs/rl_games/klask
 env:
-  obs_noise: 0.0
   actuator_model: false
   collision_avoidance: false
 rewards:
@@ -144,6 +143,12 @@ terminations:
   goal_conceded: true
   player_in_goal: true
   opponent_in_goal: true
+observation_noise:
+  enable: false
+  peg_position_std: 0.0      # m
+  peg_velocity_std: 0.0      # m/s
+  ball_position_std: 0.0     # m
+  ball_velocity_std: 0.0     # m/s
 domain_randomization:
   ball_mass:
     enable: false

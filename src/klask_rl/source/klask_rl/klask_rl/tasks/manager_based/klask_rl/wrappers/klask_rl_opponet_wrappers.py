@@ -226,5 +226,54 @@ class KlaskRlAgentOpponentWrapper(Wrapper):
         full_action = torch.cat([action, opponent_action], dim=1)
         obs, reward, terminated, truncated, info = self.env.step(full_action, *args, **kwargs)
 
+        # Expose the opponent's action so a Dreamer player using opponent_separation=True
+        # can feed it into its RSSM prev_action slot (matches DreamerSelfPlayWrapper).
+        obs["opponent_action"] = opponent_action
+
         self.opponent_obs = obs["opponent"]
+        return obs, reward, terminated, truncated, info
+
+
+class KlaskRlFastSACOpponentWrapper(Wrapper):
+    """Opponent wrapper for a FastSAC agent trained by train_fast_sac_isaaclab.py.
+
+    Structurally mirrors KlaskRlAgentOpponentWrapper but reads from
+    obs["fast_sac_opponent"] — the 18-dim FastSACObservationsCfg layout the
+    SAC actor was trained on — instead of the rl_games-style obs["opponent"].
+    """
+
+    def __init__(self, env, is_deterministic=True):
+        super().__init__(env)
+        self.opponent = None
+        self.is_deterministic = is_deterministic
+
+        # Override action space to reflect only player actions (2 instead of 4)
+        if hasattr(self.env.unwrapped, "single_action_space"):
+            original_space = self.env.unwrapped.single_action_space
+            if hasattr(original_space, "shape") and original_space.shape[0] == 4:
+                self.env.unwrapped._klask_original_single_action_space = original_space
+                self.env.unwrapped.single_action_space = gym.spaces.Box(
+                    low=original_space.low[:2],
+                    high=original_space.high[:2],
+                    dtype=original_space.dtype,
+                )
+
+    def add_opponent(self, opponent):
+        self.opponent = opponent
+        self.opponent.has_batch_dimension = True
+
+    def reset(self, *args, **kwargs):
+        obs, info = self.env.reset(*args, **kwargs)
+        self.opponent_obs = obs["fast_sac_opponent"]
+        return obs, info
+
+    def step(self, action, *args, **kwargs):
+        opponent_obs = self.opponent.obs_to_torch(self.opponent_obs)
+        opponent_action = self.opponent.get_action(opponent_obs, self.is_deterministic)
+        full_action = torch.cat([action, opponent_action], dim=1)
+        obs, reward, terminated, truncated, info = self.env.step(full_action, *args, **kwargs)
+
+        obs["opponent_action"] = opponent_action
+
+        self.opponent_obs = obs["fast_sac_opponent"]
         return obs, reward, terminated, truncated, info

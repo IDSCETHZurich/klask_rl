@@ -13,6 +13,133 @@ import cv2
 import numpy as np
 
 
+_AUG_AXES = ("brightness", "contrast", "gamma", "color_temp", "saturation", "hue")
+
+
+def _axis_levels(axis_cfg: dict) -> np.ndarray:
+    """Return the discrete levels for a single axis config dict.
+
+    Uses ``np.linspace(lo, hi, levels)`` — ``levels`` evenly spaced values
+    inclusive of both endpoints. ``levels=1`` yields the single value ``lo``.
+    """
+    lo, hi = axis_cfg["range"]
+    n_levels = int(axis_cfg["levels"])
+    if n_levels < 1:
+        raise ValueError(f"Augmentation levels must be >= 1, got {n_levels}")
+    return np.linspace(lo, hi, n_levels)
+
+
+def num_augmentation_variants(aug_cfg: dict | None) -> int:
+    """Compute total variants = 1 (identity) + product of enabled-axis level counts.
+
+    Identity variant 0 is always present. When at least one axis is enabled,
+    the Cartesian product of enabled-axis levels makes up variants 1..N.
+    Validates the config first so malformed YAML produces a clear error.
+    """
+    if not aug_cfg:
+        return 1
+    _validate_aug_cfg(aug_cfg)
+    enabled_count = 0
+    total = 1
+    for axis in _AUG_AXES:
+        c = aug_cfg.get(axis, {})
+        if c.get("enabled"):
+            total *= len(_axis_levels(c))
+            enabled_count += 1
+    return 1 + total if enabled_count > 0 else 1
+
+
+def freeze_aug_cfg(cfg: dict | None):
+    """Convert a (possibly nested) augmentation_cfg dict into a hashable tuple."""
+    if not cfg:
+        return ()
+    out = []
+    for k in sorted(cfg.keys()):
+        v = cfg[k]
+        if isinstance(v, dict):
+            out.append((k, freeze_aug_cfg(v)))
+        elif isinstance(v, list):
+            out.append((k, tuple(v)))
+        else:
+            out.append((k, v))
+    return tuple(out)
+
+
+def _validate_aug_cfg(cfg: dict) -> None:
+    """Raise on unknown axis names or malformed entries."""
+    allowed_top = set(_AUG_AXES) | {"hold_per_episode"}
+    for k in cfg.keys():
+        if k not in allowed_top:
+            raise ValueError(
+                f"Unknown augmentation key {k!r}. Allowed: {sorted(allowed_top)}"
+            )
+    for axis in _AUG_AXES:
+        c = cfg.get(axis)
+        if c is None:
+            continue
+        if not isinstance(c, dict):
+            raise ValueError(f"augmentation.{axis} must be a dict, got {type(c).__name__}")
+        if not c.get("enabled"):
+            continue
+        if "range" not in c or "levels" not in c:
+            raise ValueError(f"augmentation.{axis} requires 'range' and 'levels' when enabled")
+        if len(c["range"]) != 2 or c["range"][0] > c["range"][1]:
+            raise ValueError(f"augmentation.{axis}.range must be [lo, hi] with lo <= hi")
+        if not isinstance(c["levels"], int) or c["levels"] < 1:
+            raise ValueError(f"augmentation.{axis}.levels must be a positive integer, got {c['levels']!r}")
+
+
+def _build_color_lut(brightness: float, contrast: float, gamma: float, color_temp: float) -> np.ndarray:
+    """Compose brightness/contrast/gamma/color_temp into a single 256x3 uint8 LUT.
+
+    Operations applied in this order to each pixel value v in [0, 1]:
+        v = v * brightness                      # brightness scale
+        v = (v - 0.5) * contrast + 0.5          # contrast about mid-gray
+        v = clip(v, 0, 1) ** (1/gamma)          # gamma curve (gamma>1 brightens midtones)
+        v[B] *= (1 - color_temp); v[R] *= (1 + color_temp)   # warm = +ct (more R, less B)
+
+    Returns a (256, 3) uint8 LUT applied in BGR channel order (cv2 convention).
+    """
+    base = np.arange(256, dtype=np.float32) / 255.0  # (256,)
+    v = base * brightness
+    v = (v - 0.5) * contrast + 0.5
+    v = np.clip(v, 0.0, 1.0)
+    if gamma != 1.0:
+        v = np.power(v, 1.0 / gamma)
+    # Build per-channel LUT (BGR order)
+    lut = np.empty((256, 3), dtype=np.float32)
+    lut[:, 0] = v * (1.0 - color_temp)  # B
+    lut[:, 1] = v                        # G
+    lut[:, 2] = v * (1.0 + color_temp)  # R
+    return np.clip(lut * 255.0, 0, 255).astype(np.uint8)
+
+
+def _apply_lut(bgr: np.ndarray, lut: np.ndarray) -> np.ndarray:
+    """Apply a per-channel uint8 LUT of shape (256, 3) to a uint8 BGR image.
+
+    Uses numpy advanced indexing rather than ``cv2.LUT`` because OpenCV's LUT
+    only accepts a single 1D table; we need a different mapping per channel.
+    """
+    out = np.empty_like(bgr)
+    out[..., 0] = lut[bgr[..., 0], 0]
+    out[..., 1] = lut[bgr[..., 1], 1]
+    out[..., 2] = lut[bgr[..., 2], 2]
+    return out
+
+
+def _apply_hsv(bgr: np.ndarray, sat_scale: float, hue_shift_deg: float) -> np.ndarray:
+    """Apply saturation scale + hue shift via HSV roundtrip. Input/output uint8 BGR."""
+    if sat_scale == 1.0 and hue_shift_deg == 0.0:
+        return bgr
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+    if hue_shift_deg != 0.0:
+        # OpenCV H range is [0, 180) for 8-bit HSV
+        hsv[..., 0] = (hsv[..., 0] + hue_shift_deg / 2.0) % 180.0
+    if sat_scale != 1.0:
+        hsv[..., 1] = np.clip(hsv[..., 1] * sat_scale, 0.0, 255.0)
+    return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+
 class BoardRenderer:
     """Renders a Klask board image from a board state (3 object positions).
 
@@ -71,8 +198,16 @@ class BoardRenderer:
         board_width_m: float = 0.42,
         board_height_m: float = 0.32,
         target_frame: str = "camera",
+        augmentation_cfg: dict | None = None,
     ):
-        """Initialise the renderer by loading and precomputing all sprites and data."""
+        """Initialise the renderer by loading and precomputing all sprites and data.
+
+        ``augmentation_cfg`` (optional) enables color/lighting augmentation. When
+        provided, the renderer precomputes one (bg, sprite_grids) variant per
+        Cartesian combination of enabled-axis levels. ``render()`` then takes an
+        ``aug_id`` integer to look up which variant to composite. See
+        :func:`num_augmentation_variants` and the module-level docstring.
+        """
         if target_frame not in ("camera", "sim"):
             raise ValueError(f"target_frame must be 'camera' or 'sim', got {target_frame!r}")
         self._output_size = output_size
@@ -131,36 +266,95 @@ class BoardRenderer:
         else:
             phys_w, phys_h = board_width_m, board_height_m
 
-        # Metres-to-pixels conversion factors (at working resolution)
+        # Metres-to-pixels conversion factors (at working resolution).
+        # Prepare BGRA grids first so the augmentation pass can re-premultiply
+        # them with each variant's color transform.
         rot = self._sim_frame
         if fast_mode:
             self._bg = cv2.resize(bg, output_size, interpolation=cv2.INTER_AREA)
             self._m2px_x = output_size[0] / phys_w
             self._m2px_y = output_size[1] / phys_h
-            self._left = _precompute_grid(
-                left_grid, self._PEG_ROWS, self._PEG_COLS, self._scale_x, self._scale_y, rotate_ccw=rot
-            )
-            self._right = _precompute_grid(
-                right_grid, self._PEG_ROWS, self._PEG_COLS, self._scale_x, self._scale_y, rotate_ccw=rot
-            )
-            self._ball = _precompute_grid(
-                ball_grid, self._BALL_ROWS, self._BALL_COLS, self._scale_x, self._scale_y, rotate_ccw=rot
-            )
+            sx, sy = self._scale_x, self._scale_y
         else:
             self._bg = bg
             self._m2px_x = self._src_w / phys_w
             self._m2px_y = self._src_h / phys_h
-            self._left = _precompute_grid(left_grid, self._PEG_ROWS, self._PEG_COLS, rotate_ccw=rot)
-            self._right = _precompute_grid(right_grid, self._PEG_ROWS, self._PEG_COLS, rotate_ccw=rot)
-            self._ball = _precompute_grid(ball_grid, self._BALL_ROWS, self._BALL_COLS, rotate_ccw=rot)
+            sx, sy = 1.0, 1.0
+
+        left_bgra = _prepare_bgra_grid(left_grid, self._PEG_ROWS, self._PEG_COLS, sx, sy, rotate_ccw=rot)
+        right_bgra = _prepare_bgra_grid(right_grid, self._PEG_ROWS, self._PEG_COLS, sx, sy, rotate_ccw=rot)
+        ball_bgra = _prepare_bgra_grid(ball_grid, self._BALL_ROWS, self._BALL_COLS, sx, sy, rotate_ccw=rot)
+
+        # Variant 0 = identity. Compute it and grab inv_alpha grids for sharing.
+        self._left, left_inv_a = _premultiply_bgra_grid(left_bgra)
+        self._right, right_inv_a = _premultiply_bgra_grid(right_bgra)
+        self._ball, ball_inv_a = _premultiply_bgra_grid(ball_bgra)
 
         self._canvas_h, self._canvas_w = self._bg.shape[:2]
+
+        # ------------------------------------------------------------------
+        # Augmentation precompute (Cartesian product over enabled-axis levels)
+        # ------------------------------------------------------------------
+        self._augmentation_cfg = augmentation_cfg
+        self._bg_variants: list[np.ndarray] = [self._bg]
+        self._left_variants: list[list[list[tuple]]] = [self._left]
+        self._right_variants: list[list[list[tuple]]] = [self._right]
+        self._ball_variants: list[list[list[tuple]]] = [self._ball]
+
+        if augmentation_cfg:
+            _validate_aug_cfg(augmentation_cfg)
+            enabled_axes: list[tuple[str, np.ndarray]] = []
+            for axis in _AUG_AXES:
+                c = augmentation_cfg.get(axis, {})
+                if c.get("enabled"):
+                    enabled_axes.append((axis, _axis_levels(c)))
+            if enabled_axes:
+                import itertools as _it
+
+                from tqdm import tqdm
+
+                level_lists = [levels for _, levels in enabled_axes]
+                axis_names = [name for name, _ in enabled_axes]
+                total = 1
+                for lvls in level_lists:
+                    total *= len(lvls)
+                desc = f"Precomputing sprite augmentations ({'x'.join(str(len(l)) for l in level_lists)} = {total})"
+                for combo in tqdm(_it.product(*level_lists), total=total, desc=desc, unit="variant"):
+                    params = dict(zip(axis_names, combo))
+                    brightness = float(params.get("brightness", 1.0))
+                    contrast = float(params.get("contrast", 1.0))
+                    gamma = float(params.get("gamma", 1.0))
+                    color_temp = float(params.get("color_temp", 0.0))
+                    sat = float(params.get("saturation", 1.0))
+                    hue = float(params.get("hue", 0.0))
+
+                    lut = _build_color_lut(brightness, contrast, gamma, color_temp)
+
+                    def _transform(bgr: np.ndarray, _lut=lut, _sat=sat, _hue=hue) -> np.ndarray:
+                        out = _apply_lut(bgr, _lut)
+                        out = _apply_hsv(out, _sat, _hue)
+                        return out
+
+                    self._bg_variants.append(_transform(self._bg))
+                    left_v, _ = _premultiply_bgra_grid(left_bgra, _transform, shared_inv_alpha=left_inv_a)
+                    right_v, _ = _premultiply_bgra_grid(right_bgra, _transform, shared_inv_alpha=right_inv_a)
+                    ball_v, _ = _premultiply_bgra_grid(ball_bgra, _transform, shared_inv_alpha=ball_inv_a)
+                    self._left_variants.append(left_v)
+                    self._right_variants.append(right_v)
+                    self._ball_variants.append(ball_v)
+
+        self._num_variants = len(self._bg_variants)
+
+    @property
+    def num_variants(self) -> int:
+        """Total number of precomputed augmentation variants (including identity)."""
+        return self._num_variants
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def render(self, left_peg_m, right_peg_m, ball_m) -> np.ndarray:
+    def render(self, left_peg_m, right_peg_m, ball_m, aug_id: int = 0) -> np.ndarray:
         """Render a board image for the given object positions.
 
         Parameters
@@ -171,13 +365,25 @@ class BoardRenderer:
             (origin top-left, X right, Y down).  When ``target_frame="sim"``
             these are sim-frame coordinates (origin at board centre, X right,
             Y up).
+        aug_id : int
+            Index into the precomputed augmentation variants. ``0`` is the
+            identity (no augmentation). Ignored when ``augmentation_cfg`` was
+            not provided.
 
         Returns:
         -------
         np.ndarray
             ``uint8`` BGR image of shape ``(out_h, out_w, 3)``.
         """
-        canvas = self._bg.copy()
+        if aug_id < 0 or aug_id >= self._num_variants:
+            raise IndexError(
+                f"aug_id={aug_id} out of range; renderer has {self._num_variants} variants"
+            )
+        bg_variant = self._bg_variants[aug_id]
+        left_variant = self._left_variants[aug_id]
+        right_variant = self._right_variants[aug_id]
+        ball_variant = self._ball_variants[aug_id]
+        canvas = bg_variant.copy()
 
         # Convert input coordinates to camera frame for grid lookup
         if self._sim_frame:
@@ -211,7 +417,7 @@ class BoardRenderer:
             # Sim -> rotated-image pixel coords
             _composite(
                 canvas,
-                self._left[liy][lix],
+                left_variant[liy][lix],
                 (left_peg_m[0] + half_h) * m2px_x,
                 (half_w - left_peg_m[1]) * m2px_y,
                 cw,
@@ -219,19 +425,19 @@ class BoardRenderer:
             )
             _composite(
                 canvas,
-                self._right[riy][rix],
+                right_variant[riy][rix],
                 (right_peg_m[0] + half_h) * m2px_x,
                 (half_w - right_peg_m[1]) * m2px_y,
                 cw,
                 ch,
             )
             _composite(
-                canvas, self._ball[biy][bix], (ball_m[0] + half_h) * m2px_x, (half_w - ball_m[1]) * m2px_y, cw, ch
+                canvas, ball_variant[biy][bix], (ball_m[0] + half_h) * m2px_x, (half_w - ball_m[1]) * m2px_y, cw, ch
             )
         else:
-            _composite(canvas, self._left[liy][lix], l_cx * m2px_x, l_cy * m2px_y, cw, ch)
-            _composite(canvas, self._right[riy][rix], r_cx * m2px_x, r_cy * m2px_y, cw, ch)
-            _composite(canvas, self._ball[biy][bix], b_cx * m2px_x, b_cy * m2px_y, cw, ch)
+            _composite(canvas, left_variant[liy][lix], l_cx * m2px_x, l_cy * m2px_y, cw, ch)
+            _composite(canvas, right_variant[riy][rix], r_cx * m2px_x, r_cy * m2px_y, cw, ch)
+            _composite(canvas, ball_variant[biy][bix], b_cx * m2px_x, b_cy * m2px_y, cw, ch)
 
         # Downscale if full-res mode
         if not self._fast_mode:
@@ -305,7 +511,7 @@ def _assign_to_grid(
     return grid
 
 
-def _precompute_grid(
+def _prepare_bgra_grid(
     grid: list[list[dict]],
     n_rows: int,
     n_cols: int,
@@ -313,12 +519,10 @@ def _precompute_grid(
     scale_y: float = 1.0,
     rotate_ccw: bool = False,
 ) -> list[list[tuple]]:
-    """Precompute premultiplied-alpha compositing data for every grid cell.
+    """Rotate and resize the per-cell BGRA sprites to working resolution.
 
-    Returns ``[row][col]`` of ``(offset_x, offset_y, premul_bgr, inv_alpha)``.
-    ``offset_x/y`` is the sprite's centre offset in working-resolution pixels,
-    used at render time to convert a requested centre position to a top-left
-    placement coordinate.
+    Returns ``[row][col]`` of ``(off_x, off_y, bgra_uint8)``. This is the
+    pre-premultiplication form needed by the augmentation pass.
     """
     result = [[None] * n_cols for _ in range(n_rows)]
     for iy in range(n_rows):
@@ -335,7 +539,6 @@ def _precompute_grid(
                 offset_px = [offset_px[1], orig_w - offset_px[0]]
 
             if scale_x != 1.0 or scale_y != 1.0:
-                # Downscale sprite
                 new_w = max(1, round(rgba.shape[1] * scale_x))
                 new_h = max(1, round(rgba.shape[0] * scale_y))
                 rgba = cv2.resize(rgba, (new_w, new_h), interpolation=cv2.INTER_AREA)
@@ -345,13 +548,66 @@ def _precompute_grid(
                 off_x = offset_px[0]
                 off_y = offset_px[1]
 
-            # Premultiplied alpha
-            alpha = rgba[:, :, 3:4].astype(np.float32) / 255.0
-            premul_bgr = rgba[:, :, :3].astype(np.float32) * alpha
-            inv_alpha = 1.0 - alpha
-
-            result[iy][ix] = (off_x, off_y, premul_bgr, inv_alpha)
+            result[iy][ix] = (off_x, off_y, rgba)
     return result
+
+
+def _premultiply_bgra_grid(
+    bgra_grid: list[list[tuple]],
+    bgr_transform=None,
+    shared_inv_alpha: list[list[np.ndarray]] | None = None,
+) -> tuple[list[list[tuple]], list[list[np.ndarray]]]:
+    """Premultiply each cell's BGRA into ``(off_x, off_y, premul_bgr, inv_alpha)``.
+
+    If ``bgr_transform`` is given, it is applied to the uint8 BGR channels of
+    each cell before premultiplication. If ``shared_inv_alpha`` is given, those
+    inv_alpha tensors are reused (so a per-axis color shift doesn't allocate
+    new alpha tensors per variant — alpha is invariant under color ops).
+
+    Returns ``(premul_grid, inv_alpha_grid)``. The second value is the
+    inv_alpha-by-cell grid you can pass back in as ``shared_inv_alpha`` for the
+    next variant.
+    """
+    n_rows = len(bgra_grid)
+    n_cols = len(bgra_grid[0])
+    result = [[None] * n_cols for _ in range(n_rows)]
+    inv_alpha_grid: list[list[np.ndarray]] = [[None] * n_cols for _ in range(n_rows)]
+    for iy in range(n_rows):
+        for ix in range(n_cols):
+            off_x, off_y, rgba = bgra_grid[iy][ix]
+            bgr = rgba[:, :, :3]
+            if bgr_transform is not None:
+                bgr = bgr_transform(bgr)
+            alpha_u8 = rgba[:, :, 3:4]
+            if shared_inv_alpha is not None:
+                inv_alpha = shared_inv_alpha[iy][ix]
+                alpha_f = 1.0 - inv_alpha
+            else:
+                alpha_f = alpha_u8.astype(np.float32) / 255.0
+                inv_alpha = 1.0 - alpha_f
+            premul_bgr = np.clip(bgr.astype(np.float32), 0.0, 255.0) * alpha_f
+            result[iy][ix] = (off_x, off_y, premul_bgr, inv_alpha)
+            inv_alpha_grid[iy][ix] = inv_alpha
+    return result, inv_alpha_grid
+
+
+def _precompute_grid(
+    grid: list[list[dict]],
+    n_rows: int,
+    n_cols: int,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+    rotate_ccw: bool = False,
+) -> list[list[tuple]]:
+    """Precompute premultiplied-alpha compositing data for every grid cell.
+
+    Returns ``[row][col]`` of ``(offset_x, offset_y, premul_bgr, inv_alpha)``.
+    Convenience wrapper that combines ``_prepare_bgra_grid`` and
+    ``_premultiply_bgra_grid`` for callers that don't need augmentation.
+    """
+    bgra_grid = _prepare_bgra_grid(grid, n_rows, n_cols, scale_x, scale_y, rotate_ccw)
+    premul_grid, _ = _premultiply_bgra_grid(bgra_grid)
+    return premul_grid
 
 
 def _composite(

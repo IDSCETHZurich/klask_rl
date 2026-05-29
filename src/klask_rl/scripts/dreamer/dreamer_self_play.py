@@ -61,10 +61,15 @@ class DreamerSelfPlayWrapper(Wrapper):
         update_score: float = 0.7,
         games_to_track: int = 4096,
         compile: bool = False,
+        opponent_action_method: str | None = None,
     ):
         super().__init__(env)
         self._eval_mode = eval_mode
         self._compile = compile
+        assert opponent_action_method in (None, "zero", "random"), (
+            f"opponent_action_method must be one of None, 'zero', 'random'; got {opponent_action_method!r}"
+        )
+        self._opponent_action_method = opponent_action_method
 
         # --- Halve the action space (player only) ---
         if hasattr(self.env.unwrapped, "single_action_space"):
@@ -198,6 +203,8 @@ class DreamerSelfPlayWrapper(Wrapper):
         obs, reward, terminated, truncated, info = self.env.step(full_action, *args, **kwargs)
 
         # Expose opponent actions so they can be stored in the replay buffer.
+        # The PLAYER-side override (opponent slot in player's RSSM prev_action)
+        # is applied in evaluate_dreamer.py so it works for any opponent type.
         obs["opponent_action"] = opponent_actions
 
         # Update opponent RSSM state with the new opponent observation.
@@ -206,7 +213,11 @@ class DreamerSelfPlayWrapper(Wrapper):
             # Build 4D prev_action for the opponent's RSSM when opponent_separation is on.
             # From the opponent's perspective: [opp_action, player_action].
             if self._opponent_rssm._act_dim > opponent_actions.shape[-1]:
-                self._opp_prev_action = torch.cat([opponent_actions, action], dim=-1)
+                if self._opponent_action_method is not None:
+                    player_slot = self._override_inter_agent_action(action)
+                else:
+                    player_slot = action
+                self._opp_prev_action = torch.cat([opponent_actions, player_slot], dim=-1)
             obs_for_encode = self._with_terminal_opponent_obs(obs, info)
             if self._opp_is_first is None:
                 num_envs = self.env.unwrapped.num_envs
@@ -319,6 +330,14 @@ class DreamerSelfPlayWrapper(Wrapper):
         self._opp_prev_action = torch.zeros(
             num_envs, self._opponent_rssm._act_dim, dtype=torch.float32, device=self._device
         )
+
+    def _override_inter_agent_action(self, like: torch.Tensor) -> torch.Tensor:
+        """Build a replacement for the OTHER agent's action slot in an RSSM input."""
+        if self._opponent_action_method == "zero":
+            return torch.zeros_like(like)
+        if self._opponent_action_method == "random":
+            return 2.0 * torch.rand_like(like) - 1.0
+        raise RuntimeError("called with no override active")
 
     @torch.no_grad()
     def _get_opponent_action(self):

@@ -330,6 +330,27 @@ def _make_env(
     env_cfg.seed = int(config.seed)
     env_cfg.episode_length_s = config.episode_length_s
 
+    aug_raw = getattr(config, "augmentation", None)
+    if aug_raw is not None and hasattr(env_cfg, "augmentation_cfg"):
+        from klask_rl.tasks.manager_based.klask_rl.klask_rl_env_cfg import AugmentationAxisCfg, AugmentationCfg
+
+        aug_dict = OmegaConf.to_container(aug_raw, resolve=True) if OmegaConf.is_config(aug_raw) else dict(aug_raw)
+        aug = AugmentationCfg(hold_per_episode=bool(aug_dict.get("hold_per_episode", True)))
+        for axis_name in ("brightness", "contrast", "gamma", "color_temp", "saturation", "hue"):
+            block = aug_dict.get(axis_name)
+            if not isinstance(block, dict):
+                continue
+            setattr(
+                aug,
+                axis_name,
+                AugmentationAxisCfg(
+                    enabled=bool(block.get("enabled", False)),
+                    range=tuple(block.get("range", (0.0, 0.0))),
+                    levels=int(block.get("levels", 1)),
+                ),
+            )
+        env_cfg.augmentation_cfg = aug
+
     # IsaacLab defaults to DLSS which smooths the image significantly
     # so we disable the antialiasing for a more pixelated (and hence more realistic) image.
     env_cfg.sim.render = RenderCfg(antialiasing_mode="Off")
@@ -554,24 +575,33 @@ def main(config):
         train_devices = [config.device]
     train_device = train_devices[0]  # primary training GPU
 
-    # Batch size validation for data-parallel.
+    _mbs = int(getattr(config, "micro_batch_size", config.batch_size))
+    _bs = int(config.batch_size)
     num_train_gpus = len(train_devices)
+    if _bs % _mbs != 0:
+        raise SystemExit(
+            f"batch_size ({_bs}) must be divisible by micro_batch_size ({_mbs})."
+        )
     if num_train_gpus > 1:
-        _mbs = config.model.micro_batch_size if hasattr(config.model, "micro_batch_size") else config.batch_size
-        assert config.batch_size % _mbs == 0, "batch_size must be divisible by micro_batch_size"
-        _num_micro = config.batch_size // _mbs
-        if _num_micro % num_train_gpus != 0:
-            _num_micro = ((_num_micro + num_train_gpus - 1) // num_train_gpus) * num_train_gpus
-            with open_dict(config):
-                config.batch_size = _num_micro * _mbs
-            print(f"Adjusted batch_size to {config.batch_size} for even GPU distribution")
+        if _mbs >= _bs:
+            raise SystemExit(
+                f"With {num_train_gpus} training GPUs, micro_batch_size ({_mbs}) "
+                f"must be smaller than batch_size ({_bs})."
+            )
+        if (_bs // _mbs) % num_train_gpus != 0:
+            raise SystemExit(
+                f"num_micro_batches ({_bs // _mbs} = batch_size {_bs} / micro_batch_size {_mbs}) "
+                f"must be divisible by num_train_gpus ({num_train_gpus})."
+            )
+    with open_dict(config):
+        config.micro_batch_size = _mbs
 
-    # Propagate into sub-configs (OmegaConf configs are read-only by default).
     with open_dict(config.model):
         config.model.sim_device = sim_device
         config.model.train_device = train_device
         config.model.train_devices = train_devices
-        config.model.device = train_device  # modules created on train_device
+        config.model.device = train_device
+        config.model.micro_batch_size = _mbs
 
     with open_dict(config.buffer):
         config.buffer.device = train_device  # sampled batches go to training GPU

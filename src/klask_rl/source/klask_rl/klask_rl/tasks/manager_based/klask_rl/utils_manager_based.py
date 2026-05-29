@@ -79,29 +79,88 @@ def _sprite_camera_params(image_size: int) -> tuple[int, int]:
     return scale * _BOARD_BASE_H, scale * _BOARD_BASE_W
 
 
-def _get_renderer(sprite_dir: str, background_path: str, cam_w: int, cam_h: int):
-    """Return a cached BoardRenderer, creating one on first call."""
-    key = (sprite_dir, background_path, cam_w, cam_h)
+_board_renderer_module_cache: dict = {}
+
+
+_AUG_AXES = ("brightness", "contrast", "gamma", "color_temp", "saturation", "hue")
+
+
+def _aug_cfg_to_dict(cfg) -> dict | None:
+    """Normalise an AugmentationCfg or dict to a plain dict (None passthrough)."""
+    if cfg is None:
+        return None
+    if isinstance(cfg, dict):
+        return cfg
+    out = {"hold_per_episode": bool(getattr(cfg, "hold_per_episode", True))}
+    for axis in _AUG_AXES:
+        axis_cfg = getattr(cfg, axis, None)
+        if axis_cfg is None:
+            continue
+        out[axis] = {
+            "enabled": bool(getattr(axis_cfg, "enabled", False)),
+            "range": list(getattr(axis_cfg, "range", (0.0, 0.0))),
+            "levels": int(getattr(axis_cfg, "levels", 1)),
+        }
+    return out
+
+
+def _aug_hold_per_episode(cfg) -> bool:
+    if cfg is None:
+        return True
+    if isinstance(cfg, dict):
+        return bool(cfg.get("hold_per_episode", True))
+    return bool(getattr(cfg, "hold_per_episode", True))
+
+
+def _load_board_renderer_module(sprite_dir: str):
+    if sprite_dir in _board_renderer_module_cache:
+        return _board_renderer_module_cache[sprite_dir]
+    import importlib.util
+    import os
+
+    renderer_path = os.path.join(os.path.dirname(os.path.dirname(sprite_dir)), "board_renderer.py")
+    spec = importlib.util.spec_from_file_location("board_renderer", renderer_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _board_renderer_module_cache[sprite_dir] = mod
+    return mod
+
+
+def _get_renderer(
+    sprite_dir: str,
+    background_path: str,
+    cam_w: int,
+    cam_h: int,
+    augmentation_cfg=None,
+):
+    """Return a cached BoardRenderer (keyed by augmentation_cfg too)."""
+    mod = _load_board_renderer_module(sprite_dir)
+    aug_dict = _aug_cfg_to_dict(augmentation_cfg)
+    aug_key = mod.freeze_aug_cfg(aug_dict)
+    key = (sprite_dir, background_path, cam_w, cam_h, aug_key)
     if key not in _renderer_cache:
-        import importlib.util
-        import os
-
-        # board_renderer.py lives two directories above sprite_dir
-        # (sprite_dir = .../assets/sprites/, renderer = .../sprite_renderer/board_renderer.py).
-        renderer_path = os.path.join(os.path.dirname(os.path.dirname(sprite_dir)), "board_renderer.py")
-        spec = importlib.util.spec_from_file_location("board_renderer", renderer_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        BoardRenderer = mod.BoardRenderer
-
-        _renderer_cache[key] = BoardRenderer(
+        _renderer_cache[key] = mod.BoardRenderer(
             sprite_dir=sprite_dir,
             background_path=background_path,
             output_size=(cam_w, cam_h),
             fast_mode=False,
             target_frame="sim",
+            augmentation_cfg=aug_dict,
         )
     return _renderer_cache[key]
+
+
+def _get_aug_ids_np(env: ManagerBasedRLEnv, num_variants: int) -> np.ndarray:
+    """Per-env aug_ids: env.sprite_aug_id when hold=True, fresh randint when hold=False, zeros otherwise."""
+    if num_variants <= 1:
+        return np.zeros(env.num_envs, dtype=np.int64)
+    aug_cfg = getattr(env.cfg, "augmentation_cfg", None)
+    if not _aug_hold_per_episode(aug_cfg):
+        return np.random.randint(0, num_variants, size=env.num_envs).astype(np.int64)
+    buf = getattr(env, "sprite_aug_id", None)
+    if buf is not None and buf.shape[0] == env.num_envs:
+        return buf.cpu().numpy()
+    return np.zeros(env.num_envs, dtype=np.int64)
 
 
 def sprite_rendered_image(
@@ -127,7 +186,9 @@ def sprite_rendered_image(
     """
     cfg = env.cfg
     cam_h, cam_w = _sprite_camera_params(min(target_h, target_w))
-    renderer = _get_renderer(cfg.sprite_dir, cfg.background_path, cam_w, cam_h)
+    aug_cfg = getattr(cfg, "augmentation_cfg", None)
+    renderer = _get_renderer(cfg.sprite_dir, cfg.background_path, cam_w, cam_h, aug_cfg)
+    aug_ids_np = _get_aug_ids_np(env, renderer.num_variants)
 
     # Extract positions from scene (sim frame, origin at board centre)
     peg1_pos = body_xy_pos_w(env, peg1_cfg)  # (N, 2) GPU tensor
@@ -148,7 +209,7 @@ def sprite_rendered_image(
     N = env.num_envs
     images_np = np.empty((N, cam_h, cam_w, 3), dtype=np.uint8)
     for i in range(N):
-        bgr = renderer.render(peg1_np[i], peg2_np[i], ball_np[i])
+        bgr = renderer.render(peg1_np[i], peg2_np[i], ball_np[i], aug_id=int(aug_ids_np[i]))
         cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB, dst=images_np[i])
 
     # To GPU tensor and cache for opponent view
@@ -207,7 +268,9 @@ def sprite_rendered_image_parity_player(
     """
     cfg = env.cfg
     cam_h, cam_w = _sprite_camera_params(min(target_h, target_w))
-    renderer = _get_renderer(cfg.sprite_dir, cfg.background_path, cam_w, cam_h)
+    aug_cfg = getattr(cfg, "augmentation_cfg", None)
+    renderer = _get_renderer(cfg.sprite_dir, cfg.background_path, cam_w, cam_h, aug_cfg)
+    aug_ids_np = _get_aug_ids_np(env, renderer.num_variants)
     N = env.num_envs
 
     # Extract positions (env frame, origin at board centre).
@@ -225,12 +288,14 @@ def sprite_rendered_image_parity_player(
     br_np = -b_np
 
     # Single combined loop: render natural AND opp_ego per env.
+    # Same aug_id for both renders so player_obs and opponent_obs share lighting.
     natural_np = np.empty((N, cam_h, cam_w, 3), dtype=np.uint8)
     opp_ego_np = np.empty((N, cam_h, cam_w, 3), dtype=np.uint8)
     for i in range(N):
-        bgr = renderer.render(p1_np[i], p2_np[i], b_np[i])
+        aug = int(aug_ids_np[i])
+        bgr = renderer.render(p1_np[i], p2_np[i], b_np[i], aug_id=aug)
         cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB, dst=natural_np[i])
-        bgr = renderer.render(p1r_np[i], p2r_np[i], br_np[i])
+        bgr = renderer.render(p1r_np[i], p2r_np[i], br_np[i], aug_id=aug)
         cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB, dst=opp_ego_np[i])
 
     natural = torch.from_numpy(natural_np).to(env.device)
@@ -389,6 +454,46 @@ def reset_player_velocity_toward_ball(
 
     vel_2d = torch.stack([(direction_x / norm) * speed, (direction_y / norm) * speed], dim=1)  # [len(env_ids), 2]
     klask_art.write_joint_velocity_to_sim(vel_2d, joint_ids=[x_id, y_id], env_ids=env_ids)
+
+
+def reset_sprite_augmentation(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+):
+    """Sample a fresh sprite-augmentation variant per env at episode reset.
+
+    Lazy-initialises ``env.sprite_aug_id`` as an int64 tensor of length
+    ``num_envs`` on first call. Reads the env's ``augmentation_cfg`` to compute
+    the total variant count via :func:`num_augmentation_variants` (a pure-config
+    helper that doesn't require the renderer to exist yet).
+
+    Becomes a no-op when augmentation is disabled or ``hold_per_episode`` is
+    false (in which case the observation function resamples per call).
+    """
+    aug_cfg = getattr(env.cfg, "augmentation_cfg", None)
+    sprite_dir = getattr(env.cfg, "sprite_dir", None)
+    if sprite_dir is None:
+        return  # not a sprite env; nothing to do
+    mod = _load_board_renderer_module(sprite_dir)
+    num_variants = mod.num_augmentation_variants(_aug_cfg_to_dict(aug_cfg))
+
+    # Lazy-init or resize the per-env buffer (handles num_envs changes between
+    # env constructions in the same Python process — eval after train, etc.).
+    buf = getattr(env, "sprite_aug_id", None)
+    if buf is None or buf.shape[0] != env.num_envs:
+        env.sprite_aug_id = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+
+    if num_variants <= 1:
+        env.sprite_aug_id[env_ids] = 0
+        return
+
+    if not _aug_hold_per_episode(aug_cfg):
+        # The observation function resamples per call; reset value is unused.
+        return
+
+    env.sprite_aug_id[env_ids] = torch.randint(
+        low=0, high=num_variants, size=(len(env_ids),), dtype=torch.long, device=env.device
+    )
 
 
 def reset_ball_hit_tracking(

@@ -43,6 +43,10 @@ class ObservationNoiseWrapper(Wrapper):
     The board is symmetric: opponent observations are 180°-rotated (positions negated).
     Since angles and distances are invariant under simultaneous negation of all points,
     the same goal positions work for both player and opponent observation keys.
+
+    For Dict obs spaces, decisions are made per-tensor: only 2D tensors with at
+    least BASE_DIM features are noised. Image keys (e.g. ``image``,
+    ``opponent_image`` in Dreamer obs) are passed through untouched.
     """
 
     BASE_DIM = 12
@@ -51,28 +55,44 @@ class ObservationNoiseWrapper(Wrapper):
     OTHER_POS = slice(4, 6)
     BALL_POS = slice(8, 10)
 
-    def __init__(self, env, noise_std, own_goal, other_goal):
+    def __init__(
+        self,
+        env,
+        *,
+        peg_position_std,
+        peg_velocity_std,
+        ball_position_std,
+        ball_velocity_std,
+        own_goal,
+        other_goal,
+    ):
         super().__init__(env)
-        self.noise_std = noise_std
+        # Per-dim std vector matching the base obs layout
+        # [own_px, own_py, own_vx, own_vy, other_px, other_py, other_vx, other_vy,
+        #  ball_px, ball_py, ball_vx, ball_vy]
+        self._std_layout = (
+            float(peg_position_std), float(peg_position_std),
+            float(peg_velocity_std), float(peg_velocity_std),
+            float(peg_position_std), float(peg_position_std),
+            float(peg_velocity_std), float(peg_velocity_std),
+            float(ball_position_std), float(ball_position_std),
+            float(ball_velocity_std), float(ball_velocity_std),
+        )
+        self._all_zero = all(s == 0.0 for s in self._std_layout)
+        self._std_vec = None  # built lazily on the correct device
+
         # Store goal xy tuples; tensors created lazily on correct device
         self._own_goal_xy = (own_goal[0], own_goal[1])
         self._other_goal_xy = (other_goal[0], other_goal[1])
         self._own_goal = None
         self._other_goal = None
 
-        # Detect whether extended observations are present
-        obs_space = env.observation_space
-        if isinstance(obs_space, gym.spaces.Dict):
-            sample_dim = next(iter(obs_space.spaces.values())).shape[-1]
-        else:
-            sample_dim = obs_space.shape[-1]
-        self.has_extended = sample_dim >= self.BASE_DIM + self.EXTENDED_DIM
-
     def _ensure_goals(self, device):
-        """Lazily create goal tensors on the correct device."""
+        """Lazily create goal and std tensors on the correct device."""
         if self._own_goal is None or self._own_goal.device != device:
             self._own_goal = torch.tensor(self._own_goal_xy, dtype=torch.float32, device=device)
             self._other_goal = torch.tensor(self._other_goal_xy, dtype=torch.float32, device=device)
+            self._std_vec = torch.tensor(self._std_layout, dtype=torch.float32, device=device)
 
     @staticmethod
     def _angle(A, B, C):
@@ -115,11 +135,19 @@ class ObservationNoiseWrapper(Wrapper):
         return torch.cat(parts, dim=-1)
 
     def _apply_noise(self, obs):
-        """Add noise to base dims and recompute extended if present."""
+        """Add per-dim noise to base dims and recompute extended if present.
+
+        Skips tensors that don't carry a base-obs vector (e.g. image keys in
+        a Dreamer-style obs dict, or any non-2D tensor). The extended-obs
+        recomputation is decided per-tensor from the actual feature width,
+        so dict ordering does not matter.
+        """
+        if self._all_zero or obs.ndim != 2 or obs.shape[-1] < self.BASE_DIM:
+            return obs
         obs = obs.clone()
-        noise = self.noise_std * torch.randn(obs.shape[0], self.BASE_DIM, device=obs.device)
+        noise = torch.randn(obs.shape[0], self.BASE_DIM, device=obs.device) * self._std_vec
         obs[:, :self.BASE_DIM] += noise
-        if self.has_extended:
+        if obs.shape[-1] >= self.BASE_DIM + self.EXTENDED_DIM:
             obs = self._recompute_extended(obs)
         return obs
 

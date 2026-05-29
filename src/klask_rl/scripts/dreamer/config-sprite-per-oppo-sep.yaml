@@ -9,23 +9,24 @@ model:
   compile: True
   compile_mode: "default"
   inference_compile_mode: "default"
+  # loss_scales:
+  #   smoothness: 0.002
 
 # Logging
 wandb_project: KLASK_Dreamer
 wandb_entity: null
-wandb_name: dreamer_sprite_new_AM_and_boarder_coll_acc_limit_5
+wandb_name: dreamer_sprite_aug
 
 # Initialization
-logdir: logdir/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
+logdir: /workspace/klask_rl/logs/dreamer/training/${now:%Y-%m-%d}/${now:%H-%M-%S} # if log dir is set to a non empty directory the training will continue from the latest checkpoint in that directory
 seed: 0
 deterministic_run: False
 device: "cuda:0"
 sim_device: "cuda:0"
 train_devices:
   - "cuda:1"
-  - "cuda:2"
-init_checkpoint: /workspace/klask_rl/logdir/2026-04-24/18-33-44/checkpoint_4095456.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
-load_world_model_only: false
+init_checkpoint: /workspace/klask_rl/logs/dreamer/training/2026-05-15/13-38-45/checkpoint_2200000.pt # Path to checkpoint for weight-only init (pretrain -> finetune)
+load_world_model_only: true
 
 hydra:
   run:
@@ -33,9 +34,9 @@ hydra:
   searchpath:
     - file://${script_dir:}/r2dreamer/configs
 
-batch_size: 10
+batch_size: 20
 batch_length: 64
-micro_batch_size: 5
+micro_batch_size: 20
 
 # ---- Environment (all klask-specific, inlined here) ----
 env:
@@ -50,17 +51,25 @@ env:
   sim_dt: 0.001
   seed: ${seed}
   device: ${device}
-  ball_reset_position_x: [ -0.15, 0.15 ]
-  ball_reset_position_y: [ -0.1, 0.1 ]
+  ball_reset_position_x: [-0.15, 0.15]
+  ball_reset_position_y: [-0.1, 0.1]
   max_velocity: 0.4 # [m/s] Maximum velocity for player movement
-  max_acceleration: 5.0 # [m/s^2] Max rate-of-change.
+  max_acceleration: 10.0 # [m/s^2] Max rate-of-change.
   episode_length_s: 10.0 # [s] Episode length in seconds
   actuator_model:
     enable: true
     checkpoint: /workspace/klask_rl/logs/actuator_model/data/new/checkpoints/model_data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states_train_seed0.pt
   collision_avoidance:
     enable: true
-  size: [ 128, 128 ]
+  size: [128, 128]
+  augmentation:
+    hold_per_episode: true # true = sample aug_id once per env at reset (held until next reset); false = resample every render
+    brightness: { enabled: true, range: [0.9, 1.1], levels: 3 } # multiplicative BGR scale; 1.0 = identity, <1 darker, >1 brighter
+    contrast: { enabled: true, range: [0.85, 1.15], levels: 3 } # stretch/compress around mid-gray (128); 1.0 = identity
+    gamma: { enabled: true, range: [0.8, 1.20], levels: 3 } # power curve on midtones; 1.0 = identity, >1 brightens midtones
+    color_temp: { enabled: true, range: [-0.125, 0.125], levels: 3 } # warm/cool shift; +x boosts R reduces B (warm), -x reverses (cool); 0 = identity
+    saturation: { enabled: true, range: [0.70, 1.30], levels: 3 } # HSV chroma scale; 1.0 = identity, <1 washes out, >1 vivid (can swap peg colors if too strong)
+    hue: { enabled: true, range: [-5, 5], levels: 3 } # HSV hue shift in degrees; 0 = identity (caution: strong shifts swap red/black peg identity)
   encoder:
     mlp_keys: "$^"
     cnn_keys: "image"
@@ -150,14 +159,14 @@ env:
       phases:
         - type: static
           speed: 1.0
-          steps: [ 0, 1_000_000 ]
+          steps: [0, 1_000_000]
         - type: sigmoid
-          speed: [ 1.0, 0.0 ]
-          steps: [ 1_000_000, 3_000_000 ]
+          speed: [1.0, 0.0]
+          steps: [1_000_000, 3_000_000]
           steepness: 6.0
         - type: static
           speed: 0.0
-          steps: [ 3_000_000, -1 ]
+          steps: [3_000_000, -1]
 
 buffer:
   batch_size: ${batch_size}

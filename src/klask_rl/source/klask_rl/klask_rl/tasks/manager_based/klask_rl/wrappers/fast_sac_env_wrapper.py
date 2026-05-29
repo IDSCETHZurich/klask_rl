@@ -37,9 +37,15 @@ class FastSACEnvWrapper:
         self.obs_dim = policy_space.shape[0]
         self.act_dim = unwrapped.single_action_space.shape[0]
 
-    def reset_all(self) -> torch.Tensor:
-        """Reset all environments. Returns obs [num_envs, obs_dim]."""
+    def reset_all(self) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Reset all environments.
+
+        Returns ``policy`` obs [num_envs, obs_dim], or ``(policy, opponent)``
+        when the env exposes a separate opponent observation group.
+        """
         obs_dict, _ = self._env.reset()
+        if "opponent" in obs_dict:
+            return obs_dict["policy"], obs_dict["opponent"]
         return obs_dict["policy"]
 
     def step(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:

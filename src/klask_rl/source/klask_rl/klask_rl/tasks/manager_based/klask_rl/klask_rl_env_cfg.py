@@ -12,6 +12,7 @@ from .env_cfg import (
     DreamerSpriteObservationsCfg,
     EventCfg,
     EventCfgDreamer,
+    EventCfgDreamerSprite,
     EventCfgSac,
     FastSACObservationsCfg,
     KlaskRlDreamerSceneCfg,
@@ -239,12 +240,46 @@ _SPRITE_ASSETS_DIR = os.path.normpath(
 
 
 @configclass
+class AugmentationAxisCfg:
+    """Per-axis sprite-augmentation configuration.
+
+    ``levels`` discrete values are generated via ``numpy.linspace(range[0], range[1], levels)``
+    (inclusive of both endpoints).
+    """
+
+    enabled: bool = False
+    range: tuple[float, float] = (0.0, 0.0)
+    levels: int = 1
+
+
+@configclass
+class AugmentationCfg:
+    """Sprite-renderer color/lighting augmentation configuration.
+
+    Each enabled axis contributes one factor to the Cartesian product of
+    pre-rendered variants. ``hold_per_episode=True`` samples one aug_id per env
+    at episode reset and holds it; ``False`` resamples every step.
+    """
+
+    hold_per_episode: bool = True
+    brightness: AugmentationAxisCfg = AugmentationAxisCfg()
+    contrast: AugmentationAxisCfg = AugmentationAxisCfg()
+    gamma: AugmentationAxisCfg = AugmentationAxisCfg()
+    color_temp: AugmentationAxisCfg = AugmentationAxisCfg()
+    saturation: AugmentationAxisCfg = AugmentationAxisCfg()
+    hue: AugmentationAxisCfg = AugmentationAxisCfg()
+
+
+@configclass
 class KlaskRlDreamerSpriteEnvCfg(KlaskRlDreamerEnvCfg):
     """Klask Dreamer env using sprite renderer instead of TiledCamera."""
 
     scene = KlaskRlDreamerSpriteSceneCfg(num_envs=1, env_spacing=1.0)
     observations = DreamerSpriteObservationsCfg()
+    events = EventCfgDreamerSprite()
 
     # Sprite asset paths (overridable from YAML).
     sprite_dir: str = os.path.join(_SPRITE_ASSETS_DIR, "sprites")
     background_path: str = os.path.join(_SPRITE_ASSETS_DIR, "background", "median_background.png")
+
+    augmentation_cfg: AugmentationCfg | None = None

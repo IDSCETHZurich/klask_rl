@@ -30,19 +30,105 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def _save_or_show(fig, name, output_dir):
+def grid_layout(n_slots):
+    """Return (nrows, ncols) for laying out n_slots panels in an up-to-2-column grid."""
+    ncols = 2 if n_slots > 1 else 1
+    nrows = (n_slots + ncols - 1) // ncols
+    return nrows, ncols
+
+
+def save_figure(fig, name, output_dir, dpi=150):
+    """Save fig to output_dir/name when running on Agg, otherwise show interactively."""
     backend = plt.get_backend().lower()
     if "agg" in backend:
         output_path = output_dir / name
-        fig.savefig(output_path, dpi=150, bbox_inches="tight")
+        fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
         print(f"Saved figure to {output_path}")
     else:
         plt.show()
 
 
+def make_combined_grid(
+    n_data_panels,
+    suptitle,
+    *,
+    suptitle_fontsize=18,
+    fig_width_per_col=7.5,
+    fig_height_per_row=4,
+):
+    """Create a figure whose grid holds n_data_panels + 1 panels (last one for the legend).
+
+    Returns (fig, ax_flat). The caller draws data into ax_flat[0:n_data_panels],
+    then calls finalize_combined_grid_legend(ax_flat, n_data_panels) to populate
+    the legend slot and hide any trailing unused panels.
+    """
+    nrows, ncols = grid_layout(n_data_panels + 1)
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(fig_width_per_col * ncols, fig_height_per_row * nrows),
+        constrained_layout=True,
+    )
+    fig.suptitle(suptitle, fontsize=suptitle_fontsize, weight="bold")
+    ax_flat = np.atleast_1d(axes).flatten()
+    return fig, ax_flat
+
+
+def finalize_combined_grid_legend(ax_flat, n_data_panels, *, legend_fontsize=12):
+    """Place a shared legend in the slot after the last data panel and hide any unused trailing slots."""
+    handles, labels = ax_flat[0].get_legend_handles_labels()
+    legend_ax = ax_flat[n_data_panels]
+    legend_ax.legend(handles, labels, loc="center", fontsize=legend_fontsize)
+    legend_ax.axis("off")
+    for i in range(n_data_panels + 1, len(ax_flat)):
+        ax_flat[i].axis("off")
+
+
 def _traj_slug(t):
     """Stable filename component for a trajectory (stem of its source file)."""
     return t["filename"].stem
+
+
+def load_trajectory_arrays(npz_path, skip_first_steps=0):
+    """Load a single .npz trajectory file into a flat dict of float arrays.
+
+    Conventions:
+        observations_real / observations_sim: columns [pos_x, pos_y, vel_x, vel_y, ...]
+        actions: columns [action_x, action_y]
+
+    Args:
+        npz_path: Path to the .npz file.
+        skip_first_steps: Number of leading steps to drop.
+
+    Returns:
+        Dict with time_steps, action_x/y, vel_real_x/y, vel_sim_x/y, pos_real_x/y, pos_sim_x/y.
+
+    Raises:
+        ValueError: if the trajectory is shorter than skip_first_steps.
+    """
+    with np.load(npz_path) as data:
+        obs_real = np.asarray(data["observations_real"], dtype=float)
+        obs_sim = np.asarray(data["observations_sim"], dtype=float)
+        actions = np.asarray(data["actions"], dtype=float)
+
+    n = obs_real.shape[0]
+    if skip_first_steps >= n:
+        raise ValueError(f"trajectory has only {n} steps, shorter than skip_first_steps={skip_first_steps}")
+    s = skip_first_steps
+
+    return {
+        "time_steps": np.arange(n - s),
+        "action_x": actions[s:, 0],
+        "action_y": actions[s:, 1],
+        "vel_real_x": obs_real[s:, 2],
+        "vel_real_y": obs_real[s:, 3],
+        "vel_sim_x": obs_sim[s:, 2],
+        "vel_sim_y": obs_sim[s:, 3],
+        "pos_real_x": obs_real[s:, 0],
+        "pos_real_y": obs_real[s:, 1],
+        "pos_sim_x": obs_sim[s:, 0],
+        "pos_sim_y": obs_sim[s:, 1],
+    }
 
 
 def load_trajectories(filenames, skip_first_steps=0):
@@ -62,41 +148,14 @@ def load_trajectories(filenames, skip_first_steps=0):
     trajectories = []
     for i, filename in enumerate(filenames):
         try:
-            data = np.load(filename)
+            arr = load_trajectory_arrays(filename, skip_first_steps=skip_first_steps)
+        except ValueError as e:
+            print(f"Warning: {filename.name}: {e}; skipping.")
+            continue
         except Exception as e:
             print(f"Error loading {filename}: {e}")
             continue
-
-        obs_real = data["observations_real"]
-        obs_sim = data["observations_sim"]
-        actions = data["actions"]
-
-        n = obs_real.shape[0]
-        if skip_first_steps >= n:
-            print(
-                f"Warning: {filename.name} has only {n} steps, "
-                f"shorter than --skip-first-steps={skip_first_steps}; skipping."
-            )
-            continue
-        s = skip_first_steps
-
-        trajectories.append({
-            "index": i,
-            "filename": filename,
-            "time_steps": np.arange(n - s),
-            "action_x": actions[s:, 0],
-            "action_y": actions[s:, 1],
-            # Velocities at indices [2, 3]
-            "vel_real_x": obs_real[s:, 2],
-            "vel_real_y": obs_real[s:, 3],
-            "vel_sim_x": obs_sim[s:, 2],
-            "vel_sim_y": obs_sim[s:, 3],
-            # Own peg positions at indices [0, 1]
-            "pos_real_x": obs_real[s:, 0],
-            "pos_real_y": obs_real[s:, 1],
-            "pos_sim_x": obs_sim[s:, 0],
-            "pos_sim_y": obs_sim[s:, 1],
-        })
+        trajectories.append({"index": i, "filename": filename, **arr})
 
     return trajectories
 
@@ -157,18 +216,62 @@ def save_metrics(metrics, trajectories, output_dir):
     print(f"Saved metrics to {output_path}")
 
 
-def _draw_velocity_comparison(ax, t):
-    ts = t["time_steps"]
-    ax.step(ts, t["action_x"], label="Commanded Vel X", color="gray", linestyle=":", alpha=0.8)
-    ax.step(ts, t["action_y"], label="Commanded Vel Y", color="silver", linestyle=":", alpha=0.8)
-    ax.plot(ts, t["vel_real_x"], label="Real Vel X", color="tab:blue", linestyle="-", linewidth=2)
-    ax.plot(ts, t["vel_sim_x"], label="Sim Vel X", color="tab:cyan", linestyle="--", linewidth=2)
-    ax.plot(ts, t["vel_real_y"], label="Real Vel Y", color="tab:orange", linestyle="-", linewidth=2)
-    ax.plot(ts, t["vel_sim_y"], label="Sim Vel Y", color="tab:red", linestyle="--", linewidth=2)
-    ax.set_title(f"Trajectory {t['index']+1}", fontsize=12)
+def draw_velocity_comparison(
+    ax,
+    ts,
+    action_x,
+    action_y,
+    real_x,
+    real_y,
+    sim_x,
+    sim_y,
+    *,
+    sim_x_sigma=None,
+    sim_y_sigma=None,
+    title=None,
+):
+    """Draw commanded, real, and sim velocity overlays on a single axis.
+
+    If sim_x_sigma / sim_y_sigma are provided, sim_x / sim_y are interpreted as
+    cross-seed means and ±1σ shaded bands are drawn around them (and the sim
+    line labels reflect that they are means).
+    """
+    has_sigma = sim_x_sigma is not None and sim_y_sigma is not None
+    sim_x_label = "Sim Vel X (mean)" if has_sigma else "Sim Vel X"
+    sim_y_label = "Sim Vel Y (mean)" if has_sigma else "Sim Vel Y"
+
+    ax.step(ts, action_x, label="Commanded Vel X", color="tab:green", linestyle=":", alpha=0.8)
+    ax.step(ts, action_y, label="Commanded Vel Y", color="tab:red", linestyle=":", alpha=0.8)
+    ax.plot(ts, real_x, label="Real Vel X", color="limegreen", linestyle="-", linewidth=2)
+    ax.plot(ts, sim_x, label=sim_x_label, color="darkgreen", linestyle="--", linewidth=2)
+    if has_sigma:
+        ax.fill_between(
+            ts, sim_x - sim_x_sigma, sim_x + sim_x_sigma, color="tab:green", alpha=0.3, label="Sim Vel X ±1σ"
+        )
+    ax.plot(ts, real_y, label="Real Vel Y", color="tab:red", linestyle="-", linewidth=2)
+    ax.plot(ts, sim_y, label=sim_y_label, color="darkred", linestyle="--", linewidth=2)
+    if has_sigma:
+        ax.fill_between(ts, sim_y - sim_y_sigma, sim_y + sim_y_sigma, color="tab:red", alpha=0.3, label="Sim Vel Y ±1σ")
+
+    if title is not None:
+        ax.set_title(title, fontsize=12)
     ax.set_xlabel("Time Steps")
     ax.set_ylabel("Velocity (m/s)")
     ax.grid(True, linestyle=":", alpha=0.6)
+
+
+def _draw_velocity_comparison(ax, t):
+    draw_velocity_comparison(
+        ax,
+        t["time_steps"],
+        t["action_x"],
+        t["action_y"],
+        t["vel_real_x"],
+        t["vel_real_y"],
+        t["vel_sim_x"],
+        t["vel_sim_y"],
+        title=f"Trajectory {t['index']+1}",
+    )
 
 
 def plot_velocity_comparison(trajectories, output_dir, separate=False):
@@ -179,7 +282,7 @@ def plot_velocity_comparison(trajectories, output_dir, separate=False):
             fig.suptitle("Sim-to-Real Actuator Model Validation", fontsize=14, weight="bold")
             _draw_velocity_comparison(ax, t)
             ax.legend(loc="best", fontsize=9)
-            _save_or_show(
+            save_figure(
                 fig,
                 f"sim2real_evaluation_01_velocity_comparison_{_traj_slug(t)}.png",
                 output_dir,
@@ -187,18 +290,17 @@ def plot_velocity_comparison(trajectories, output_dir, separate=False):
             plt.close(fig)
         return
 
-    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 12), constrained_layout=True)
-    fig.suptitle("Sim-to-Real Actuator Model Validation", fontsize=18, weight="bold")
-    ax_flat = axes.flatten()
+    n = len(trajectories)
+    if n == 0:
+        return
+    fig, ax_flat = make_combined_grid(n, "Sim-to-Real Actuator Model Validation")
 
-    for t in trajectories:
-        _draw_velocity_comparison(ax_flat[t["index"]], t)
+    for slot, t in enumerate(trajectories):
+        _draw_velocity_comparison(ax_flat[slot], t)
 
-    handles, labels = ax_flat[0].get_legend_handles_labels()
-    ax_flat[-1].legend(handles, labels, loc="center", fontsize=12)
-    ax_flat[-1].axis("off")
+    finalize_combined_grid_legend(ax_flat, n)
 
-    _save_or_show(fig, "sim2real_evaluation_01_velocity_comparison.png", output_dir)
+    save_figure(fig, "sim2real_evaluation_01_velocity_comparison.png", output_dir)
     plt.close(fig)
 
 
@@ -236,13 +338,13 @@ def plot_performance_metrics(metrics, output_dir, separate=False):
         fig_x, ax_x = plt.subplots(figsize=(fig_width, 5), constrained_layout=True)
         fig_x.suptitle("Actuator Model Performance Metrics (RMSE)", fontsize=14, weight="bold")
         mean_rmse_x = _draw_rmse_bars(ax_x, x, labels, rmse_x_vals, "tab:blue", "RMSE — Velocity X")
-        _save_or_show(fig_x, "sim2real_evaluation_02_performance_metrics_rmse_x.png", output_dir)
+        save_figure(fig_x, "sim2real_evaluation_02_performance_metrics_rmse_x.png", output_dir)
         plt.close(fig_x)
 
         fig_y, ax_y = plt.subplots(figsize=(fig_width, 5), constrained_layout=True)
         fig_y.suptitle("Actuator Model Performance Metrics (RMSE)", fontsize=14, weight="bold")
         mean_rmse_y = _draw_rmse_bars(ax_y, x, labels, rmse_y_vals, "tab:orange", "RMSE — Velocity Y")
-        _save_or_show(fig_y, "sim2real_evaluation_02_performance_metrics_rmse_y.png", output_dir)
+        save_figure(fig_y, "sim2real_evaluation_02_performance_metrics_rmse_y.png", output_dir)
         plt.close(fig_y)
 
         print(f"\n  Mean RMSE X: {mean_rmse_x:.6f}   Mean RMSE Y: {mean_rmse_y:.6f}")
@@ -254,7 +356,7 @@ def plot_performance_metrics(metrics, output_dir, separate=False):
     mean_rmse_y = _draw_rmse_bars(ax2, x, labels, rmse_y_vals, "tab:orange", "RMSE — Velocity Y")
     print(f"\n  Mean RMSE X: {mean_rmse_x:.6f}   Mean RMSE Y: {mean_rmse_y:.6f}")
 
-    _save_or_show(fig, "sim2real_evaluation_02_performance_metrics.png", output_dir)
+    save_figure(fig, "sim2real_evaluation_02_performance_metrics.png", output_dir)
     plt.close(fig)
 
 
@@ -279,7 +381,7 @@ def plot_velocity_deviation(trajectories, output_dir, separate=False):
             fig.suptitle("Sim-to-Real Velocity Deviation", fontsize=14, weight="bold")
             _draw_velocity_deviation(ax, t)
             ax.legend(loc="best", fontsize=9)
-            _save_or_show(
+            save_figure(
                 fig,
                 f"sim2real_evaluation_03_velocity_deviation_{_traj_slug(t)}.png",
                 output_dir,
@@ -287,18 +389,17 @@ def plot_velocity_deviation(trajectories, output_dir, separate=False):
             plt.close(fig)
         return
 
-    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(15, 12), constrained_layout=True)
-    fig.suptitle("Sim-to-Real Velocity Deviation", fontsize=18, weight="bold")
-    ax_flat = axes.flatten()
+    n = len(trajectories)
+    if n == 0:
+        return
+    fig, ax_flat = make_combined_grid(n, "Sim-to-Real Velocity Deviation")
 
-    for t in trajectories:
-        _draw_velocity_deviation(ax_flat[t["index"]], t)
+    for slot, t in enumerate(trajectories):
+        _draw_velocity_deviation(ax_flat[slot], t)
 
-    handles, labels = ax_flat[0].get_legend_handles_labels()
-    ax_flat[-1].legend(handles, labels, loc="center", fontsize=12)
-    ax_flat[-1].axis("off")
+    finalize_combined_grid_legend(ax_flat, n)
 
-    _save_or_show(fig, "sim2real_evaluation_03_velocity_deviation.png", output_dir)
+    save_figure(fig, "sim2real_evaluation_03_velocity_deviation.png", output_dir)
     plt.close(fig)
 
 
@@ -337,44 +438,54 @@ def plot_peg_position(trajectories, output_dir, separate=False):
             )
             _draw_peg_position_comparison(ax_cmp, t)
             ax_cmp.legend(loc="best", fontsize=9)
-            _save_or_show(fig_cmp, f"sim2real_evaluation_04_peg_position_{slug}.png", output_dir)
+            save_figure(fig_cmp, f"sim2real_evaluation_04_peg_position_{slug}.png", output_dir)
             plt.close(fig_cmp)
 
             fig_dev, ax_dev = plt.subplots(figsize=(8, 5), constrained_layout=True)
             fig_dev.suptitle(f"Peg Position Deviation — Trajectory {t['index']+1}", fontsize=13, weight="bold")
             _draw_peg_position_deviation(ax_dev, t)
             ax_dev.legend(loc="best", fontsize=9)
-            _save_or_show(fig_dev, f"sim2real_evaluation_04_peg_position_deviation_{slug}.png", output_dir)
+            save_figure(fig_dev, f"sim2real_evaluation_04_peg_position_deviation_{slug}.png", output_dir)
             plt.close(fig_dev)
         return
 
-    # 6 rows = 3 rows for position comparison + 3 rows for position deviation
-    fig, axes = plt.subplots(nrows=6, ncols=2, figsize=(15, 24), constrained_layout=True)
+    n = len(trajectories)
+    if n == 0:
+        return
+    # Each section holds n trajectory panels + 1 legend panel.
+    section_rows, ncols = grid_layout(n + 1)
+    fig, axes = plt.subplots(
+        nrows=2 * section_rows, ncols=ncols, figsize=(7.5 * ncols, 4 * 2 * section_rows), constrained_layout=True
+    )
     fig.suptitle("Sim-to-Real Peg Position", fontsize=18, weight="bold")
 
-    top_axes = axes[:3].flatten()
-    bot_axes = axes[3:].flatten()
+    axes = np.atleast_2d(axes)
+    top_axes = axes[:section_rows].flatten()
+    bot_axes = axes[section_rows:].flatten()
 
-    top_axes[0].set_title("Sim-to-Real Peg Position Comparison — Trajectory 1", fontsize=11)
-    bot_axes[0].set_title("Peg Position Deviation — Trajectory 1", fontsize=11)
-
-    for t in trajectories:
-        idx = t["index"]
-        _draw_peg_position_comparison(top_axes[idx], t)
-        _draw_peg_position_deviation(bot_axes[idx], t)
-        if idx != 0:
-            top_axes[idx].set_title(f"Trajectory {idx+1}", fontsize=11)
-            bot_axes[idx].set_title(f"Trajectory {idx+1}", fontsize=11)
+    for slot, t in enumerate(trajectories):
+        _draw_peg_position_comparison(top_axes[slot], t)
+        _draw_peg_position_deviation(bot_axes[slot], t)
+        if slot == 0:
+            top_axes[slot].set_title("Sim-to-Real Peg Position Comparison — Trajectory 1", fontsize=11)
+            bot_axes[slot].set_title("Peg Position Deviation — Trajectory 1", fontsize=11)
+        else:
+            top_axes[slot].set_title(f"Trajectory {t['index']+1}", fontsize=11)
+            bot_axes[slot].set_title(f"Trajectory {t['index']+1}", fontsize=11)
 
     handles_top, labels_top = top_axes[0].get_legend_handles_labels()
-    top_axes[-1].legend(handles_top, labels_top, loc="center", fontsize=12)
-    top_axes[-1].axis("off")
+    top_axes[n].legend(handles_top, labels_top, loc="center", fontsize=12)
+    top_axes[n].axis("off")
 
     handles_bot, labels_bot = bot_axes[0].get_legend_handles_labels()
-    bot_axes[-1].legend(handles_bot, labels_bot, loc="center", fontsize=12)
-    bot_axes[-1].axis("off")
+    bot_axes[n].legend(handles_bot, labels_bot, loc="center", fontsize=12)
+    bot_axes[n].axis("off")
 
-    _save_or_show(fig, "sim2real_evaluation_04_peg_position.png", output_dir)
+    for i in range(n + 1, len(top_axes)):
+        top_axes[i].axis("off")
+        bot_axes[i].axis("off")
+
+    save_figure(fig, "sim2real_evaluation_04_peg_position.png", output_dir)
     plt.close(fig)
 
 

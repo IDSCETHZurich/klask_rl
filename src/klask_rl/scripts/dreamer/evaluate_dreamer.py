@@ -2,6 +2,12 @@
 # Phase 1: AppLauncher must run before any IsaacLab / USD / warp imports.
 # =============================================================================
 
+import os
+
+# Reduce caching-allocator fragmentation across the per-checkpoint reload
+# cycle. Must be set before torch initializes CUDA.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import argparse
 import pathlib
 import sys
@@ -23,11 +29,14 @@ AppLauncher.add_app_launcher_args(parser)
 parser.add_argument(
     "--checkpoint",
     type=str,
+    nargs="+",
     required=True,
     help=(
-        "Path (or glob pattern) to the player agent checkpoint(s) (.pt). "
-        "Supports wildcards such as 'runs/*/checkpoint_*.pt' to evaluate "
-        "multiple checkpoints sequentially against the same opponent."
+        "One or more paths or glob patterns to the player agent checkpoint(s) (.pt). "
+        "Each entry is resolved independently — literal paths are kept as-is, glob "
+        "patterns (containing '*', '?' or '[') are expanded. Pass multiple values to "
+        "evaluate specific files: --checkpoint a.pt b.pt, or mix patterns: "
+        "--checkpoint 'runs/A/*.pt' 'runs/B/last.pt'."
     ),
 )
 parser.add_argument(
@@ -70,8 +79,60 @@ parser.add_argument(
     "--opponent_type",
     type=str,
     default="dreamer",
-    choices=["dreamer", "ppo"],
-    help="Type of opponent agent: 'dreamer' or 'ppo' (rl_games).",
+    choices=["dreamer", "ppo", "fast_sac"],
+    help=(
+        "Type of opponent agent: 'dreamer', 'ppo' (rl_games), or 'fast_sac' "
+        "(distributional SAC trained by train_fast_sac_isaaclab.py; distinct "
+        "from any SB3 SAC). For 'fast_sac', --opponent_config is ignored — the "
+        "actor hyperparameters are read from the checkpoint's embedded config."
+    ),
+)
+parser.add_argument(
+    "--opponent_action_method",
+    type=str,
+    default=None,
+    choices=["zero", "random"],
+    help=(
+        "Override what each agent's RSSM ingests in the OTHER agent's action "
+        "slot of prev_action. 'zero' feeds zeros; 'random' feeds samples in "
+        "[-1, 1]. The simulator still receives both agents' real actions; "
+        "only the RSSM inputs are overridden. Requires opponent_separation=True "
+        "in the player config and --opponent_type=dreamer. Omit for normal behavior."
+    ),
+)
+parser.add_argument(
+    "--boxplot",
+    action="store_true",
+    help="After saving the per-checkpoint eval-metrics .npz, also generate a box-plot PNG next to it.",
+)
+parser.add_argument(
+    "--peg_position_std",
+    type=float,
+    default=0.0,
+    help=(
+        "Std [m] of Gaussian noise added to peg positions in the observation. "
+        "Applied to both 'policy' and 'opponent' obs keys (independent samples) "
+        "for any opponent type. Extended obs dims are recomputed from the noisy "
+        "base positions. Default 0.0 (no noise)."
+    ),
+)
+parser.add_argument(
+    "--peg_velocity_std",
+    type=float,
+    default=0.0,
+    help="Std [m/s] of Gaussian noise added to peg velocities (any opponent type).",
+)
+parser.add_argument(
+    "--ball_position_std",
+    type=float,
+    default=0.0,
+    help="Std [m] of Gaussian noise added to the ball position (any opponent type).",
+)
+parser.add_argument(
+    "--ball_velocity_std",
+    type=float,
+    default=0.0,
+    help="Std [m/s] of Gaussian noise added to the ball velocity (any opponent type).",
 )
 
 args_cli = parser.parse_args()
@@ -83,9 +144,10 @@ simulation_app = app_launcher.app
 # Phase 2: Everything else — safe to import now that the sim is running.
 # =============================================================================
 
+import gc
 import glob as glob_module
 import importlib
-import os
+import shlex
 import signal
 import warnings
 from datetime import datetime
@@ -117,9 +179,14 @@ from dreamer_self_play import DreamerSelfPlayWrapper
 from env_cfg_utils import apply_camera_size_to_env_cfg
 from envs.isaaclab import IsaacLabVecEnv
 from isaaclab.sim import RenderCfg
+from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 from klask_rl.tasks.manager_based.klask_rl.actuator_model import ActuatorModelWrapper
+from klask_rl.tasks.manager_based.klask_rl.eval_metrics import EvalMetricsTracker
 from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     KlaskRlAgentOpponentWrapper,
+    KlaskRlCollisionAvoidanceWrapper,
+    KlaskRlFastSACOpponentWrapper,
+    ObservationNoiseWrapper,
     OpponentActionWrapper,
     VelocityScaleWrapper,
     configure_domain_randomization,
@@ -150,16 +217,26 @@ def _make_eval_env(
     num_envs,
     episode_length_s=None,
     opponent_type="dreamer",
+    opponent_action_method=None,
+    obs_noise_stds=None,
 ):
     """Create an evaluation env with the appropriate opponent wrapper.
 
     Simplified wrapper chain (no curriculum/logging, innermost → outermost):
+      0. KlaskRlCollisionAvoidanceWrapper (if config.collision_avoidance.enable —
+         innermost; clips world-frame m/s actions near board boundaries)
       1. OpponentActionWrapper — negate opponent actions for coordinate frame
       2. ActuatorModelWrapper (if config.actuator_model.enable — expects m/s)
       3. VelocityScaleWrapper — scales [-1, 1] → m/s; action manager _scale = 1.0
-      4. Opponent wrapper (emits opponent action in [-1, 1]):
+      4. ObservationNoiseWrapper (when any std > 0; noises both 'policy' and
+         'opponent' obs keys with independent samples, recomputes extended dims)
+      5. Opponent wrapper (emits opponent action in [-1, 1]):
          DreamerSelfPlayWrapper or KlaskRlAgentOpponentWrapper
-      5. IsaacLabVecEnv — r2dreamer adapter
+      6. IsaacLabVecEnv — r2dreamer adapter
+
+    ``obs_noise_stds`` is an optional dict with keys ``peg_position_std``,
+    ``peg_velocity_std``, ``ball_position_std``, ``ball_velocity_std`` (all in
+    m and m/s). Wrapper is skipped when ``None`` or when all stds are zero.
 
     Returns (vec_env, opponent_wrapper).
     """
@@ -173,6 +250,18 @@ def _make_eval_env(
         env_cfg_class = env_cfg_entry
 
     env_cfg = env_cfg_class()
+
+    # When a FastSAC opponent is requested, attach its 18-dim observation
+    # group to the env so the env emits obs["fast_sac_opponent"] in the exact
+    # layout the SAC actor was trained on. Uses the same ObsTerm functions as
+    # FastSACObservationsCfg, so scaling / 180° rotation / peg role-swap match
+    # training exactly.
+    if opponent_type == "fast_sac":
+        from klask_rl.tasks.manager_based.klask_rl.env_cfg.klask_rl_observations_cfg import (
+            _FastSACOpponentPolicyCfg,
+        )
+
+        env_cfg.observations.fast_sac_opponent = _FastSACOpponentPolicyCfg()
 
     # Mirror train_dreamer.py: apply ball reset position override from YAML.
     # Without this, the env uses KLASK_PARAMS defaults which put ~90% of resets
@@ -222,25 +311,41 @@ def _make_eval_env(
     # --- Create base env ---
     isaac_env = gym.make(task_name, cfg=env_cfg)
 
-    # --- 1. Opponent action frame transform (innermost) ---
-    isaac_env = OpponentActionWrapper(isaac_env)
-
-    # --- 2. Action manager scale = 1.0 (pass-through, m/s in → m/s out) ---
-    # Velocity scaling is done by VelocityScaleWrapper below so that the
-    # actuator model sees commands in m/s (matching its training units).
+    # max_velocity is needed by both KlaskRlCollisionAvoidanceWrapper (below)
+    # and VelocityScaleWrapper (further down), so look it up once up front.
     max_velocity = getattr(env_config, "max_velocity", None)
     if max_velocity is None:
         raise ValueError("env_config.max_velocity is required; VelocityScaleWrapper needs it to scale [-1, 1] → m/s.")
+
+    # --- Action manager scale = 1.0 (pass-through, m/s in → m/s out) ---
+    # Velocity scaling is done by VelocityScaleWrapper below so that the
+    # actuator model sees commands in m/s (matching its training units).
     action_mgr = isaac_env.unwrapped.action_manager
     for term in action_mgr._terms.values():
         term._scale = 1.0
 
-    # --- 3. Actuator model wrapper (expects m/s commands) ---
+    # --- 0. Collision avoidance (world-frame m/s clipping; innermost gym wrapper) ---
+    # Mirrors train_dreamer.py: sits inside OpponentActionWrapper so it sees
+    # world-frame actions (after opponent dim negation) for both player and opponent.
+    ca_cfg = getattr(env_config, "collision_avoidance", None)
+    if ca_cfg is not None and getattr(ca_cfg, "enable", False):
+        isaac_env = KlaskRlCollisionAvoidanceWrapper(isaac_env, max_vel=float(max_velocity))
+
+    # InitializationWrapper is intentionally skipped at inference. Its _step
+    # counter would start at 0 and select the EARLY curriculum phase, while a
+    # converged agent saw the FINAL phase at end of training. Leaving
+    # _init_velocity_speed unset makes reset_player_velocity_toward_ball a
+    # no-op (utils_manager_based.py:363-365), matching converged-training env.
+
+    # --- 1. Opponent action frame transform ---
+    isaac_env = OpponentActionWrapper(isaac_env)
+
+    # --- 2. Actuator model wrapper (expects m/s commands) ---
     actuator_cfg = getattr(env_config, "actuator_model", None)
     if actuator_cfg is not None and actuator_cfg.enable:
         isaac_env = ActuatorModelWrapper(isaac_env, model_file=actuator_cfg.checkpoint)
 
-    # --- 3a. Velocity scaling: [-1, 1] → [-max_velocity, max_velocity] m/s ---
+    # --- 3. Velocity scaling: [-1, 1] → [-max_velocity, max_velocity] m/s ---
     max_acceleration = getattr(env_config, "max_acceleration", None)
     _act_space = isaac_env.unwrapped.single_action_space
     isaac_env = VelocityScaleWrapper(
@@ -252,19 +357,38 @@ def _make_eval_env(
         device=isaac_env.unwrapped.device,
     )
 
-    # --- 4. Opponent wrapper ---
+    # --- 4. Observation noise (any opponent type, when any std > 0) ---
+    # Mirrors train_klask.py's wrapper position: noise is applied to both the
+    # 'policy' and 'opponent' obs keys before either model reads them. The
+    # extended obs dims are recomputed from the noisy base positions inside
+    # the wrapper. Skipped entirely when all stds are zero.
+    if obs_noise_stds is not None and any(v > 0.0 for v in obs_noise_stds.values()):
+        isaac_env = ObservationNoiseWrapper(
+            isaac_env,
+            peg_position_std=float(obs_noise_stds["peg_position_std"]),
+            peg_velocity_std=float(obs_noise_stds["peg_velocity_std"]),
+            ball_position_std=float(obs_noise_stds["ball_position_std"]),
+            ball_velocity_std=float(obs_noise_stds["ball_velocity_std"]),
+            own_goal=KLASK_PARAMS["player_goal"],
+            other_goal=KLASK_PARAMS["opponent_goal"],
+        )
+
+    # --- 5. Opponent wrapper ---
     if opponent_type == "dreamer":
         opponent_wrapper = DreamerSelfPlayWrapper(
             isaac_env,
             eval_mode=True,
+            opponent_action_method=opponent_action_method,
         )
     elif opponent_type == "ppo":
         opponent_wrapper = KlaskRlAgentOpponentWrapper(isaac_env, is_deterministic=True)
+    elif opponent_type == "fast_sac":
+        opponent_wrapper = KlaskRlFastSACOpponentWrapper(isaac_env, is_deterministic=True)
     else:
         raise ValueError(f"Unknown opponent type: {opponent_type}")
     isaac_env = opponent_wrapper
 
-    # --- 5. IsaacLabVecEnv adapter ---
+    # --- 6. IsaacLabVecEnv adapter ---
     vec_env = IsaacLabVecEnv(isaac_env, simulation_app=simulation_app)
 
     return vec_env, opponent_wrapper
@@ -332,10 +456,88 @@ def _load_ppo_opponent(config_path, checkpoint_path, num_envs, device, ppo_obs_s
     opponent.actions_low = opponent.actions_low.to(device)
     opponent.actions_high = opponent.actions_high.to(device)
 
+    # init_rnn() is deferred to _init_ppo_opponent_batch() — we need a real
+    # post-reset opponent obs to call get_batch_size() first so rl-games sets
+    # has_batch_dimension/batch_size correctly before allocating RNN state.
+    return opponent
+
+
+def _init_ppo_opponent_batch(opponent, vec_env):
+    """Run rl-games' batch-size handshake against a freshly reset env.
+
+    Mirrors play_klask.py:354,357,381: opponent.get_batch_size(obs, 1) sets
+    has_batch_dimension/batch_size from the actual obs shape, and only then
+    is init_rnn() safe to call (it sizes hidden state from batch_size).
+
+    Must be called AFTER vec_env.reset() and BEFORE the first vec_env.step().
+    """
+    opp_obs = vec_env._env.unwrapped.observation_manager.compute()["opponent"]
+    _ = opponent.get_batch_size(opp_obs, 1)
     if opponent.is_rnn:
         opponent.init_rnn()
 
-    return opponent
+
+def _load_fast_sac_opponent(checkpoint_path, device):
+    """Load a FastSAC opponent agent from a train_fast_sac_isaaclab.py checkpoint.
+
+    Returns an object exposing the small interface expected by
+    KlaskRlFastSACOpponentWrapper: ``has_batch_dimension``, ``obs_to_torch``,
+    and ``get_action(obs, is_deterministic)``. Actor hyperparameters come from
+    the checkpoint's embedded ``config`` dict (saved by fast_sac_utils.save_params).
+    Observations are normalized with the saved EmpiricalNormalization state.
+    Inference is deterministic when ``is_deterministic=True`` (mode of the
+    tanh-squashed Gaussian), matching the PPO opponent's behavior.
+    """
+    # The fast_sac package lives under scripts/fast_sac/klask_her — make sure
+    # it's importable when this script is run from elsewhere.
+    fast_sac_pkg_dir = pathlib.Path(_SCRIPT_DIR).parent / "fast_sac" / "klask_her"
+    if fast_sac_pkg_dir.exists() and str(fast_sac_pkg_dir) not in sys.path:
+        sys.path.append(str(fast_sac_pkg_dir))
+
+    from klask_her.agents.fast_sac import Actor
+    from klask_her.agents.fast_sac_utils import EmpiricalNormalization
+
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    cfg = ckpt.get("config", {}) or {}
+
+    obs_dim = 18  # _FastSACOpponentPolicyCfg always emits 18
+    act_dim = 2
+    hidden_dim = int(cfg.get("actor_hidden_dim", 512))
+    # train_fast_sac_isaaclab.py uses action_scale=1.0; Actor's default is 0.5.
+    action_scale = float(cfg.get("action_scale", 1.0))
+
+    actor = Actor(
+        obs_dim=obs_dim,
+        act_dim=act_dim,
+        hidden_dim=hidden_dim,
+        action_scale=action_scale,
+        device=device,
+    )
+    actor.load_state_dict(ckpt["actor_state_dict"])
+    actor.eval()
+
+    obs_normalizer = EmpiricalNormalization(shape=obs_dim, device=device)
+    obs_normalizer.load_state_dict(ckpt["obs_normalizer_state"])
+    obs_normalizer.eval()
+    if int(obs_normalizer.count.item()) <= 0:
+        raise RuntimeError(
+            f"FastSAC obs_normalizer in {checkpoint_path} has count=0 — "
+            "running stats look uninitialized; cannot evaluate."
+        )
+
+    class _FastSACOpponent:
+        has_batch_dimension = True
+
+        def obs_to_torch(self, obs):
+            if not torch.is_tensor(obs):
+                obs = torch.as_tensor(obs, device=device)
+            return obs.to(device=device, dtype=torch.float32)
+
+        def get_action(self, obs, is_deterministic):
+            norm = obs_normalizer(obs, update=False)
+            return actor.explore(norm, deterministic=bool(is_deterministic))
+
+    return _FastSACOpponent()
 
 
 def _load_dreamer_agent(full_cfg, obs_space, act_space, checkpoint_path, device):
@@ -407,28 +609,72 @@ def main():
     device = args_cli.device
     opponent_type = args_cli.opponent_type
 
-    # --- Resolve checkpoint glob pattern ---
-    checkpoint_pattern = args_cli.checkpoint
-    if any(c in checkpoint_pattern for c in ("*", "?", "[")):
-        checkpoint_paths = sorted(glob_module.glob(checkpoint_pattern, recursive=True))
-        if not checkpoint_paths:
-            raise FileNotFoundError(f"No checkpoints matched pattern: {checkpoint_pattern}")
-        print(f"[INFO] Found {len(checkpoint_paths)} checkpoints matching '{checkpoint_pattern}':")
+    # Reconstruct the exact invocation for posterity in the saved results files.
+    invocation_cmd = shlex.join([sys.executable, *sys.argv])
+
+    # --- Resolve checkpoint patterns ---
+    # Each --checkpoint entry is resolved independently: literal paths kept as-is,
+    # glob patterns expanded. Order is preserved across entries; within an
+    # expanded pattern matches are sorted; duplicates are dropped.
+    checkpoint_paths: list[str] = []
+    seen: set[str] = set()
+    for entry in args_cli.checkpoint:
+        if any(c in entry for c in ("*", "?", "[")):
+            matches = sorted(glob_module.glob(entry, recursive=True))
+            if not matches:
+                raise FileNotFoundError(f"No checkpoints matched pattern: {entry}")
+            resolved = matches
+        else:
+            resolved = [entry]
+        for p in resolved:
+            if p not in seen:
+                seen.add(p)
+                checkpoint_paths.append(p)
+    if len(checkpoint_paths) > 1 or any(c in e for e in args_cli.checkpoint for c in ("*", "?", "[")):
+        print(f"[INFO] Resolved {len(checkpoint_paths)} checkpoint(s):")
         for i, cp in enumerate(checkpoint_paths, 1):
             print(f"  {i}. {os.path.basename(cp)}")
-    else:
-        checkpoint_paths = [checkpoint_pattern]
 
     # --- Load player config ---
     player_cfg = _load_config(args_cli.config, device)
 
+    # --- Validate --opponent_action_method preconditions before building the env ---
+    # The flag overrides what each agent's RSSM sees in the OTHER agent's slot of
+    # prev_action. The player-side override always fires when the flag is set
+    # (works against any opponent type). The opponent-side override only fires
+    # when the opponent has its own RSSM (i.e. --opponent_type=dreamer); for a
+    # PPO opponent there is no RSSM to override, which is fine.
+    if args_cli.opponent_action_method is not None:
+        _opp_sep_raw = getattr(player_cfg, "opponent_separation", None)
+        if OmegaConf.is_config(_opp_sep_raw):
+            _opp_sep_enabled = bool(
+                OmegaConf.to_container(_opp_sep_raw, resolve=True).get("enabled", False)
+            )
+        elif isinstance(_opp_sep_raw, bool):
+            _opp_sep_enabled = _opp_sep_raw
+        else:
+            _opp_sep_enabled = False
+        if not _opp_sep_enabled:
+            raise SystemExit(
+                "--opponent_action_method requires the player checkpoint to be "
+                "trained with opponent_separation=True; this checkpoint has it disabled."
+            )
+
     # --- Create evaluation environment (shared across all player checkpoints) ---
     num_envs = args_cli.num_envs
+    obs_noise_stds = {
+        "peg_position_std": args_cli.peg_position_std,
+        "peg_velocity_std": args_cli.peg_velocity_std,
+        "ball_position_std": args_cli.ball_position_std,
+        "ball_velocity_std": args_cli.ball_velocity_std,
+    }
     vec_env, opponent_wrapper = _make_eval_env(
         player_cfg.env,
         num_envs,
         args_cli.episode_length_s,
         opponent_type=opponent_type,
+        opponent_action_method=args_cli.opponent_action_method,
+        obs_noise_stds=obs_noise_stds,
     )
     obs_space = vec_env.observation_space
     act_space = vec_env.action_space
@@ -452,18 +698,13 @@ def main():
             ppo_obs_space,
         )
         opponent_wrapper.add_opponent(ppo_opponent)
-
-    TERM_NAME_MAP = {
-        "goal_scored": "player_scored",
-        "goal_conceded": "opponent_scored",
-        "player_in_goal": "player_in_goal",
-        "opponent_in_goal": "opponent_in_goal",
-        "time_out": "time_expired",
-    }
-    term_manager = vec_env._env.unwrapped.termination_manager
+    elif opponent_type == "fast_sac":
+        fast_sac_opponent = _load_fast_sac_opponent(args_cli.opponent_checkpoint, device)
+        opponent_wrapper.add_opponent(fast_sac_opponent)
 
     # Collect per-checkpoint results for aggregate summary.
     all_results = []
+    npz_paths_written: list[str] = []
     interrupted = False
 
     # --- Evaluate each player checkpoint ---
@@ -476,14 +717,7 @@ def main():
         player = _load_dreamer_agent(player_cfg, obs_space, act_space, ckpt_path, device)
 
         # --- Reset tracking state ---
-        term_counts = {
-            "player_scored": 0,
-            "opponent_scored": 0,
-            "player_in_goal": 0,
-            "opponent_in_goal": 0,
-            "time_expired": 0,
-        }
-        total_games = 0
+        tracker = EvalMetricsTracker(vec_env._env)
 
         # --- Game loop ---
         pbar = tqdm(total=args_cli.num_games, desc="Games")
@@ -491,82 +725,70 @@ def main():
         try:
             with torch.inference_mode():
                 vec_env.reset()
+                # PPO opponent needs to see a real post-reset obs for rl-games to
+                # set has_batch_dimension/batch_size before init_rnn() runs. Must
+                # happen after every reset(), since init_rnn() reallocates state.
+                if opponent_type == "ppo":
+                    _init_ppo_opponent_batch(opponent_wrapper.opponent, vec_env)
                 done = torch.ones(num_envs, dtype=torch.bool, device=device)
                 agent_state = player.get_initial_state(num_envs)
                 act = agent_state["action"].clone()
 
-                while total_games < args_cli.num_games and simulation_app.is_running():
+                while tracker.total_games < args_cli.num_games and simulation_app.is_running():
                     # Step env (opponent actions generated inside the opponent wrapper).
                     trans, done = vec_env.step(act.detach(), done.detach())
+
+                    # Override the opponent slot in the player's prev_action.
+                    # Works for any opponent type (PPO opponents don't add
+                    # opponent_action to obs, so this also fills it in for them).
+                    if args_cli.opponent_action_method == "zero":
+                        trans["opponent_action"] = torch.zeros_like(act)
+                    elif args_cli.opponent_action_method == "random":
+                        trans["opponent_action"] = 2.0 * torch.rand_like(act) - 1.0
 
                     # Player agent inference (deterministic).
                     act, agent_state = player.act(trans, agent_state, eval=True)
 
+                    # Per-step metric accumulation (must run before finalize).
+                    tracker.update()
+
                     # Track terminations.
                     if done.any():
                         num_done = int(done.sum().item())
-                        total_games += num_done
-
-                        done_mask = done.bool().to(term_manager._term_dones.device)
-                        for i, term_name in enumerate(term_manager._term_names):
-                            if term_name in TERM_NAME_MAP:
-                                count_key = TERM_NAME_MAP[term_name]
-                                term_counts[count_key] += int(term_manager._term_dones[done_mask, i].sum().item())
-
-                        # Update tqdm with live stats.
+                        tracker.finalize(done)
                         pbar.update(min(num_done, args_cli.num_games - pbar.n))
-                        p_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
-                        o_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
-                        pbar.set_postfix(
-                            P_wins=p_wins,
-                            O_wins=o_wins,
-                            Draws=term_counts["time_expired"],
-                            P_wr=f"{p_wins / total_games * 100:.1f}%",
-                        )
+                        pbar.set_postfix(**tracker.live_postfix())
         except KeyboardInterrupt:
             interrupted = True
             print(
-                f"\n[INFO] Evaluation interrupted by user after {total_games} games. "
+                f"\n[INFO] Evaluation interrupted by user after {tracker.total_games} games. "
                 "Printing summary for completed games..."
             )
 
         pbar.close()
 
         # --- Print and save results ---
-        player_wins = term_counts["player_scored"] + term_counts["opponent_in_goal"]
-        opponent_wins = term_counts["opponent_scored"] + term_counts["player_in_goal"]
-        draws = term_counts["time_expired"]
-
         all_results.append({
             "checkpoint": ckpt_path,
-            "total_games": total_games,
-            "player_wins": player_wins,
-            "opponent_wins": opponent_wins,
-            "draws": draws,
-            "term_counts": dict(term_counts),
+            "total_games": tracker.total_games,
+            "player_wins": tracker.player_wins,
+            "opponent_wins": tracker.opponent_wins,
+            "draws": tracker.draws,
+            "term_counts": dict(tracker.term_counts),
         })
 
         summary_lines = [
             "\n" + "=" * 50,
             "  HEAD-TO-HEAD EVALUATION RESULTS",
             "=" * 50,
+            f"  Command            : {invocation_cmd}",
             f"  Player checkpoint  : {ckpt_path}",
             f"  Opponent type      : {opponent_type}",
             f"  Opponent checkpoint: {args_cli.opponent_checkpoint}",
-            f"  Total games played : {total_games}",
+            f"  Total games played : {tracker.total_games}",
             "-" * 50,
-            f"  Player scored (goal_scored)      : {term_counts['player_scored']}",
-            f"  Opponent scored (goal_conceded)   : {term_counts['opponent_scored']}",
-            f"  Player fell in goal (player_in)   : {term_counts['player_in_goal']}",
-            f"  Opponent fell in goal (opp_in)    : {term_counts['opponent_in_goal']}",
-            f"  Time expired (time_out)           : {term_counts['time_expired']}",
-            "-" * 50,
-            f"  Player wins  : {player_wins}",
-            f"  Opponent wins: {opponent_wins}",
-            f"  Draws        : {draws}",
         ]
-        if total_games > 0:
-            summary_lines.append(f"  Player win rate: {player_wins / total_games * 100:.1f}%")
+        summary_lines += tracker.summary_body_lines()
         summary_lines.append("=" * 50 + "\n")
 
         summary_text = "\n".join(summary_lines)
@@ -581,8 +803,36 @@ def main():
             f.write(summary_text)
         print(f"[INFO] Head-to-head results saved to: {results_file}")
 
-        # Free player model before loading the next one.
-        del player
+        npz_file = os.path.join(results_dir, f"h2h_results_{timestamp}.npz")
+        tracker.save_npz(
+            npz_file,
+            metadata={
+                "player_checkpoint": ckpt_path,
+                "opponent_type": opponent_type,
+                "opponent_checkpoint": args_cli.opponent_checkpoint or "",
+            },
+        )
+        npz_paths_written.append(npz_file)
+        print(f"[INFO] Per-game metrics saved to:    {npz_file}")
+
+        if args_cli.boxplot:
+            import importlib.util
+
+            _ep_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "eval_plot.py"))
+            _ep_spec = importlib.util.spec_from_file_location("eval_plot", _ep_path)
+            _ep_mod = importlib.util.module_from_spec(_ep_spec)
+            _ep_spec.loader.exec_module(_ep_mod)
+            png_file = _ep_mod.plot_boxplots(npz_file, title_suffix=os.path.basename(ckpt_path))
+            print(f"[INFO] Box-plot saved to:            {png_file}")
+
+        # Free per-checkpoint GPU state before loading the next one.
+        del player, tracker, pbar
+        try:
+            del act, agent_state, done
+        except NameError:
+            pass
+        gc.collect()
+        torch.cuda.empty_cache()
 
         # Stop evaluating further checkpoints if user interrupted.
         if interrupted:
@@ -593,28 +843,26 @@ def main():
 
     # --- Aggregate summary (when multiple checkpoints) ---
     if len(all_results) > 1:
-        agg_lines = [
-            "\n" + "=" * 70,
-            "  AGGREGATE RESULTS ACROSS ALL CHECKPOINTS",
-            "=" * 70,
-            f"  {'Checkpoint':<45} {'Win%':>6}  {'W':>5}  {'L':>5}  {'D':>5}",
-            "-" * 70,
-        ]
-        for r in all_results:
-            ckpt_name = os.path.basename(r["checkpoint"])
-            wr = f"{r['player_wins'] / r['total_games'] * 100:.1f}%" if r["total_games"] > 0 else "N/A"
-            agg_lines.append(
-                f"  {ckpt_name:<45} {wr:>6}  {r['player_wins']:>5}  {r['opponent_wins']:>5}  {r['draws']:>5}"
-            )
-        agg_lines.append("=" * 70 + "\n")
-        agg_text = "\n".join(agg_lines)
-        print(agg_text)
+        import importlib.util
 
-        # Save aggregate results.
+        _ea_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "eval_aggregate.py"))
+        _ea_spec = importlib.util.spec_from_file_location("eval_aggregate", _ea_path)
+        _ea_mod = importlib.util.module_from_spec(_ea_spec)
+        _ea_spec.loader.exec_module(_ea_mod)
         agg_file = os.path.join(results_dir, f"h2h_aggregate_{timestamp}.txt")
-        with open(agg_file, "w") as f:
-            f.write(agg_text)
-        print(f"[INFO] Aggregate results saved to: {agg_file}")
+        agg_plot = os.path.join(results_dir, f"h2h_aggregate_{timestamp}.png")
+        agg_term_plot = os.path.join(results_dir, f"h2h_aggregate_{timestamp}_terminations.png")
+        agg_text, _, _, _ = _ea_mod.aggregate_from_npz_files(
+            npz_paths_written,
+            out_path=agg_file,
+            invocation_cmd=invocation_cmd,
+            plot_path=agg_plot,
+            term_plot_path=agg_term_plot,
+        )
+        print(agg_text)
+        print(f"[INFO] Aggregate results saved to:  {agg_file}")
+        print(f"[INFO] Win-rate plot saved to:      {agg_plot}")
+        print(f"[INFO] Termination plot saved to:   {agg_term_plot}")
 
     # Cleanup.
     vec_env._env.close()
