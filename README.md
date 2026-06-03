@@ -100,7 +100,7 @@ git submodule update --init --recursive
 
 All development happens inside the training container. The `docker_env/helper.sh` script wraps the common Docker commands, and the `.devcontainer/devcontainer.json` file provides a ready-to-use configuration for Visual Studio Code.
 
-Before building, you may want to review the configuration at the top of `docker_env/helper.sh` — in particular the `GPUS` variable (which GPU(s) the container may use) and the `UI` variable (`HEADLESS=1` for headless training or `LIVESTREAM=1` to stream the Isaac Sim viewport). A `.devcontainer/devcontainer.env` file is also expected; copy it from the provided `devcontainer.env.example` and adjust it for your machine.
+Before building, you may want to review the configuration at the top of `docker_env/helper.sh` — in particular the `GPUS` variable (which GPU(s) the container may use) and the `UI` variable (`HEADLESS=1` for headless training or `LIVESTREAM=1` to stream the Isaac Sim viewport). A `.devcontainer/devcontainer.env` file is also expected; copy it from the provided `devcontainer.env.example` and adjust it for your machine. As indicated in the example file, you need to set your [Weights & Biases](https://wandb.ai/) API key in `WANDB_API_KEY` so that the container can log training runs to your W&B account (you can find your key at [wandb.ai/authorize](https://wandb.ai/authorize)); `PUBLIC_IP` is used for the WebRTC livestream.
 
 ### Building the Container
 
