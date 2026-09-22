@@ -1,5 +1,15 @@
 # Three-agent tournament
 
+CSV-first conditioning experiments and three-seed baseline learning curves are
+documented in [the experiment runbook](../experiments/README.md). New tournament
+legs also save `games.csv` (one row per game) and `metadata.json` with timestamps,
+arguments and actual environment-step counts. `games.npz` remains available for
+compatibility with this tournament's original reporter. Offline CSV analysis:
+
+```bash
+python scripts/experiments/analyze.py --input logs/tournament/RUN --output logs/tournament/RUN/analysis
+```
+
 This runner evaluates the supplied **reconstructed PPO-B**, **D-RSSM**, and
 **FastSAC** checkpoints. Stock DreamerV3 is excluded because no checkpoint was
 provided. Nothing is trained, and no historical PPO checkpoint is loaded.
@@ -51,8 +61,17 @@ root; unrelated absolute paths are never guessed. If the exact actuator file
 is elsewhere, supply `--actuator-checkpoint /actual/path/to/the/same/model.pt`.
 
 Useful overrides: `--devices cuda:0 cuda:1`, `--num-envs 128`, `--games 10000`,
-`--seed 0`, and `--episode-length-s 30`. GPU indices are those **inside** the
-container. **The default is two GPUs: `cuda:0` and `cuda:1`.** The launcher runs
+`--seed 0`, and `--episode-length-s 30`. Agent paths can also be replaced from
+the command line without editing `config.yaml`: one `--<agent>-checkpoint` and
+`--<agent>-config` flag is generated for every agent path the config declares,
+so the current config yields `--d-rssm-checkpoint`/`--drssm-checkpoint`,
+`--d-rssm-config`, `--ppo-b-checkpoint`, `--ppo-b-config`, and
+`--fastsac-checkpoint` (FastSAC has no separate config; it is embedded in its
+checkpoint). Hyphenated and collapsed spellings are aliases. Overridden paths
+are resolved exactly like config paths — relative to the project root, with
+`/workspace/klask_rl` remapped — and are hashed into the manifest, so a
+different checkpoint also yields a different `run_id`. GPU indices are those
+**inside** the container. **The default is two GPUs: `cuda:0` and `cuda:1`.** The launcher runs
 one independent leg per GPU, with at most two workers alive at a time. Each
 worker keeps its simulation and policies on its assigned device; this does not
 split a single policy across GPUs. Training-time multi-GPU model replicas and

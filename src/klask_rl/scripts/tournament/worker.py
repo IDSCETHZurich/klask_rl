@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -49,7 +50,10 @@ def main():
     args = parser.parse_args()
     # Same renderer limits as train_dreamer.py: each process must not enable
     # multi-GPU rendering while the other GPU is running a separate leg.
-    sys.argv += ["--/renderer/multiGpu/enabled=false", "--/renderer/multiGpu/maxGpuCount=1"]
+    sys.argv += [
+        "--/renderer/multiGpu/enabled=false",
+        "--/renderer/multiGpu/maxGpuCount=1",
+    ]
     launcher = AppLauncher(args)
     try:
         return run(args, launcher.app)
@@ -67,6 +71,7 @@ def run(args, simulation_app):
     import torch
     from omegaconf import OmegaConf
     from policies import DreamerPolicy, FeedForwardPolicy, episode_quotas
+    from raw_data import TrajectoryRecorder, export_games, utc_now, write_json
     from run_tournament import sha256
     from tqdm import tqdm
 
@@ -124,10 +129,17 @@ def run(args, simulation_app):
     quotas = episode_quotas(job["games"], num_envs, device)
     completed = torch.zeros(num_envs, dtype=torch.long, device=device)
     interrupted = False
+    started_at, start_time = utc_now(), time.monotonic()
+    vector_steps = 0
+    end_steps = []
+    recorder = None
 
     def save():
         if tracker is None:
             return
+        complete = tracker.total_games == job["games"] and (
+            recorder is None or recorder.completed_games == tracker.total_games
+        )
         temp = job_dir / "games.tmp.npz"
         tracker.save_npz(
             str(temp),
@@ -139,16 +151,51 @@ def run(args, simulation_app):
                 "condition": job["condition"],
                 "seed": job["seed"],
                 "requested_games": job["games"],
-                "complete": tracker.total_games == job["games"],
+                "complete": complete,
                 "torch_version": torch.__version__,
                 "numpy_version": np.__version__,
                 "cuda_version": torch.version.cuda,
                 "device": str(device),
                 "device_name": torch.cuda.get_device_name(device),
             },
-            extra_arrays={"env_id": env_ids, "episode_id": episode_ids},
+            extra_arrays={
+                "env_id": env_ids,
+                "episode_id": episode_ids,
+                "end_environment_steps": end_steps,
+            },
         )
         temp.replace(job_dir / "games.npz")
+        export_games(job_dir / "games.npz", job, plan["run_id"])
+        write_json(
+            job_dir / "metadata.json",
+            {
+                "schema_version": 1,
+                "run_id": plan["run_id"],
+                "job": job,
+                "agents": {
+                    name: {key: value for key, value in plan["agents"][name].items() if key != "inspection"}
+                    for name in (job["seat0"], job["seat1"])
+                },
+                "config": "evaluation_config.yaml",
+                "manifest": "../manifest.json",
+                "started_at": started_at,
+                "updated_at": utc_now(),
+                "elapsed_seconds": time.monotonic() - start_time,
+                "seed": job["seed"],
+                "argv": sys.argv,
+                "vector_steps": vector_steps,
+                "environment_steps": vector_steps * num_envs,
+                "num_envs": num_envs,
+                "games": tracker.total_games,
+                "complete": complete,
+                "recorded_trajectory_games": recorder.completed_games if recorder is not None else None,
+                "step_unit": "one environment transition; includes steps in quota-finished environments",
+                "random_input": "independent Uniform[-1,1] per component, dedicated seeded generator",
+                "action_timing": job.get("action_timing", "aligned"),
+                "device": str(device),
+                "torch_version": torch.__version__,
+            },
+        )
 
     try:
         with torch.inference_mode():
@@ -158,17 +205,32 @@ def run(args, simulation_app):
                 spec = plan["agents"][name]
                 kind = spec["kind"]
                 if kind == "dreamer":
+                    model_cfg = cfg
+                    if name != "D-RSSM":
+                        model_cfg = OmegaConf.load(spec["config"])
+                        model_cfg.device = str(device)
+                        model_cfg.model.compile = False
                     spaces = dict(env.unwrapped.single_observation_space.spaces)
                     for flag in ("is_first", "is_terminal", "is_last"):
                         spaces[flag] = gym.spaces.Box(0, 1, (1,), dtype=bool)
                     model = _load_dreamer_agent(
-                        cfg,
+                        model_cfg,
                         gym.spaces.Dict(spaces),
                         gym.spaces.Box(-1, 1, (2,), dtype=np.float32),
                         spec["checkpoint"],
                         device,
                     )
-                    agents.append(DreamerPolicy(model, num_envs, seat, job["condition"]))
+                    condition = job.get("agent_conditions", {}).get(name, job["condition"])
+                    agents.append(
+                        DreamerPolicy(
+                            model,
+                            num_envs,
+                            seat,
+                            condition,
+                            job["seed"] + 10000 + seat,
+                            job.get("action_timing", "aligned"),
+                        )
+                    )
                 else:
                     if kind == "ppo":
                         obs_space = env.unwrapped.single_observation_space["policy" if seat == 0 else "opponent"]
@@ -190,6 +252,10 @@ def run(args, simulation_app):
             torch.cuda.manual_seed_all(job["seed"])
             observations, _ = env.reset(seed=job["seed"])
             tracker = EvalMetricsTracker(env)
+            if "trajectory_domain" in job:
+                focal = job.get("trajectory_agent", "D-RSSM")
+                seat = (job["seat0"], job["seat1"]).index(focal)
+                recorder = TrajectoryRecorder(job_dir / "trajectories", num_envs, seat, job["trajectory_domain"])
             previous_actions = torch.zeros(num_envs, 4, device=device)
             is_first = torch.ones(num_envs, dtype=torch.bool, device=device)
             last_saved = 0
@@ -203,7 +269,10 @@ def run(args, simulation_app):
                         raise RuntimeError("Policy produced non-finite actions")
                     # Save policy-frame actions before any in-place frame/scaling wrappers.
                     previous_actions = actions.clone()
+                    if recorder is not None:
+                        recorder.capture(observations, previous_actions, completed < quotas)
                     observations, _, terminated, truncated, _ = env.step(actions)
+                    vector_steps += 1
                     is_first = (terminated | truncated).bool()
                     # Use post-reset obs directly. Never act on a previous game's
                     # terminal image or carry its RSSM state into the next game.
@@ -214,10 +283,14 @@ def run(args, simulation_app):
                         tracker.finalize(accepted)
                         env_ids.extend(ids.cpu().tolist())
                         episode_ids.extend(completed[ids].cpu().tolist())
+                        end_steps.extend([vector_steps * num_envs] * len(ids))
+                        if recorder is not None:
+                            for env_id in ids.cpu().tolist():
+                                recorder.finish(env_id, int(completed[env_id]))
                         completed[ids] += 1
                         progress.update(len(ids))
                         progress.set_postfix(**tracker.live_postfix(), refresh=False)
-                    if tracker.total_games - last_saved >= 1000:
+                    if tracker.total_games - last_saved >= min(100, job["games"]):
                         save()
                         last_saved = tracker.total_games
     except KeyboardInterrupt:

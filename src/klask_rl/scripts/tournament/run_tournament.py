@@ -96,6 +96,45 @@ def resolve_path(value, root):
     return (root / path).resolve() if not path.is_absolute() else path.resolve()
 
 
+def agent_slug(name):
+    """CLI-friendly slug for an agent name: 'D-RSSM' -> 'd-rssm'."""
+    return re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9]+", "-", str(name).lower())).strip("-")
+
+
+def agent_override_dest(name, key):
+    """argparse attribute holding the optional CLI override for one agent path."""
+    return f"agent_{agent_slug(name).replace('-', '_')}_{key}"
+
+
+def agent_override_specs(config_path):
+    """Yield (name, key, dest, option_strings) for every agent path in the config.
+
+    The available flags therefore follow whatever agents the config file
+    declares, so adding an agent to the YAML adds its overrides automatically.
+    """
+    try:
+        specs = (yaml.safe_load(Path(config_path).read_text()) or {}).get("agents") or {}
+    except (OSError, yaml.YAMLError, AttributeError, TypeError):
+        return
+    if not isinstance(specs, dict):
+        return
+    for name, spec in specs.items():
+        if not isinstance(spec, dict):
+            continue
+        slug = agent_slug(name)
+        if not slug:
+            continue
+        collapsed = slug.replace("-", "")
+        for key in ("checkpoint", "config"):
+            if key not in spec:
+                continue
+            # Accept both --d-rssm-checkpoint and the collapsed --drssm-checkpoint.
+            flags = [f"--{slug}-{key}"]
+            if collapsed != slug:
+                flags.append(f"--{collapsed}-{key}")
+            yield str(name), key, agent_override_dest(name, key), flags
+
+
 def checkpoint_info(kind, path):
     import torch
 
@@ -103,8 +142,8 @@ def checkpoint_info(kind, path):
     if kind == "dreamer":
         state = ckpt["agent_state_dict"]
         action_dim = state["rssm._deter_net._dyn_in2.0.weight"].shape[1]
-        if action_dim != 4:
-            raise ValueError(f"D-RSSM requires a 4D RSSM input, found {action_dim}")
+        if action_dim not in (2, 4):
+            raise ValueError(f"Expected 2D or separated 4D RSSM input, found {action_dim}")
         return {
             "format": "agent_state_dict",
             "rssm_action_dim": action_dim,
@@ -142,22 +181,29 @@ def checkpoint_info(kind, path):
 
 def build_plan(args):
     devices = selected_devices(args)
+    config = yaml.safe_load(args.config.read_text())
+    available_matches = config.get("matches", MATCHES)
     selected = getattr(args, "matches", None)
-    if selected and set(selected) - {m["id"] for m in MATCHES}:
+    if selected and set(selected) - {m["id"] for m in available_matches}:
         raise ValueError("Unknown matchup selection")
-    matches = [dict(m) for m in MATCHES if not selected or m["id"] in selected]
+    matches = [dict(m) for m in available_matches if not selected or m["id"] in selected]
+    if not matches or len({m["id"] for m in matches}) != len(matches):
+        raise ValueError("Match IDs must be nonempty and unique")
+    for match in matches:
+        if re.fullmatch(r"[a-zA-Z0-9_-]+", match["id"]) is None or match["a"] == match["b"]:
+            raise ValueError("Invalid match ID or identical agent names")
+        if match["condition"] not in ("exact", "random", "zero", "none"):
+            raise ValueError("Invalid opponent input condition")
     required_agents = {name for m in matches for name in (m["a"], m["b"])} | {"D-RSSM"}
     root = args.project_root.resolve()
-    config = yaml.safe_load(args.config.read_text())
     games = args.games if args.games is not None else int(config["games"])
     num_envs = args.num_envs if args.num_envs is not None else int(config["num_envs"])
     seed = args.seed if args.seed is not None else int(config["seed"])
     duration = args.episode_length_s if args.episode_length_s is not None else float(config["episode_length_s"])
     if games < 2 or num_envs < 1 or duration <= 0 or int(config["bootstrap_samples"]) < 1:
         raise ValueError("Need at least two games, positive num_envs, episode length and bootstrap samples")
-    expected = {"D-RSSM": "dreamer", "PPO-B": "ppo", "FastSAC": "fast_sac"}
-    if {name: spec["kind"] for name, spec in config["agents"].items()} != expected:
-        raise ValueError("Configure exactly D-RSSM, PPO-B and FastSAC; Stock DreamerV3 has no checkpoint yet")
+    if not required_agents <= config["agents"].keys() or config["agents"]["D-RSSM"]["kind"] != "dreamer":
+        raise ValueError("All selected agents and the D-RSSM environment config must be supplied")
     blockers, agents = [], {}
     for name, spec in config["agents"].items():
         if name not in required_agents:
@@ -166,6 +212,11 @@ def build_plan(args):
         for key in ("checkpoint", "config"):
             if key not in agent:
                 continue
+            # A CLI override replaces the configured path before it is resolved,
+            # so relative paths and the /workspace/klask_rl remap still apply.
+            override = getattr(args, agent_override_dest(name, key), None)
+            if override is not None:
+                agent[key] = str(override)
             path = resolve_path(agent[key], root)
             agent[key] = str(path)
             if not path.is_file():
@@ -175,6 +226,8 @@ def build_plan(args):
         if Path(agent["checkpoint"]).is_file():
             try:
                 agent["inspection"] = checkpoint_info(agent["kind"], agent["checkpoint"])
+                if name == "D-RSSM" and agent["inspection"]["rssm_action_dim"] != 4:
+                    raise ValueError("The focal D-RSSM checkpoint must have opponent separation enabled")
             except (
                 OSError,
                 RuntimeError,
@@ -269,7 +322,7 @@ def build_plan(args):
             "klask_her/agents/fast_sac.py",
         ),
     ):
-        if package == "FastSAC" and "FastSAC" not in required_agents:
+        if package == "FastSAC" and not any(a["kind"] == "fast_sac" for a in agents.values()):
             continue
         if not any((p / required).is_file() for p in candidates):
             blockers.append(
@@ -307,6 +360,14 @@ def build_plan(args):
                     "device": devices[len(jobs) % len(devices)],
                 }
             )
+            for key in (
+                "agent_conditions",
+                "action_timing",
+                "trajectory_domain",
+                "trajectory_agent",
+            ):
+                if key in match:
+                    jobs[-1][key] = match[key]
     # Source hashes work inside the container even when .git is not mounted.
     source_files = list((root / "scripts/tournament").glob("*.py"))
     source_files += list((root / "scripts/dreamer").glob("*.py"))
@@ -319,7 +380,14 @@ def build_plan(args):
         if p.is_file() and p.suffix in (".png", ".json", ".yaml")
     }
     versions = {}
-    for package in ("torch", "numpy", "rl-games", "tensordict", "gymnasium", "isaaclab"):
+    for package in (
+        "torch",
+        "numpy",
+        "rl-games",
+        "tensordict",
+        "gymnasium",
+        "isaaclab",
+    ):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -343,23 +411,37 @@ def build_plan(args):
         "package_versions": versions,
         "protocol": "balanced seats; fixed per-env episode quotas; aligned previous actions; post-reset observations",
     }
+    if "experiment" in config:
+        plan["experiment"] = config["experiment"]
+    plan["protocol"] = (
+        "balanced seats; fixed per-env episode quotas; explicit per-job action timing; post-reset observations"
+    )
     plan["run_id"] = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
     return plan, blockers
 
 
 def main():
+    # Peek at --config first so the per-agent override flags below match the
+    # agents that config declares.
+    bootstrap = argparse.ArgumentParser(add_help=False)
+    bootstrap.add_argument("--config", type=Path, default=SCRIPT_DIR / "config.yaml")
+    known, _ = bootstrap.parse_known_args()
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=SCRIPT_DIR / "config.yaml")
     parser.add_argument("--project-root", type=Path, default=PROJECT_DIR)
     parser.add_argument("--output", type=Path, required=True)
     gpu_args = parser.add_mutually_exclusive_group()
-    gpu_args.add_argument("--devices", nargs="+", help="Worker GPUs (default: cuda:0 cuda:1); one leg per GPU")
+    gpu_args.add_argument(
+        "--devices",
+        nargs="+",
+        help="Worker GPUs (default: cuda:0 cuda:1); one leg per GPU",
+    )
     gpu_args.add_argument("--device", help="Single-GPU shorthand, e.g. --device cuda:0")
     parser.add_argument("--games", type=int)
     parser.add_argument(
         "--matches",
         nargs="+",
-        choices=[m["id"] for m in MATCHES],
         help="Run only these matchup/conditions; --games applies to each selected condition.",
     )
     parser.add_argument("--num-envs", type=int)
@@ -372,6 +454,18 @@ def main():
         action="store_true",
         help="Skip complete legs; rerun partial legs from their seed",
     )
+
+    # Optional per-agent path overrides, derived from the agents in the config.
+    for name, key, dest, flags in agent_override_specs(known.config):
+        parser.add_argument(
+            *flags,
+            dest=dest,
+            type=Path,
+            metavar="PATH",
+            default=None,
+            help=f"Override the {name} {key} path from the config file.",
+        )
+
     args = parser.parse_args()
     plan, blockers = build_plan(args)
     blockers.extend(gpu_blockers(plan["devices"]))
@@ -437,7 +531,11 @@ def main():
         print(f"Progress log: {job_dir / 'run.log'}", flush=True)
         with (job_dir / "run.log").open("w") as log:
             return subprocess.Popen(
-                command, cwd=plan["project_root"], stdout=log, stderr=subprocess.STDOUT, start_new_session=True
+                command,
+                cwd=plan["project_root"],
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
             )
 
     def finished(job, returncode):

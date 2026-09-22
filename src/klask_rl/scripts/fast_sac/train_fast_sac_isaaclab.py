@@ -28,6 +28,7 @@ parser = argparse.ArgumentParser(
 AppLauncher.add_app_launcher_args(parser)
 args_cli, remaining_argv = parser.parse_known_args()
 
+sys.argv += ["--/renderer/multiGpu/enabled=false", "--/renderer/multiGpu/maxGpuCount=1"]
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
@@ -47,9 +48,12 @@ from datetime import datetime
 from pathlib import Path
 
 import gymnasium as gym
+import numpy as np
 
 # Ensure klask_her is importable (for Actor, Critic, buffer, utils).
 _local_klask_her_root = Path(__file__).resolve().parent / "klask_her"
+if not _local_klask_her_root.exists():
+    _local_klask_her_root = Path(__file__).resolve().parents[4] / "third_party/fast_sac"
 if _local_klask_her_root.exists():
     sys.path.insert(0, str(_local_klask_her_root))
 
@@ -70,7 +74,9 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     VelocityScaleWrapper,
     configure_domain_randomization,
 )
-from klask_rl.tasks.manager_based.klask_rl.wrappers.klask_rl_ovservation_wrappers import OpponentActionWrapper
+from klask_rl.tasks.manager_based.klask_rl.wrappers.klask_rl_ovservation_wrappers import (
+    OpponentActionWrapper,
+)
 from torch.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 
@@ -201,6 +207,9 @@ class KlaskTrainingConfig:
     logging_interval: int = 10
     save_interval: int = 1000
     device: str = "cuda:0"
+    experiment_output: str | None = None
+    """Enable atomic curve checkpoints, training.csv and metadata.json."""
+    wall_hours: float = 36.0
 
 
 # --------------------------------------------------------------------------
@@ -320,6 +329,8 @@ def make_isaaclab_env(config: KlaskTrainingConfig) -> FastSACEnvWrapper:
 
     # --- Pre-construction overrides (mirrors train_klask.py:179-202) ---
     env_cfg.scene.num_envs = config.num_envs
+    env_cfg.seed = config.seed
+    env_cfg.sim.device = config.device
     env_cfg.sim.dt = config.sim_dt
     env_cfg.decimation = config.decimation
     env_cfg.episode_length_s = config.episode_length_s
@@ -384,6 +395,7 @@ def make_isaaclab_env(config: KlaskTrainingConfig) -> FastSACEnvWrapper:
         isaac_env = ActuatorModelWrapper(
             isaac_env,
             model_file=config.actuator_model_checkpoint,
+            device=isaac_env.unwrapped.device,
             pos_idx=slice(4, 6),  # FastSAC: own_pos
             vel_idx=slice(8, 10),  # FastSAC: own_vel
         )
@@ -419,11 +431,18 @@ def main():
     # Re-inject remaining_argv so tyro sees only the non-AppLauncher flags.
     sys.argv = [sys.argv[0]] + remaining_argv
     config = tyro.cli(KlaskTrainingConfig)
+    # AppLauncher consumes --device before tyro; keep simulator and learner aligned.
+    config = dataclasses.replace(config, device=args_cli.device)
+    if not config.obs_normalization:
+        raise ValueError("This FastSAC trainer requires observation normalization")
     device = torch.device(config.device)
+    torch.cuda.set_device(device)
     amp_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16}[config.amp_dtype] if config.amp else torch.float32
 
     # Seed
     torch.manual_seed(config.seed)
+    random.seed(config.seed)
+    np.random.seed(config.seed)
 
     # Output directory: resolve ${now:FMT} placeholders to a single timestamp
     # captured here so the date/time stamp is consistent across all paths.
@@ -435,6 +454,19 @@ def main():
     with open(output_dir / "config.yaml", "w") as f:
         yaml.safe_dump(saved_config, f)
     writer = SummaryWriter(log_dir=str(output_dir / "tb"))
+    recorder = None
+    if config.experiment_output:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "experiments"))
+        from training import TrainingRecorder
+
+        recorder = TrainingRecorder(
+            config.experiment_output,
+            "fast_sac",
+            config.seed,
+            saved_config,
+            hours=config.wall_hours,
+            argv={"app": vars(args_cli), "trainer": remaining_argv},
+        )
 
     # --- Environment ---
     env = make_isaaclab_env(config)
@@ -547,228 +579,264 @@ def main():
     print(f"Training FastSAC+HER (IsaacLab) | {config.num_envs} envs | {config.num_learning_iterations} iters")
     print(f"Output: {output_dir}")
 
-    for step in range(1, config.num_learning_iterations + 1):
-        # --- Collect ---
-        with torch.no_grad():
-            norm_obs = obs_normalizer(obs, update=True)
-            actions = _explore(norm_obs)
+    def save_experiment_checkpoint(path):
+        save_params(
+            global_step=step,
+            actor=actor,
+            qnet=critic,
+            qnet_target=critic_target,
+            log_alpha=log_alpha,
+            obs_normalizer=obs_normalizer,
+            actor_optimizer=actor_optimizer,
+            q_optimizer=q_optimizer,
+            alpha_optimizer=alpha_optimizer,
+            scaler=scaler,
+            config=config,
+            save_path=str(path),
+        )
 
-        if config.self_play:
-            # Use IsaacLab's opponent observation group (already mirrored/rotated)
-            opp_norm = obs_normalizer(opp_obs, update=False)
+    completed = False
+    step = 0
+    try:
+        for step in range(1, config.num_learning_iterations + 1):
+            # --- Collect ---
             with torch.no_grad():
-                a2_mirrored = opponent_actor.explore(opp_norm)
-            # Pass opponent actions in player frame — OpponentActionWrapper handles
-            # the 180° rotation back to world frame before the env sees them.
-            full_actions = torch.cat([actions, a2_mirrored], dim=-1)
-            next_obs, rewards, dones, infos = env.step(full_actions)
-        else:
-            next_obs, rewards, dones, infos = env.step(actions)
-        ep_reward_sum += rewards
+                norm_obs = obs_normalizer(obs, update=True)
+                actions = _explore(norm_obs)
 
-        # Store final_obs for ALL done envs (preserves ball position for HER)
-        true_next_obs = torch.where(
-            dones.unsqueeze(-1) > 0,
-            infos["final_obs"],
-            next_obs,
-        )
-        buffer.extend(
-            obs=obs,
-            next_obs=true_next_obs,
-            actions=actions,
-            rewards=rewards,
-            dones=dones,
-            truncations=infos["time_outs"],
-            ball_peg_contact=infos["ball_peg_contact"],
-        )
-        obs = next_obs
-        if config.self_play and "opponent_obs" in infos:
-            opp_obs = infos["opponent_obs"]
-
-        # Episode stats
-        ep_had_contact |= infos["ball_peg_contact"]
-        if dones.any():
-            done_ids = dones.nonzero(as_tuple=False).flatten()
-            n_done = done_ids.numel()
-            total_episodes += n_done
-            total_goals += infos["goal_scored"][done_ids].sum().item()
-            total_own_goals += infos["own_goal"][done_ids].sum().item()
-            total_peg1_in_goal += infos["peg1_in_goal"][done_ids].sum().item()
-            total_peg2_in_goal += infos["peg2_in_goal"][done_ids].sum().item()
-            total_contact_episodes += ep_had_contact[done_ids].sum().item()
             if config.self_play:
-                wins = (infos["goal_scored"][done_ids] | infos["peg2_in_goal"][done_ids]).sum().item()
-                losses = (infos["own_goal"][done_ids] | infos["peg1_in_goal"][done_ids]).sum().item()
-                current_opp_wins += wins
-                current_opp_losses += losses
-                current_opp_draws += n_done - wins - losses
-            ep_had_contact[done_ids] = False
-            ep_reward_sum[done_ids] = 0.0
+                # Use IsaacLab's opponent observation group (already mirrored/rotated)
+                opp_norm = obs_normalizer(opp_obs, update=False)
+                with torch.no_grad():
+                    a2_mirrored = opponent_actor.explore(opp_norm)
+                # Pass opponent actions in player frame — OpponentActionWrapper handles
+                # the 180° rotation back to world frame before the env sees them.
+                full_actions = torch.cat([actions, a2_mirrored], dim=-1)
+                next_obs, rewards, dones, infos = env.step(full_actions)
+            else:
+                next_obs, rewards, dones, infos = env.step(actions)
+            ep_reward_sum += rewards
 
-        # --- Update ---
-        if step > config.learning_starts:
-            large_batch = buffer.sample(per_env_batch * config.num_updates)
-            large_batch["observations"] = obs_normalizer(large_batch["observations"], update=False)
-            large_batch["next"]["observations"] = obs_normalizer(large_batch["next"]["observations"], update=False)
-            large_batch["critic_observations"] = large_batch["observations"]
-            large_batch["next"]["critic_observations"] = large_batch["next"]["observations"]
+            # Store final_obs for ALL done envs (preserves ball position for HER)
+            true_next_obs = torch.where(
+                dones.unsqueeze(-1) > 0,
+                infos["final_obs"],
+                next_obs,
+            )
+            buffer.extend(
+                obs=obs,
+                next_obs=true_next_obs,
+                actions=actions,
+                rewards=rewards,
+                dones=dones,
+                truncations=infos["time_outs"],
+                ball_peg_contact=infos["ball_peg_contact"],
+            )
+            obs = next_obs
+            if config.self_play and "opponent_obs" in infos:
+                opp_obs = infos["opponent_obs"]
 
-            samples_per_update = per_env_batch * config.num_envs
-            for i in range(config.num_updates):
-                s = i * samples_per_update
-                e = s + samples_per_update
-                mini = {
-                    "observations": large_batch["observations"][s:e],
-                    "actions": large_batch["actions"][s:e],
-                    "critic_observations": large_batch["critic_observations"][s:e],
-                    "next": {
-                        "observations": large_batch["next"]["observations"][s:e],
-                        "critic_observations": large_batch["next"]["critic_observations"][s:e],
-                        "rewards": large_batch["next"]["rewards"][s:e],
-                        "dones": large_batch["next"]["dones"][s:e],
-                        "truncations": large_batch["next"]["truncations"][s:e],
-                        "effective_n_steps": large_batch["next"]["effective_n_steps"][s:e],
-                    },
-                }
+            # Episode stats
+            ep_had_contact |= infos["ball_peg_contact"]
+            if dones.any():
+                done_ids = dones.nonzero(as_tuple=False).flatten()
+                n_done = done_ids.numel()
+                total_episodes += n_done
+                total_goals += infos["goal_scored"][done_ids].sum().item()
+                total_own_goals += infos["own_goal"][done_ids].sum().item()
+                total_peg1_in_goal += infos["peg1_in_goal"][done_ids].sum().item()
+                total_peg2_in_goal += infos["peg2_in_goal"][done_ids].sum().item()
+                total_contact_episodes += ep_had_contact[done_ids].sum().item()
+                if config.self_play:
+                    wins = (infos["goal_scored"][done_ids] | infos["peg2_in_goal"][done_ids]).sum().item()
+                    losses = (infos["own_goal"][done_ids] | infos["peg1_in_goal"][done_ids]).sum().item()
+                    current_opp_wins += wins
+                    current_opp_losses += losses
+                    current_opp_draws += n_done - wins - losses
+                ep_had_contact[done_ids] = False
+                ep_reward_sum[done_ids] = 0.0
 
-                qf_loss, alpha_loss, buf_rewards = _update_critic(
-                    mini,
-                    actor,
-                    critic,
-                    critic_target,
-                    q_optimizer,
-                    alpha_optimizer,
-                    log_alpha,
-                    target_entropy,
-                    scaler,
-                    config,
-                    device,
-                    amp_dtype,
-                )
+            # --- Update ---
+            if step > config.learning_starts:
+                large_batch = buffer.sample(per_env_batch * config.num_updates)
+                large_batch["observations"] = obs_normalizer(large_batch["observations"], update=False)
+                large_batch["next"]["observations"] = obs_normalizer(large_batch["next"]["observations"], update=False)
+                large_batch["critic_observations"] = large_batch["observations"]
+                large_batch["next"]["critic_observations"] = large_batch["next"]["observations"]
 
-                if config.num_updates > 1:
-                    do_actor = i % config.policy_frequency == 1
-                else:
-                    do_actor = step % config.policy_frequency == 0
-                if do_actor:
-                    _update_actor(
+                samples_per_update = per_env_batch * config.num_envs
+                for i in range(config.num_updates):
+                    s = i * samples_per_update
+                    e = s + samples_per_update
+                    mini = {
+                        "observations": large_batch["observations"][s:e],
+                        "actions": large_batch["actions"][s:e],
+                        "critic_observations": large_batch["critic_observations"][s:e],
+                        "next": {
+                            "observations": large_batch["next"]["observations"][s:e],
+                            "critic_observations": large_batch["next"]["critic_observations"][s:e],
+                            "rewards": large_batch["next"]["rewards"][s:e],
+                            "dones": large_batch["next"]["dones"][s:e],
+                            "truncations": large_batch["next"]["truncations"][s:e],
+                            "effective_n_steps": large_batch["next"]["effective_n_steps"][s:e],
+                        },
+                    }
+
+                    qf_loss, alpha_loss, buf_rewards = _update_critic(
                         mini,
                         actor,
                         critic,
-                        actor_optimizer,
+                        critic_target,
+                        q_optimizer,
+                        alpha_optimizer,
                         log_alpha,
+                        target_entropy,
                         scaler,
                         config,
+                        device,
                         amp_dtype,
                     )
 
-                # Soft target update
-                with torch.no_grad():
-                    src_ps = [p.data for p in critic.parameters()]
-                    tgt_ps = [p.data for p in critic_target.parameters()]
-                    torch._foreach_mul_(tgt_ps, 1.0 - config.tau)
-                    torch._foreach_add_(tgt_ps, src_ps, alpha=config.tau)
+                    if config.num_updates > 1:
+                        do_actor = i % config.policy_frequency == 1
+                    else:
+                        do_actor = step % config.policy_frequency == 0
+                    if do_actor:
+                        _update_actor(
+                            mini,
+                            actor,
+                            critic,
+                            actor_optimizer,
+                            log_alpha,
+                            scaler,
+                            config,
+                            amp_dtype,
+                        )
 
-        # --- Logging ---
-        if step % config.logging_interval == 0:
-            elapsed = time.time() - t0
-            sps = step * config.num_envs / elapsed
-            goal_rate = total_goals / max(total_episodes, 1)
-            own_goal_rate = total_own_goals / max(total_episodes, 1)
-            p1ig_rate = total_peg1_in_goal / max(total_episodes, 1)
-            p2ig_rate = total_peg2_in_goal / max(total_episodes, 1)
-            contact_rate = total_contact_episodes / max(total_episodes, 1)
-            writer.add_scalar("perf/steps_per_sec", sps, step)
-            writer.add_scalar("perf/total_episodes", total_episodes, step)
-            writer.add_scalar("episode/goal_rate", goal_rate, step)
-            writer.add_scalar("episode/own_goal_rate", own_goal_rate, step)
-            writer.add_scalar("episode/peg1_in_goal_rate", p1ig_rate, step)
-            writer.add_scalar("episode/peg2_in_goal_rate", p2ig_rate, step)
-            writer.add_scalar("episode/contact_rate", contact_rate, step)
-            writer.add_scalar("her/relabel_frac", buffer.her_relabel_frac, step)
-            writer.add_scalar("her/scored_frac", buffer.her_scored_frac, step)
-            writer.add_scalar("her/contact_frac", buffer.her_contact_sample_frac, step)
-            writer.add_scalar("train/alpha", log_alpha.exp().item(), step)
-            if step > config.learning_starts:
-                writer.add_scalar("train/critic_loss", qf_loss.item(), step)
-                writer.add_scalar("train/alpha_loss", alpha_loss.item(), step)
-                writer.add_scalar("train/buffer_rewards", buf_rewards.item(), step)
-            if config.self_play:
-                writer.add_scalar("self_play/pool_size", len(opponent_pool), step)
-                wrs = [pool_win_rate(e) for e in opponent_pool]
-                writer.add_scalar("self_play/mean_win_rate", sum(wrs) / len(wrs), step)
-                writer.add_scalar("self_play/min_win_rate", min(wrs), step)
-                writer.add_scalar("self_play/max_win_rate", max(wrs), step)
-                writer.add_scalar(
-                    "self_play/current_opp_birth_step", opponent_pool[current_opponent_idx].birth_step, step
+                    # Soft target update
+                    with torch.no_grad():
+                        src_ps = [p.data for p in critic.parameters()]
+                        tgt_ps = [p.data for p in critic_target.parameters()]
+                        torch._foreach_mul_(tgt_ps, 1.0 - config.tau)
+                        torch._foreach_add_(tgt_ps, src_ps, alpha=config.tau)
+
+            # --- Logging ---
+            if step % config.logging_interval == 0:
+                elapsed = time.time() - t0
+                sps = step * config.num_envs / elapsed
+                goal_rate = total_goals / max(total_episodes, 1)
+                own_goal_rate = total_own_goals / max(total_episodes, 1)
+                p1ig_rate = total_peg1_in_goal / max(total_episodes, 1)
+                p2ig_rate = total_peg2_in_goal / max(total_episodes, 1)
+                contact_rate = total_contact_episodes / max(total_episodes, 1)
+                writer.add_scalar("perf/steps_per_sec", sps, step)
+                writer.add_scalar("perf/total_episodes", total_episodes, step)
+                writer.add_scalar("episode/goal_rate", goal_rate, step)
+                writer.add_scalar("episode/own_goal_rate", own_goal_rate, step)
+                writer.add_scalar("episode/peg1_in_goal_rate", p1ig_rate, step)
+                writer.add_scalar("episode/peg2_in_goal_rate", p2ig_rate, step)
+                writer.add_scalar("episode/contact_rate", contact_rate, step)
+                writer.add_scalar("her/relabel_frac", buffer.her_relabel_frac, step)
+                writer.add_scalar("her/scored_frac", buffer.her_scored_frac, step)
+                writer.add_scalar("her/contact_frac", buffer.her_contact_sample_frac, step)
+                writer.add_scalar("train/alpha", log_alpha.exp().item(), step)
+                if step > config.learning_starts:
+                    writer.add_scalar("train/critic_loss", qf_loss.item(), step)
+                    writer.add_scalar("train/alpha_loss", alpha_loss.item(), step)
+                    writer.add_scalar("train/buffer_rewards", buf_rewards.item(), step)
+                if config.self_play:
+                    writer.add_scalar("self_play/pool_size", len(opponent_pool), step)
+                    wrs = [pool_win_rate(e) for e in opponent_pool]
+                    writer.add_scalar("self_play/mean_win_rate", sum(wrs) / len(wrs), step)
+                    writer.add_scalar("self_play/min_win_rate", min(wrs), step)
+                    writer.add_scalar("self_play/max_win_rate", max(wrs), step)
+                    writer.add_scalar(
+                        "self_play/current_opp_birth_step",
+                        opponent_pool[current_opponent_idx].birth_step,
+                        step,
+                    )
+                    writer.add_scalar(
+                        "self_play/current_opp_win_rate",
+                        pool_win_rate(opponent_pool[current_opponent_idx]),
+                        step,
+                    )
+                    writer.add_scalar(
+                        "self_play/num_protected",
+                        sum(1 for e in opponent_pool if e.protected),
+                        step,
+                    )
+                if step % (config.logging_interval * 10) == 0:
+                    print(
+                        f"[{step:>7d}] sps={sps:.0f} eps={total_episodes} "
+                        f"goals={total_goals} og={total_own_goals} p1ig={total_peg1_in_goal} p2ig={total_peg2_in_goal} "
+                        f"rate={goal_rate:.3f} og_rate={own_goal_rate:.3f} "
+                        f"contact={contact_rate:.3f} alpha={log_alpha.exp().item():.4f}"
+                    )
+
+            # --- Opponent pool: save snapshot ---
+            if config.self_play and step % config.opponent_save_interval == 0:
+                is_anchor = step in anchor_steps_set
+                snapshot = PoolEntry(
+                    state_dict={k: v.detach().clone() for k, v in actor.state_dict().items()},
+                    birth_step=step,
+                    protected=is_anchor,
                 )
-                writer.add_scalar(
-                    "self_play/current_opp_win_rate", pool_win_rate(opponent_pool[current_opponent_idx]), step
+                opponent_pool.append(snapshot)
+                if len(opponent_pool) > config.opponent_pool_size:
+                    candidates = [(i, e) for i, e in enumerate(opponent_pool) if not e.protected]
+                    if candidates:
+                        evict_idx = max(candidates, key=lambda x: pool_win_rate(x[1]))[0]
+                        opponent_pool.pop(evict_idx)
+                        if current_opponent_idx >= evict_idx:
+                            current_opponent_idx = max(0, current_opponent_idx - 1)
+
+            # --- Opponent pool: decay stale win-rate stats ---
+            if config.self_play and step % 10_000 == 0:
+                for e in opponent_pool:
+                    if e.wins + e.losses + e.draws > 100:
+                        e.wins //= 2
+                        e.losses //= 2
+                        e.draws //= 2
+
+            # --- Opponent pool: PFSP swap active opponent ---
+            if config.self_play and step % config.opponent_update_interval == 0:
+                opponent_pool[current_opponent_idx].wins += current_opp_wins
+                opponent_pool[current_opponent_idx].losses += current_opp_losses
+                opponent_pool[current_opponent_idx].draws += current_opp_draws
+                current_opp_wins = current_opp_losses = current_opp_draws = 0
+                weights = [(1.0 - pool_win_rate(e) + config.pfsp_epsilon) ** config.pfsp_p for e in opponent_pool]
+                current_opponent_idx = random.choices(range(len(opponent_pool)), weights=weights, k=1)[0]
+                opponent_actor.load_state_dict(opponent_pool[current_opponent_idx].state_dict)
+
+            # --- Checkpoint ---
+            if recorder is not None and recorder.tick(step * config.num_envs, step, save_experiment_checkpoint):
+                break
+            if config.save_interval > 0 and step % config.save_interval == 0:
+                save_params(
+                    global_step=step,
+                    actor=actor,
+                    qnet=critic,
+                    qnet_target=critic_target,
+                    log_alpha=log_alpha,
+                    obs_normalizer=obs_normalizer,
+                    actor_optimizer=actor_optimizer,
+                    q_optimizer=q_optimizer,
+                    alpha_optimizer=alpha_optimizer,
+                    scaler=scaler,
+                    config=config,
+                    save_path=str(output_dir / f"model_{step:07d}.pt"),
                 )
-                writer.add_scalar("self_play/num_protected", sum(1 for e in opponent_pool if e.protected), step)
-            if step % (config.logging_interval * 10) == 0:
-                print(
-                    f"[{step:>7d}] sps={sps:.0f} eps={total_episodes} "
-                    f"goals={total_goals} og={total_own_goals} p1ig={total_peg1_in_goal} p2ig={total_peg2_in_goal} "
-                    f"rate={goal_rate:.3f} og_rate={own_goal_rate:.3f} "
-                    f"contact={contact_rate:.3f} alpha={log_alpha.exp().item():.4f}"
-                )
 
-        # --- Opponent pool: save snapshot ---
-        if config.self_play and step % config.opponent_save_interval == 0:
-            is_anchor = step in anchor_steps_set
-            snapshot = PoolEntry(
-                state_dict={k: v.detach().clone() for k, v in actor.state_dict().items()},
-                birth_step=step,
-                protected=is_anchor,
-            )
-            opponent_pool.append(snapshot)
-            if len(opponent_pool) > config.opponent_pool_size:
-                candidates = [(i, e) for i, e in enumerate(opponent_pool) if not e.protected]
-                if candidates:
-                    evict_idx = max(candidates, key=lambda x: pool_win_rate(x[1]))[0]
-                    opponent_pool.pop(evict_idx)
-                    if current_opponent_idx >= evict_idx:
-                        current_opponent_idx = max(0, current_opponent_idx - 1)
-
-        # --- Opponent pool: decay stale win-rate stats ---
-        if config.self_play and step % 10_000 == 0:
-            for e in opponent_pool:
-                if e.wins + e.losses + e.draws > 100:
-                    e.wins //= 2
-                    e.losses //= 2
-                    e.draws //= 2
-
-        # --- Opponent pool: PFSP swap active opponent ---
-        if config.self_play and step % config.opponent_update_interval == 0:
-            opponent_pool[current_opponent_idx].wins += current_opp_wins
-            opponent_pool[current_opponent_idx].losses += current_opp_losses
-            opponent_pool[current_opponent_idx].draws += current_opp_draws
-            current_opp_wins = current_opp_losses = current_opp_draws = 0
-            weights = [(1.0 - pool_win_rate(e) + config.pfsp_epsilon) ** config.pfsp_p for e in opponent_pool]
-            current_opponent_idx = random.choices(range(len(opponent_pool)), weights=weights, k=1)[0]
-            opponent_actor.load_state_dict(opponent_pool[current_opponent_idx].state_dict)
-
-        # --- Checkpoint ---
-        if config.save_interval > 0 and step % config.save_interval == 0:
-            save_params(
-                global_step=step,
-                actor=actor,
-                qnet=critic,
-                qnet_target=critic_target,
-                log_alpha=log_alpha,
-                obs_normalizer=obs_normalizer,
-                actor_optimizer=actor_optimizer,
-                q_optimizer=q_optimizer,
-                alpha_optimizer=alpha_optimizer,
-                scaler=scaler,
-                config=config,
-                save_path=str(output_dir / f"model_{step:07d}.pt"),
-            )
+        completed = True
+    finally:
+        if recorder is not None:
+            recorder.finish(save_experiment_checkpoint, completed)
+        writer.close()
+        env.close()
 
     # Final save
     save_params(
-        global_step=config.num_learning_iterations,
+        global_step=step,
         actor=actor,
         qnet=critic,
         qnet_target=critic_target,
@@ -782,9 +850,11 @@ def main():
         save_path=str(output_dir / "model_final.pt"),
     )
     writer.close()
-    simulation_app.close()
     print(f"Training complete. {total_episodes} episodes, {total_goals} goals.")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        simulation_app.close()

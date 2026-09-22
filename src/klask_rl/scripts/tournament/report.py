@@ -117,7 +117,7 @@ def generate_report(directory):
         "",
         (
             "All counts and intervals use individual games. "
-            "Primary round robin: zeroed D-RSSM opponent input. "
+            "Primary D-RSSM conditions use zeroed opponent input. "
             "W/L is infinity when L=0<W and undefined when W=L=0."
         ),
         "",
@@ -125,25 +125,39 @@ def generate_report(directory):
     if missing:
         lines += ["**INCOMPLETE — missing/partial legs:** " + ", ".join(missing), ""]
     ablation = {r["condition"]: r for r in rows if r["agent"] == "D-RSSM" and r["opponent"] == "PPO-B"}
+    if ablation:
+        lines += [
+            "## D-RSSM vs PPO-B",
+            "",
+            "| Metric | Exact (diagnostic) | Zero (primary/deployable) |",
+            "|---|---:|---:|",
+        ]
+        for key in (
+            "N",
+            "W",
+            "L",
+            "D",
+            "score",
+            "decisive_ratio",
+            "score_ci_low",
+            "score_ci_high",
+            "complete",
+        ):
+            vals = [ablation.get(c, {}).get(key, "pending") for c in ("exact", "zero")]
+            lines.append(f"| {key} | {vals[0]} | {vals[1]} |")
     lines += [
-        "## D-RSSM vs PPO-B",
         "",
-        "| Metric | Exact (diagnostic) | Zero (primary/deployable) |",
-        "|---|---:|---:|",
+        "## All evaluated conditions",
+        "",
+        "| Agent | Opponent | Condition | N | W | L | D | Score | W/L | 95% score CI | Complete |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---|---|",
     ]
-    for key in (
-        "N",
-        "W",
-        "L",
-        "D",
-        "score",
-        "decisive_ratio",
-        "score_ci_low",
-        "score_ci_high",
-        "complete",
-    ):
-        vals = [ablation.get(c, {}).get(key, "pending") for c in ("exact", "zero")]
-        lines.append(f"| {key} | {vals[0]} | {vals[1]} |")
+    for row in rows:
+        lines.append(
+            f"| {row['agent']} | {row['opponent']} | {row['condition']} | {row['N']} | "
+            f"{row['W']} | {row['L']} | {row['D']} | {row['score']:.5f} | {row['decisive_ratio']} | "
+            f"[{row['score_ci_low']:.5f}, {row['score_ci_high']:.5f}] | {row['complete']} |"
+        )
     lines += [
         "",
         (

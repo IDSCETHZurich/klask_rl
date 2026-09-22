@@ -294,7 +294,12 @@ def test_plan_uses_same_checkpoint_both_conditions_and_all_pairs(tmp_path, monke
     args.device = None
     dual, _ = build_plan(args)
     assert dual["devices"] == ["cuda:0", "cuda:1"]
-    assert [j["device"] for j in dual["jobs"]] == ["cuda:0", "cuda:1", "cuda:0", "cuda:1"]
+    assert [j["device"] for j in dual["jobs"]] == [
+        "cuda:0",
+        "cuda:1",
+        "cuda:0",
+        "cuda:1",
+    ]
     assert [(j["seed"], j["games"]) for j in dual["jobs"]] == [(j["seed"], j["games"]) for j in selected["jobs"]]
     args.matches = ["not_a_match"]
     with pytest.raises(ValueError, match="Unknown matchup"):
@@ -302,7 +307,8 @@ def test_plan_uses_same_checkpoint_both_conditions_and_all_pairs(tmp_path, monke
 
 
 @pytest.mark.parametrize("interrupt", [False, True])
-def test_worker_saves_games_and_resets_state_with_autoreset(tmp_path, monkeypatch, metrics_module, interrupt):
+@pytest.mark.parametrize("collect", [False, True])
+def test_worker_saves_games_and_resets_state_with_autoreset(tmp_path, monkeypatch, metrics_module, interrupt, collect):
     gym = pytest.importorskip("gymnasium")
     from run_tournament import sha256
     from worker import run
@@ -322,7 +328,8 @@ def test_worker_saves_games_and_resets_state_with_autoreset(tmp_path, monkeypatc
             }
         )
         termination_manager = SimpleNamespace(
-            _term_names=list(metrics_module.OUTCOME_NAMES), _term_dones=torch.zeros(2, 5, dtype=torch.bool)
+            _term_names=list(metrics_module.OUTCOME_NAMES),
+            _term_dones=torch.zeros(2, 5, dtype=torch.bool),
         )
 
         def obs(self):
@@ -345,7 +352,13 @@ def test_worker_saves_games_and_resets_state_with_autoreset(tmp_path, monkeypatc
             self.termination_manager._term_dones[:, 0] = dones
             # Exercise in-place mutation by the real action wrapper chain.
             actions.mul_(10)
-            return self.obs(), torch.zeros(2), dones, torch.zeros(2, dtype=torch.bool), {}
+            return (
+                self.obs(),
+                torch.zeros(2),
+                dones,
+                torch.zeros(2, dtype=torch.bool),
+                {},
+            )
 
         def close(self):
             self.closed = True
@@ -370,7 +383,11 @@ def test_worker_saves_games_and_resets_state_with_autoreset(tmp_path, monkeypatc
     evaluation._load_ppo_opponent = lambda *args: PPO()
     evaluation._load_fast_sac_opponent = lambda *args: None
     monkeypatch.setitem(sys.modules, "evaluation", evaluation)
-    monkeypatch.setitem(sys.modules, "klask_rl.tasks.manager_based.klask_rl.eval_metrics", metrics_module)
+    monkeypatch.setitem(
+        sys.modules,
+        "klask_rl.tasks.manager_based.klask_rl.eval_metrics",
+        metrics_module,
+    )
     monkeypatch.setattr(torch.cuda, "get_device_name", lambda device: "test CPU")
     artifact = tmp_path / "artifact"
     artifact.write_text("fake checkpoint/config")
@@ -389,17 +406,44 @@ def test_worker_saves_games_and_resets_state_with_autoreset(tmp_path, monkeypatc
         "asset_sha256": {},
         "dependency_source_sha256": {},
         "evaluation_config": {"seed": 0, "env": {"seed": 0}},
-        "agents": {"D-RSSM": {**spec, "kind": "dreamer"}, "PPO-B": {**spec, "kind": "ppo"}},
-        "jobs": [{"id": "leg", "seat0": "D-RSSM", "seat1": "PPO-B", "condition": "exact", "seed": 0, "games": 5}],
+        "agents": {
+            "D-RSSM": {**spec, "kind": "dreamer"},
+            "PPO-B": {**spec, "kind": "ppo"},
+        },
+        "jobs": [
+            {
+                "id": "leg",
+                "match": "test",
+                "seat0": "D-RSSM",
+                "seat1": "PPO-B",
+                "condition": "exact",
+                "seed": 0,
+                "games": 5,
+            }
+        ],
     }
     manifest = tmp_path / "manifest.json"
+    if collect:
+        plan["jobs"][0].update(trajectory_domain="ood", trajectory_agent="D-RSSM")
     manifest.write_text(json.dumps(plan))
-    status = run(SimpleNamespace(manifest=manifest, job="leg", device="cpu"), SimpleNamespace(is_running=lambda: True))
+    status = run(
+        SimpleNamespace(manifest=manifest, job="leg", device="cpu"),
+        SimpleNamespace(is_running=lambda: True),
+    )
     assert env.closed and status == (130 if interrupt else 0)
     with np.load(tmp_path / "leg/games.npz", allow_pickle=False) as data:
         assert int(data["num_games"]) == (4 if interrupt else 5)
         assert str(data["meta_complete"]) == str(not interrupt)
         np.testing.assert_array_equal(data["env_id"], [0, 1, 0, 1] if interrupt else [0, 1, 0, 1, 0])
+    metadata = json.loads((tmp_path / "leg/metadata.json").read_text())
+    assert metadata["complete"] is not interrupt
+    assert metadata["environment_steps"] == (8 if interrupt else 12)
+    assert (tmp_path / "leg/games.csv").is_file()
+    if collect:
+        shards = list((tmp_path / "leg/trajectories").glob("*.npz"))
+        assert len(shards) == metadata["recorded_trajectory_games"] == (4 if interrupt else 5)
+        with np.load(shards[0], allow_pickle=False) as trajectory:
+            np.testing.assert_allclose(trajectory["action"], [[1, 1, 0.2, 0.2]] * 2)
     # Next observation uses the unmodified normalized commands, and an
     # auto-reset at the second step clears both action slots on the third call.
     torch.testing.assert_close(dreamer.calls[1][0], torch.tensor([[1, 1, 0.2, 0.2]] * 2))

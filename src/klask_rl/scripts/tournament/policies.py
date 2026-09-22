@@ -4,20 +4,31 @@ import torch
 
 
 class DreamerPolicy:
-    def __init__(self, agent, num_envs, seat, opponent_input):
-        if opponent_input not in ("exact", "zero"):
+    def __init__(self, agent, num_envs, seat, opponent_input, seed=0, action_timing="aligned"):
+        if opponent_input not in ("exact", "random", "zero"):
             raise ValueError(f"Unknown opponent input: {opponent_input}")
+        if action_timing not in ("aligned", "legacy"):
+            raise ValueError(f"Unknown action timing: {action_timing}")
         self.agent = agent
         self.seat = seat
         self.opponent_input = opponent_input
         self.state = agent.get_initial_state(num_envs)
+        self.action_timing = action_timing
+        self.delayed_other = None
+        self.random_generator = torch.Generator(device=self.state["prev_action"].device).manual_seed(seed)
 
     def action(self, observations, is_first, previous_actions):
         own = previous_actions[:, 2 * self.seat : 2 * self.seat + 2]
         other_seat = 1 - self.seat
         other = previous_actions[:, 2 * other_seat : 2 * other_seat + 2]
+        if self.action_timing == "legacy":
+            delayed = torch.zeros_like(other) if self.delayed_other is None else self.delayed_other
+            self.delayed_other = other.masked_fill(is_first[:, None], 0).clone()
+            other = delayed
         if self.opponent_input == "zero":
             other = torch.zeros_like(other)
+        elif self.opponent_input == "random":
+            other = torch.rand(other.shape, device=other.device, generator=self.random_generator) * 2 - 1
         wm_action = torch.cat((own, other), -1) if self.agent.opponent_separation else own
         # act() consumes state.prev_action BEFORE it reads obs.opponent_action.
         # Both slots must describe the transition that produced this observation.

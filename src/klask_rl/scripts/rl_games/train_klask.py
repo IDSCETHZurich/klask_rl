@@ -18,27 +18,59 @@ from isaaclab.app import AppLauncher
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RL-Games.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
+parser.add_argument(
+    "--video_length",
+    type=int,
+    default=200,
+    help="Length of the recorded video (in steps).",
+)
+parser.add_argument(
+    "--video_interval",
+    type=int,
+    default=2000,
+    help="Interval between video recordings (in steps).",
+)
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="Klask-Rl-v0", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument(
-    "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
+    "--distributed",
+    action="store_true",
+    default=False,
+    help="Run training with multiple GPUs or nodes.",
 )
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--sigma", type=str, default=None, help="The policy's initial standard deviation.")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 
 parser.add_argument(
-    "--config", type=str, default=None, help="config.yaml file, rl_games_cfg_entry_point used when not provided."
+    "--config",
+    type=str,
+    default=None,
+    help="config.yaml file, rl_games_cfg_entry_point used when not provided.",
 )
-parser.add_argument("--full_experiment_name", type=str, default=None, help="Experiment name used for logs.")
+parser.add_argument(
+    "--full_experiment_name",
+    type=str,
+    default=None,
+    help="Experiment name used for logs.",
+)
 parser.add_argument("--wandb-project-name", type=str, default=None, help="the wandb's project name")
-parser.add_argument("--wandb-entity", type=str, default=None, help="the entity (team) of wandb's project")
+parser.add_argument(
+    "--wandb-entity",
+    type=str,
+    default=None,
+    help="the entity (team) of wandb's project",
+)
 parser.add_argument("--training_curriculum", action="store_true", default=False)
 parser.add_argument("--mode", type=int, default=None, help="mode for training curriculum")
 parser.add_argument("--project_folder", type=str, default=None, help="mode for training curriculum")
+parser.add_argument(
+    "--experiment-output",
+    default=None,
+    help="CSV-first scratch baseline output directory",
+)
+parser.add_argument("--wall-hours", type=float, default=36, help="Per-seed budget for experiment mode")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -67,7 +99,7 @@ from datetime import datetime
 
 import gymnasium as gym
 import isaaclab_tasks  # noqa: F401
-from omegaconf import OmegaConf
+import torch
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -96,6 +128,7 @@ from klask_rl.tasks.manager_based.klask_rl.wrappers import (
     configure_domain_randomization,
 )
 from klask_rl_games import KlaskRlAlgoObserver, KlaskRlRunner
+from omegaconf import OmegaConf
 from rl_games.common import env_configurations, vecenv
 
 
@@ -110,6 +143,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent_cfg.update(config)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    if str(env_cfg.sim.device).startswith("cuda"):
+        torch.cuda.set_device(env_cfg.sim.device)
     if args_cli.full_experiment_name is not None:
         agent_cfg["params"]["config"]["full_experiment_name"] = args_cli.full_experiment_name
 
@@ -131,6 +166,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO]: Loading model checkpoint from config: {resume_path}")
     else:
         resume_path = None
+    if args_cli.experiment_output and resume_path is not None:
+        raise ValueError("Baseline learning curves must start from scratch; remove all checkpoint initialization")
     train_sigma = float(args_cli.sigma) if args_cli.sigma is not None else None
 
     # multi-gpu training config
@@ -152,6 +189,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # specify directory for logging runs
     log_dir = agent_cfg["params"]["config"].get("full_experiment_name", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+    if args_cli.experiment_output:
+        log_root_path = os.path.abspath(args_cli.experiment_output)
+        log_dir = "trainer"
     # set directory into agent config
     # logging directory path: <train_dir>/<full_experiment_name>
     agent_cfg["params"]["config"]["train_dir"] = log_root_path
@@ -244,7 +284,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     #    VelocityScaleWrapper so it sees physical units, not [-1, 1].
     actuator_cfg = env_block.get("actuator_model")
     if isinstance(actuator_cfg, dict) and actuator_cfg.get("enable", False):
-        env = ActuatorModelWrapper(env, model_file=actuator_cfg.get("checkpoint"))
+        env = ActuatorModelWrapper(env, model_file=actuator_cfg.get("checkpoint"), device=env.unwrapped.device)
 
     # 3. Velocity scaling: [-1, 1] (policy output) -> [-max_velocity, max_velocity] m/s.
     max_acceleration = env_block.get("max_acceleration")
@@ -308,19 +348,43 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 **kwargs,
             ),
         )
-        env_configurations.register("rlgpu", {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: env})
+        env_configurations.register(
+            "rlgpu",
+            {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: env},
+        )
 
     else:
         vecenv.register(
             "IsaacRlgWrapper",
             lambda config_name, num_actors, **kwargs: RlGamesGpuEnv(config_name, num_actors, **kwargs),
         )
-        env_configurations.register("rlgpu", {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: env})
+        env_configurations.register(
+            "rlgpu",
+            {"vecenv_type": "IsaacRlgWrapper", "env_creator": lambda **kwargs: env},
+        )
 
     # set number of actors into agent config
     agent_cfg["params"]["config"]["num_actors"] = env.unwrapped.num_envs
     # create runner from rl-games
-    runner = KlaskRlRunner(KlaskRlAlgoObserver())
+    observer = KlaskRlAlgoObserver(raw_outcomes=args_cli.experiment_output is not None)
+    if args_cli.experiment_output:
+        from pathlib import Path
+
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "experiments"))
+        from training import PPOExperimentObserver, TrainingRecorder
+
+        observer = PPOExperimentObserver(
+            observer,
+            TrainingRecorder(
+                args_cli.experiment_output,
+                "ppo",
+                agent_cfg["params"]["seed"],
+                agent_cfg,
+                hours=args_cli.wall_hours,
+                argv={"cli": vars(args_cli), "hydra": hydra_args},
+            ),
+        )
+    runner = KlaskRlRunner(observer)
     runner.load(agent_cfg)
 
     # create complete config and log to wandb:
@@ -347,16 +411,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     runner.reset()
     start_time = time.time()
     interrupted = False
+    completed = False
     try:
         # train the agent
         run_args = {"train": True, "play": False, "sigma": train_sigma}
         if resume_path is not None:
             run_args["checkpoint"] = resume_path
         runner.run(run_args)
+        completed = True
     except KeyboardInterrupt:
         interrupted = True
         print("\n[INFO] Training interrupted by user (Ctrl+C).")
     finally:
+        if args_cli.experiment_output:
+            observer.finish(completed)
         print(f"Total training time: {time.time() - start_time}")
 
         # log model checkpoint to wandb and finish the run:
@@ -366,7 +434,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             else:
                 model = wandb.Artifact("model", type="model")
                 model.add_file(
-                    os.path.join(log_root_path, log_dir, "nn", f"{agent_cfg['params']['config']['name']}.pth")
+                    os.path.join(
+                        log_root_path,
+                        log_dir,
+                        "nn",
+                        f"{agent_cfg['params']['config']['name']}.pth",
+                    )
                 )
                 wandb.log_artifact(model)
                 wandb.finish()

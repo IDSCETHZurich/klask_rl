@@ -6,9 +6,8 @@ from rl_games.torch_runner import Runner, _override_sigma, _restore
 
 
 class KlaskRlAlgoObserver(AlgoObserver):
-
-    def __init__(self):
-        pass
+    def __init__(self, raw_outcomes=False):
+        self.raw_outcomes = raw_outcomes
 
     def after_init(self, algo):
         self.algo = algo
@@ -35,7 +34,7 @@ class KlaskRlAlgoObserver(AlgoObserver):
                 # only log scalars
                 if isinstance(v, float) or isinstance(v, int) or (isinstance(v, torch.Tensor) and len(v.shape) == 0):
                     self.direct_info[k] = v
-                if k == "episode":
+                if k == "episode" and not self.raw_outcomes:
                     # Values are fractions (mean over all envs), convert to counts
                     # by multiplying by num_envs so we push the right number of
                     # entries into the rolling score buffer.
@@ -54,6 +53,28 @@ class KlaskRlAlgoObserver(AlgoObserver):
                             self.mean_scores.update(torch.ones(count, dtype=torch.float).to(self.algo.ppo_device))
                         elif key == "Episode_Termination/time_out":
                             self.mean_scores.update(torch.zeros(count, dtype=torch.float).to(self.algo.ppo_device))
+        if self.raw_outcomes and len(done_indices):
+            # Baseline experiments must not synthesize one result from each
+            # zero-valued aggregate log term. Count one canonical outcome per
+            # finished game, with the same priority as tournament evaluation.
+            manager = self.algo.vec_env.env.unwrapped.termination_manager
+            flags = manager._term_dones[done_indices.flatten().long()]
+            unresolved = torch.ones(len(flags), dtype=torch.bool, device=flags.device)
+            scores = torch.zeros(len(flags), device=flags.device)
+            for name, score in (
+                ("goal_scored", 1),
+                ("goal_conceded", -1),
+                ("player_in_goal", -1),
+                ("opponent_in_goal", 1),
+                ("time_out", 0),
+            ):
+                if name in manager._term_names:
+                    selected = unresolved & flags[:, manager._term_names.index(name)]
+                    scores[selected] = score
+                    unresolved &= ~selected
+            if unresolved.any():
+                raise RuntimeError("PPO self-play encountered an unrecognized terminal outcome")
+            self.mean_scores.update(scores.to(self.algo.ppo_device))
 
     def after_clear_stats(self):
         # clear stored buffers
@@ -99,7 +120,6 @@ class KlaskRlAlgoObserver(AlgoObserver):
 
 
 class KlaskRlSelfPlayManager(SelfPlayManager):
-
     def update(self, algo):
         self.updates_num += 1
         if self.check_scores:
@@ -114,7 +134,13 @@ class KlaskRlSelfPlayManager(SelfPlayManager):
             mean_scores = data.get_mean()
             mean_rewards = algo.game_rewards.get_mean()
             if mean_scores > self.update_score:
-                print("Mean scores: ", mean_scores, " mean rewards: ", mean_rewards, " updating weights")
+                print(
+                    "Mean scores: ",
+                    mean_scores,
+                    " mean rewards: ",
+                    mean_rewards,
+                    " updating weights",
+                )
 
                 algo.clear_stats()
                 self.writter.add_scalar("selfplay/iters_update_weigths", self.updates_num, algo.frame)
@@ -124,7 +150,6 @@ class KlaskRlSelfPlayManager(SelfPlayManager):
 
 
 class KlaskRlRunner(Runner):
-
     def run_train(self, args):
         """Run the training procedure from the algorithm passed in.
 
