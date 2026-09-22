@@ -57,6 +57,11 @@ Training logs and checkpoints are written to the `logdir` set in the config (by 
 
 ## Evaluation
 
+For the reconstructed PPO-B / D-RSSM / FastSAC round robin and the exact-versus-zero
+opponent-action ablation, use the [tournament runner](../tournament/README.md).
+It saves individual games, balances board seats, and reports game-level bootstrap
+intervals with zeroed opponent input as the primary result.
+
 `evaluate_dreamer.py` plays a trained Dreamer policy head-to-head against an opponent and records the outcome over many games:
 
 ```bash

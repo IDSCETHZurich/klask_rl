@@ -1,0 +1,19 @@
+# Paths are relative to src/klask_rl (mounted at /workspace/klask_rl in Docker).
+games: 10000
+num_envs: 128
+episode_length_s: 30.0
+seed: 0
+bootstrap_samples: 10000
+bootstrap_seed: 2026
+agents:
+  D-RSSM:
+    kind: dreamer
+    checkpoint: logs/dreamer/training/2026-05-09/09-16-19/latest.pt
+    config: logs/dreamer/training/2026-05-09/09-16-19/.hydra/config.yaml
+  PPO-B:
+    kind: ppo
+    checkpoint: logs/rl_games/klask/new_agent_from_pretrained/new_AM/export/klask_ppo_nn_v1.1.pth
+    config: logs/rl_games/klask/new_agent_from_pretrained/new_AM/params/agent.yaml
+  FastSAC:
+    kind: fast_sac
+    checkpoint: logs/fast_sac_isaaclab/training/2026-05-17/11-25-36/model_final.pt

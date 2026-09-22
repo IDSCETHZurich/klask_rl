@@ -65,6 +65,12 @@ def _load_h2h_row(npz_path: str) -> dict:
     opponent_wins = _scalar("term_count_opponent_scored") + _scalar("term_count_player_in_goal")
     draws = _scalar("term_count_time_expired")
     total_games = _scalar("num_games")
+    if _scalar("outcome_schema_version") >= 2:
+        # Raw termination counters can overlap; each game has one outcome.
+        outcomes = data["outcome"]
+        player_wins = int(np.isin(outcomes, [0, 3]).sum())
+        opponent_wins = int(np.isin(outcomes, [1, 2]).sum())
+        draws = int((outcomes == 4).sum())
 
     if "meta_player_checkpoint" in data.files:
         checkpoint = str(data["meta_player_checkpoint"])
