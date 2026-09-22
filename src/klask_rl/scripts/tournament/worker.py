@@ -9,6 +9,36 @@ from pathlib import Path
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
+def configuration_for_job(plan, job):
+    """Retarget every resolved model/environment device, not only env.device."""
+    from omegaconf import OmegaConf
+
+    device = job.get("device", plan["device"])
+
+    def remap(value):
+        if isinstance(value, dict):
+            return {
+                key: (
+                    device
+                    if key in ("device", "sim_device", "train_device")
+                    else [device]
+                    if key == "train_devices"
+                    else remap(item)
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [remap(item) for item in value]
+        return value
+
+    cfg = OmegaConf.create(remap(plan["evaluation_config"]))
+    cfg.device = device
+    cfg.env.device = device
+    cfg.seed = job["seed"]
+    cfg.env.seed = job["seed"]
+    return cfg
+
+
 def main():
     from isaaclab.app import AppLauncher
 
@@ -17,6 +47,9 @@ def main():
     parser.add_argument("--job", required=True)
     AppLauncher.add_app_launcher_args(parser)
     args = parser.parse_args()
+    # Same renderer limits as train_dreamer.py: each process must not enable
+    # multi-GPU rendering while the other GPU is running a separate leg.
+    sys.argv += ["--/renderer/multiGpu/enabled=false", "--/renderer/multiGpu/maxGpuCount=1"]
     launcher = AppLauncher(args)
     try:
         return run(args, launcher.app)
@@ -37,6 +70,8 @@ def run(args, simulation_app):
     from run_tournament import sha256
     from tqdm import tqdm
 
+    if args.device.startswith("cuda:"):
+        torch.cuda.set_device(args.device)
     plan = json.loads(args.manifest.read_text())
     job = next(j for j in plan["jobs"] if j["id"] == args.job)
     root = Path(plan["project_root"])
@@ -49,7 +84,7 @@ def run(args, simulation_app):
     )
     from klask_rl.tasks.manager_based.klask_rl.eval_metrics import EvalMetricsTracker
 
-    if args.device != plan["device"]:
+    if args.device != job.get("device", plan["device"]):
         raise ValueError("Worker device differs from manifest")
     for path, expected in plan["source_sha256"].items():
         if sha256(root / path) != expected:
@@ -66,9 +101,7 @@ def run(args, simulation_app):
         for key in ("checkpoint", "config"):
             if key in spec and sha256(spec[key]) != spec[key + "_sha256"]:
                 raise ValueError(f"{name} {key} changed after preflight")
-    cfg = OmegaConf.create(plan["evaluation_config"])
-    cfg.seed = job["seed"]
-    cfg.env.seed = job["seed"]
+    cfg = configuration_for_job(plan, job)
     actuator = cfg.env.get("actuator_model", {})
     if actuator.get("enable") and sha256(actuator.checkpoint) != actuator.sha256:
         raise ValueError("Actuator checkpoint changed after preflight")
@@ -110,6 +143,7 @@ def run(args, simulation_app):
                 "torch_version": torch.__version__,
                 "numpy_version": np.__version__,
                 "cuda_version": torch.version.cuda,
+                "device": str(device),
                 "device_name": torch.cuda.get_device_name(device),
             },
             extra_arrays={"env_id": env_ids, "episode_id": episode_ids},

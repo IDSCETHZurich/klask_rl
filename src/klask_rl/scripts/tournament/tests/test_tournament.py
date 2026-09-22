@@ -281,6 +281,25 @@ def test_plan_uses_same_checkpoint_both_conditions_and_all_pairs(tmp_path, monke
     assert plan["agents"]["PPO-B"]["checkpoint"].endswith("new_AM/export/klask_ppo_nn_v1.1.pth")
     assert list(plan["agents"]) == ["D-RSSM", "PPO-B", "FastSAC"]
 
+    args.matches = ["drssm_ppo_exact", "drssm_ppo_zero"]
+    args.games = 200
+    selected, blockers = build_plan(args)
+    assert [m["id"] for m in selected["matches"]] == args.matches
+    assert len(selected["jobs"]) == 4
+    assert all(j["games"] == 100 for j in selected["jobs"])
+    assert sum(j["games"] for j in selected["jobs"]) == 400
+    assert set(selected["agents"]) == {"D-RSSM", "PPO-B"}
+    assert selected["agents"]["D-RSSM"]["checkpoint"].endswith("09-16-19/latest.pt")
+    assert not any("FastSAC" in reason for reason in blockers)
+    args.device = None
+    dual, _ = build_plan(args)
+    assert dual["devices"] == ["cuda:0", "cuda:1"]
+    assert [j["device"] for j in dual["jobs"]] == ["cuda:0", "cuda:1", "cuda:0", "cuda:1"]
+    assert [(j["seed"], j["games"]) for j in dual["jobs"]] == [(j["seed"], j["games"]) for j in selected["jobs"]]
+    args.matches = ["not_a_match"]
+    with pytest.raises(ValueError, match="Unknown matchup"):
+        build_plan(args)
+
 
 @pytest.mark.parametrize("interrupt", [False, True])
 def test_worker_saves_games_and_resets_state_with_autoreset(tmp_path, monkeypatch, metrics_module, interrupt):

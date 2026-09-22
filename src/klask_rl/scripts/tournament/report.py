@@ -146,7 +146,11 @@ def generate_report(directory):
         lines.append(f"| {key} | {vals[0]} | {vals[1]} |")
     lines += [
         "",
-        "## Complete primary round robin (row agent perspective)",
+        (
+            "## Complete primary round robin (row agent perspective)"
+            if sum(m["primary"] for m in plan["matches"]) == 3
+            else "## Selected primary matchups (row agent perspective)"
+        ),
         "",
         "| Agent | Opponent | N | W | L | D | Score | W/L | 95% score CI | Complete |",
         "|---|---|---:|---:|---:|---:|---:|---:|---|---|",

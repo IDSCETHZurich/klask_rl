@@ -6,6 +6,7 @@ import importlib.metadata
 import importlib.util
 import json
 import pickle
+import re
 import shlex
 import signal
 import subprocess
@@ -17,6 +18,65 @@ from omegaconf import OmegaConf
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parents[1]
+
+MATCHES = [
+    {
+        "id": "drssm_ppo_exact",
+        "a": "D-RSSM",
+        "b": "PPO-B",
+        "condition": "exact",
+        "primary": False,
+    },
+    {
+        "id": "drssm_ppo_zero",
+        "a": "D-RSSM",
+        "b": "PPO-B",
+        "condition": "zero",
+        "primary": True,
+    },
+    {
+        "id": "drssm_fastsac_zero",
+        "a": "D-RSSM",
+        "b": "FastSAC",
+        "condition": "zero",
+        "primary": True,
+    },
+    {
+        "id": "fastsac_ppo",
+        "a": "FastSAC",
+        "b": "PPO-B",
+        "condition": "none",
+        "primary": True,
+    },
+]
+
+
+def selected_devices(args):
+    devices = getattr(args, "devices", None)
+    single = getattr(args, "device", None)
+    if devices is not None and single is not None:
+        raise ValueError("Use either --devices or --device")
+    devices = list(devices) if devices is not None else ([single] if single else ["cuda:0", "cuda:1"])
+    if not devices or any(re.fullmatch(r"cuda:(0|[1-9][0-9]*)", device) is None for device in devices):
+        raise ValueError("Devices must be explicit CUDA indices, e.g. --devices cuda:0 cuda:1")
+    if len(set(devices)) != len(devices):
+        raise ValueError("Duplicate GPU indices would schedule two workers on the same GPU")
+    return devices
+
+
+def gpu_blockers(devices):
+    import torch
+
+    count = torch.cuda.device_count()
+    missing = [device for device in devices if int(device.split(":")[1]) >= count]
+    if missing:
+        return [
+            (
+                f"Requested GPU(s) unavailable: {', '.join(missing)}; this container sees {count} CUDA GPU(s). "
+                "Expose both GPUs to Docker, or use --devices cuda:0 for a single-GPU run."
+            )
+        ]
+    return []
 
 
 def sha256(path):
@@ -81,6 +141,12 @@ def checkpoint_info(kind, path):
 
 
 def build_plan(args):
+    devices = selected_devices(args)
+    selected = getattr(args, "matches", None)
+    if selected and set(selected) - {m["id"] for m in MATCHES}:
+        raise ValueError("Unknown matchup selection")
+    matches = [dict(m) for m in MATCHES if not selected or m["id"] in selected]
+    required_agents = {name for m in matches for name in (m["a"], m["b"])} | {"D-RSSM"}
     root = args.project_root.resolve()
     config = yaml.safe_load(args.config.read_text())
     games = args.games if args.games is not None else int(config["games"])
@@ -94,6 +160,8 @@ def build_plan(args):
         raise ValueError("Configure exactly D-RSSM, PPO-B and FastSAC; Stock DreamerV3 has no checkpoint yet")
     blockers, agents = [], {}
     for name, spec in config["agents"].items():
+        if name not in required_agents:
+            continue
         agent = dict(spec)
         for key in ("checkpoint", "config"):
             if key not in agent:
@@ -130,17 +198,17 @@ def build_plan(args):
             raise ValueError("D-RSSM training config must enable opponent_separation")
         # Keep only evaluation dependencies, while resolving references against
         # the original config. No init_checkpoint or training load_path is used.
-        cfg.device = args.device
+        cfg.device = devices[0]
         cfg.seed = seed
         evaluation_config = {
             key: OmegaConf.to_container(cfg[key], resolve=True) if OmegaConf.is_config(cfg[key]) else cfg[key]
             for key in ("model", "env", "opponent_separation")
         }
-        evaluation_config.update(device=args.device, seed=seed)
+        evaluation_config.update(device=devices[0], seed=seed)
         evaluation_config["model"]["compile"] = False
         env = evaluation_config["env"]
         env["episode_length_s"] = duration
-        env["device"] = args.device
+        env["device"] = devices[0]
         # Shared protocol: symmetric reset area, all scoring terminations,
         # deterministic dynamics parameters (no observation noise or DR).
         env["ball_reset_position_x"] = [-0.15, 0.15]
@@ -176,8 +244,8 @@ def build_plan(args):
         if env["task"] != "isaaclab_Klask-Rl-Dreamer-Sprite-v0":
             raise ValueError("This protocol is validated for the supplied sprite Dreamer training config")
 
-    ppo_config = Path(agents["PPO-B"]["config"])
-    if ppo_config.is_file():
+    ppo_config = Path(agents["PPO-B"]["config"]) if "PPO-B" in agents else None
+    if ppo_config is not None and ppo_config.is_file():
         ppo = yaml.safe_load(ppo_config.read_text())
         if ppo["params"]["network"]["mlp"]["units"] != [256, 128, 64]:
             raise ValueError("PPO-B config does not match the checkpoint's network")
@@ -201,6 +269,8 @@ def build_plan(args):
             "klask_her/agents/fast_sac.py",
         ),
     ):
+        if package == "FastSAC" and "FastSAC" not in required_agents:
+            continue
         if not any((p / required).is_file() for p in candidates):
             blockers.append(
                 f"Missing {package} submodule/mount; expected {required} under " + ", ".join(map(str, candidates))
@@ -221,36 +291,6 @@ def build_plan(args):
         if not list(assets.glob(pattern)):
             blockers.append(f"Missing sprite assets: {assets / pattern}")
 
-    matches = [
-        {
-            "id": "drssm_ppo_exact",
-            "a": "D-RSSM",
-            "b": "PPO-B",
-            "condition": "exact",
-            "primary": False,
-        },
-        {
-            "id": "drssm_ppo_zero",
-            "a": "D-RSSM",
-            "b": "PPO-B",
-            "condition": "zero",
-            "primary": True,
-        },
-        {
-            "id": "drssm_fastsac_zero",
-            "a": "D-RSSM",
-            "b": "FastSAC",
-            "condition": "zero",
-            "primary": True,
-        },
-        {
-            "id": "fastsac_ppo",
-            "a": "FastSAC",
-            "b": "PPO-B",
-            "condition": "none",
-            "primary": True,
-        },
-    ]
     jobs = []
     for match in matches:
         for leg in (0, 1):
@@ -264,6 +304,7 @@ def build_plan(args):
                     "condition": match["condition"],
                     "seed": seed + leg,
                     "games": games // 2 + (games % 2 if leg == 0 else 0),
+                    "device": devices[len(jobs) % len(devices)],
                 }
             )
     # Source hashes work inside the container even when .git is not mounted.
@@ -289,7 +330,8 @@ def build_plan(args):
         "agents": agents,
         "games_per_match": games,
         "num_envs": num_envs,
-        "device": args.device,
+        "device": devices[0],
+        "devices": devices,
         "evaluation_config": evaluation_config,
         "bootstrap_samples": int(config["bootstrap_samples"]),
         "bootstrap_seed": int(config["bootstrap_seed"]),
@@ -310,8 +352,16 @@ def main():
     parser.add_argument("--config", type=Path, default=SCRIPT_DIR / "config.yaml")
     parser.add_argument("--project-root", type=Path, default=PROJECT_DIR)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--device", default="cuda:0")
+    gpu_args = parser.add_mutually_exclusive_group()
+    gpu_args.add_argument("--devices", nargs="+", help="Worker GPUs (default: cuda:0 cuda:1); one leg per GPU")
+    gpu_args.add_argument("--device", help="Single-GPU shorthand, e.g. --device cuda:0")
     parser.add_argument("--games", type=int)
+    parser.add_argument(
+        "--matches",
+        nargs="+",
+        choices=[m["id"] for m in MATCHES],
+        help="Run only these matchup/conditions; --games applies to each selected condition.",
+    )
     parser.add_argument("--num-envs", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--episode-length-s", type=float)
@@ -324,6 +374,7 @@ def main():
     )
     args = parser.parse_args()
     plan, blockers = build_plan(args)
+    blockers.extend(gpu_blockers(plan["devices"]))
     print(
         json.dumps(
             {"run_id": plan["run_id"], "jobs": plan["jobs"], "blockers": blockers},
@@ -347,8 +398,10 @@ def main():
     else:
         manifest_path.write_text(json.dumps(plan, indent=2) + "\n")
     from report import generate_report
+    from scheduler import WorkerFailed, run_jobs
 
     signal.signal(signal.SIGTERM, signal.default_int_handler)
+    pending = []
     for job in plan["jobs"]:
         job_dir = output / job["id"]
         job_dir.mkdir(exist_ok=True)
@@ -364,6 +417,10 @@ def main():
                     and int(data["num_games"]) == job["games"]
                 ):
                     continue
+        pending.append(job)
+
+    def start(job):
+        job_dir = output / job["id"]
         command = [
             sys.executable,
             str(SCRIPT_DIR / "worker.py"),
@@ -374,32 +431,29 @@ def main():
             "--headless",
             "--enable_cameras",
             "--device",
-            args.device,
+            job["device"],
         ]
         print(shlex.join(command), flush=True)
         print(f"Progress log: {job_dir / 'run.log'}", flush=True)
         with (job_dir / "run.log").open("w") as log:
-            process = subprocess.Popen(
+            return subprocess.Popen(
                 command, cwd=plan["project_root"], stdout=log, stderr=subprocess.STDOUT, start_new_session=True
             )
-            try:
-                returncode = process.wait()
-            except KeyboardInterrupt:
-                # subprocess.run() kills the worker on interruption. Give this
-                # worker time to atomically save its games and close Isaac Sim.
-                if process.poll() is None:
-                    process.send_signal(signal.SIGINT)
-                try:
-                    process.wait(timeout=30)
-                except (subprocess.TimeoutExpired, KeyboardInterrupt):
-                    process.kill()
-                    process.wait()
-                generate_report(output)
-                return 130
+
+    def finished(job, returncode):
+        print(f"{job['id']} on {job['device']}: exit {returncode}", flush=True)
+        generate_report(output)
+
+    try:
+        run_jobs(pending, start, finished)
+    except KeyboardInterrupt:
+        return 130
+    except WorkerFailed as exc:
+        raise SystemExit(f"{exc}. Inspect the leg's run.log. Partial report saved.") from exc
+    finally:
+        # run_jobs has already stopped/reaped active workers, including on a
+        # launch error. Collect the final partial files after that cleanup.
         report = generate_report(output)
-        if returncode:
-            raise SystemExit(f"{job['id']} failed ({returncode}); inspect {job_dir / 'run.log'}. Partial report saved.")
-    report = generate_report(output)
     print((output / "report.md").read_text())
     return 0 if report["complete"] else 1
 

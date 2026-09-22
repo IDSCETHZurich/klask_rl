@@ -50,18 +50,49 @@ Absolute `/workspace/klask_rl/...` paths in saved configs are remapped to this
 root; unrelated absolute paths are never guessed. If the exact actuator file
 is elsewhere, supply `--actuator-checkpoint /actual/path/to/the/same/model.pt`.
 
-Useful overrides: `--device cuda:0`, `--num-envs 128`, `--games 10000`,
+Useful overrides: `--devices cuda:0 cuda:1`, `--num-envs 128`, `--games 10000`,
 `--seed 0`, and `--episode-length-s 30`. GPU indices are those **inside** the
-container. The run needs one GPU; training-time multi-GPU settings are disabled.
+container. **The default is two GPUs: `cuda:0` and `cuda:1`.** The launcher runs
+one independent leg per GPU, with at most two workers alive at a time. Each
+worker keeps its simulation and policies on its assigned device; this does not
+split a single policy across GPUs. Training-time multi-GPU model replicas and
+multi-GPU rendering are disabled. Preflight checks both CUDA devices exist.
+For a single GPU, pass `--devices cuda:0` (or the shorthand `--device cuda:0`).
+`--num-envs` is the number of environments **per worker**, so running two workers
+uses twice that many environments overall. CPU sprite rendering and memory
+bandwidth may limit speedup.
+
+To evaluate only D-RSSM vs PPO-B with the default `latest.pt`, run:
+
+```bash
+/workspace/isaaclab/_isaac_sim/python.sh scripts/tournament/run_tournament.py \
+  --config scripts/tournament/config.yaml \
+  --matches drssm_ppo_exact drssm_ppo_zero \
+  --games 200 --num-envs 8 \
+  --output logs/tournament/drssm_ppo_latest_200
+```
+
+This runs 200 games **per condition** (400 total), with 100 games per board
+seat. Use only `--matches drssm_ppo_zero` for a 200-game primary-only run.
+Unselected matchups are not run and do not appear as missing in the report;
+this selection does not require the FastSAC checkpoint or submodule.
+
 Compilation is disabled for evaluation. Progress is written to each leg's
 `run.log`, whose path the launcher prints (use `tail -f` in another terminal).
 
 To resume, repeat the exact full-run command with `--resume`. Checkpoint,
-config, source and package fingerprints must still match. Complete legs are
+config, source, GPU assignments and package fingerprints must still match. Complete legs are
 skipped; partial legs restart from their original seed and replace that leg's
 partial result, so games are never appended twice. Ordinary interruptions and
 exceptions save completed games; an uncatchable process kill can lose games
 since the last periodic save (every approximately 1,000 accepted games).
+GPU assignments are saved in the manifest before launching; completion order
+and skipped completed legs do not change them. Only the parent writes summary
+reports, so parallel workers cannot overwrite each other's reports. On failure
+or Ctrl-C, no further jobs start and active workers get a shared 30-second grace
+period to save and exit before they are killed. Use a fresh output directory
+when switching an older run to this implementation, and finish or stop existing
+evaluations before pulling code changes into their mounted directory.
 
 ## Protocol
 
