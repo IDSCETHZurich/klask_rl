@@ -17,6 +17,11 @@ Usage in ``train_dreamer.py``::
 Call ``wrapper.maybe_update_opponent(agent)`` periodically (e.g. at
 evaluation time).  It will only copy weights when the score threshold is
 exceeded.
+
+Scheduled opponents (controlled opponent-switch experiments) replace the
+score-gated update: ``load_opponent_agent`` installs an external frozen Dreamer
+snapshot, ``use_ppo_opponent`` a frozen rl_games PPO policy, and
+``set_schedule_phase`` tags every stored transition with ``opp_phase``.
 """
 
 import copy
@@ -62,10 +67,20 @@ class DreamerSelfPlayWrapper(Wrapper):
         games_to_track: int = 4096,
         compile: bool = False,
         opponent_action_method: str | None = None,
+        emit_latents: bool = True,
+        explore_rho: float = 0.0,
     ):
         super().__init__(env)
         self._eval_mode = eval_mode
+        # AR(1) exploration noise of the opponent's sampled actions (as model.explore_noise for the learner;
+        # 0 = white noise). State per env, restarted at the opponent's episode starts.
+        self._explore_rho = float(explore_rho)
+        self._opp_noise = None
+        self._opp_noise_reset = None
         self._compile = compile
+        # Store the opponent's RSSM state in replay (opp_stoch/opp_deter). Not needed
+        # when imagination recomputes it (option A) or uses a learned opponent model.
+        self._emit_latents = bool(emit_latents)
         assert opponent_action_method in (None, "zero", "random"), (
             f"opponent_action_method must be one of None, 'zero', 'random'; got {opponent_action_method!r}"
         )
@@ -107,6 +122,11 @@ class DreamerSelfPlayWrapper(Wrapper):
         self._device = None
         self._opp_is_first = None
         self._opp_pending_first = None
+        # Scheduled-opponent state (unused in ordinary self-play).
+        self._schedule_phase = None
+        self._ppo_opponent = None
+        self._pending_ppo_opponent = None
+        self._last_opponent_obs = None
 
     # ------------------------------------------------------------------
     # Public API called from the training script
@@ -134,6 +154,75 @@ class DreamerSelfPlayWrapper(Wrapper):
     def update_opponent(self, agent):
         """Unconditionally copy the current training agent weights."""
         self._copy_weights(agent)
+
+    def load_opponent_state(self, state):
+        """Install opponent weights from ``{"encoder", "rssm", "actor": state_dict}``
+        (a PFSP pool snapshot) in place and restart the opponent RSSM state."""
+        self._opponent_encoder_orig.load_state_dict(state["encoder"])
+        self._opponent_rssm_orig.load_state_dict(state["rssm"])
+        self._opponent_actor_orig.load_state_dict(state["actor"])
+        self._ppo_opponent = None
+        self._pending_ppo_opponent = None
+        self._restart_opponent_rssm()
+
+    @property
+    def opponent_encoder(self):
+        """The uncompiled opponent encoder (option-A imagination recompute)."""
+        return self._opponent_encoder_orig
+
+    def load_opponent_agent(self, agent, device=None):
+        """Install a frozen external Dreamer agent (e.g. a loaded snapshot) as opponent.
+
+        The first call defines the opponent network architecture; later calls
+        must pass agents with identical shapes. Deactivates a PPO opponent and
+        restarts the opponent RSSM state in every environment.
+        """
+        if self._device is None:
+            self._device = torch.device(device) if device is not None else agent.device
+        self._copy_weights(agent)
+        self._ppo_opponent = None
+        self._pending_ppo_opponent = None
+        self._restart_opponent_rssm()
+
+    def use_ppo_opponent(self, opponent):
+        """Act with a frozen rl_games PPO player reading the 20-dim ``opponent`` group.
+
+        The Dreamer opponent networks are kept (they still serve as the
+        imagination opponent) but are not stepped while PPO is active.
+        Activation happens as soon as an opponent observation is available
+        (immediately after any reset() or step(); otherwise at the next one).
+        """
+        if getattr(opponent, "is_rnn", False):
+            raise ValueError("Scheduled PPO opponents must be feed-forward")
+        self._pending_ppo_opponent = opponent
+        self._activate_pending_ppo()
+
+    def _activate_pending_ppo(self):
+        if self._pending_ppo_opponent is None or self._last_opponent_obs is None:
+            return
+        opponent = self._pending_ppo_opponent
+        opponent.has_batch_dimension = True
+        # rl_games batch-size handshake on a real opponent observation.
+        _ = opponent.get_batch_size(self._last_opponent_obs, 1)
+        self._ppo_opponent = opponent
+        self._pending_ppo_opponent = None
+
+    @property
+    def ppo_active(self) -> bool:
+        return self._ppo_opponent is not None or self._pending_ppo_opponent is not None
+
+    def set_schedule_phase(self, phase):
+        """Tag subsequent transitions with ``obs["opp_phase"]`` (None disables the tag)."""
+        self._schedule_phase = None if phase is None else int(phase)
+
+    def reset_scores(self):
+        """Empty the score window (no zero prefill): the mean then covers only
+        games played against the current opponent."""
+        self._score_buffer.clear()
+
+    @property
+    def games_tracked(self) -> int:
+        return len(self._score_buffer)
 
     def maybe_update_opponent(self, agent, logger=None, train_step=None):
         """Update opponent weights only if the mean score exceeds the threshold.
@@ -185,6 +274,8 @@ class DreamerSelfPlayWrapper(Wrapper):
 
     def reset(self, *args, **kwargs):
         obs, info = self.env.reset(*args, **kwargs)
+        self._last_opponent_obs = obs.get("opponent") if isinstance(obs, dict) else None
+        self._activate_pending_ppo()
         if self._opponent_encoder is not None:
             num_envs = self.env.unwrapped.num_envs
             self._reset_opponent_state(num_envs)
@@ -193,7 +284,13 @@ class DreamerSelfPlayWrapper(Wrapper):
         return obs, info
 
     def step(self, action, *args, **kwargs):
-        if self._opponent_encoder is None:
+        self._activate_pending_ppo()
+        if self._ppo_opponent is not None:
+            with torch.no_grad():
+                ppo_obs = self._ppo_opponent.obs_to_torch(self._last_opponent_obs)
+                # Clone: rl_games may reuse its output buffer on the next call.
+                opponent_actions = self._ppo_opponent.get_action(ppo_obs, True).clone()
+        elif self._opponent_encoder is None:
             # No opponent loaded yet — fall back to random actions.
             opponent_actions = 2 * torch.rand_like(action) - 1
         else:
@@ -209,7 +306,14 @@ class DreamerSelfPlayWrapper(Wrapper):
 
         # Update opponent RSSM state with the new opponent observation.
         done = terminated | truncated
-        if self._opponent_encoder is not None:
+        self._last_opponent_obs = obs.get("opponent")
+        if self._ppo_opponent is not None:
+            # PPO opponent: no opponent latent exists. Store zeros (the RSSM
+            # initial state) so every replay row keeps the same layout.
+            if self._opp_stoch is not None and self._emit_latents:
+                obs["opp_stoch"] = torch.zeros_like(self._opp_stoch)
+                obs["opp_deter"] = torch.zeros_like(self._opp_deter)
+        elif self._opponent_encoder is not None:
             # Build 4D prev_action for the opponent's RSSM when opponent_separation is on.
             # From the opponent's perspective: [opp_action, player_action].
             if self._opponent_rssm._act_dim > opponent_actions.shape[-1]:
@@ -218,6 +322,12 @@ class DreamerSelfPlayWrapper(Wrapper):
                 else:
                     player_slot = action
                 self._opp_prev_action = torch.cat([opponent_actions, player_slot], dim=-1)
+                if self._opponent_rssm._act_dim == self._opp_prev_action.shape[-1] + 1:
+                    # D-RSSM-drop snapshot: availability bit (0 when the slot is overridden with zeros).
+                    known = 0.0 if self._opponent_action_method == "zero" else 1.0
+                    self._opp_prev_action = torch.cat(
+                        [self._opp_prev_action, torch.full_like(self._opp_prev_action[..., :1], known)], dim=-1
+                    )
             obs_for_encode = self._with_terminal_opponent_obs(obs, info)
             if self._opp_is_first is None:
                 num_envs = self.env.unwrapped.num_envs
@@ -225,11 +335,17 @@ class DreamerSelfPlayWrapper(Wrapper):
                 self._opp_pending_first = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
             is_first = (self._opp_is_first | self._opp_pending_first).unsqueeze(-1)
             self._encode_opponent_obs(obs_for_encode, is_first)
+            self._opp_noise_reset = is_first.reshape(-1).bool()
             self._opp_is_first.zero_()
             self._opp_pending_first.copy_(done.to(torch.bool))
             # Expose post-observation opponent RSSM state for buffer storage.
-            obs["opp_stoch"] = self._opp_stoch.clone()
-            obs["opp_deter"] = self._opp_deter.clone()
+            if self._emit_latents:
+                obs["opp_stoch"] = self._opp_stoch.clone()
+                obs["opp_deter"] = self._opp_deter.clone()
+        if self._schedule_phase is not None:
+            obs["opp_phase"] = torch.full(
+                (done.shape[0], 1), float(self._schedule_phase), dtype=torch.float32, device=done.device
+            )
 
         # --- Track episode outcomes for score-gated updates ---
         if done.any():
@@ -322,6 +438,13 @@ class DreamerSelfPlayWrapper(Wrapper):
         for s in env_scores[done_mask].tolist():
             self._score_buffer.append(s)
 
+    def _restart_opponent_rssm(self):
+        """Fresh opponent RSSM state in all envs; the next observation is treated as first."""
+        num_envs = self.env.unwrapped.num_envs
+        self._reset_opponent_state(num_envs)
+        self._opp_is_first = torch.ones(num_envs, dtype=torch.bool, device=self._device)
+        self._opp_pending_first = torch.zeros(num_envs, dtype=torch.bool, device=self._device)
+
     def _reset_opponent_state(self, num_envs):
         """Reset RSSM state for all environments."""
         stoch, deter = self._opponent_rssm.initial(num_envs)
@@ -344,7 +467,22 @@ class DreamerSelfPlayWrapper(Wrapper):
         """Run the opponent's actor on the current RSSM state."""
         feat = self._opponent_rssm.get_feat(self._opp_stoch, self._opp_deter)
         action_dist = self._opponent_actor(feat)
-        action = action_dist.mode if self._eval_mode else action_dist.rsample()
+        if self._eval_mode:
+            action = action_dist.mode
+        elif self._explore_rho > 0:
+            from distributions import ar1_noise, normal_loc_scale, sample_with_noise
+
+            loc, _ = normal_loc_scale(action_dist)
+            prev = self._opp_noise
+            if prev is None or prev.shape != loc.shape:
+                prev = torch.randn_like(loc)
+            reset = self._opp_noise_reset
+            if reset is None or reset.shape[0] != loc.shape[0]:
+                reset = torch.zeros(loc.shape[0], dtype=torch.bool, device=loc.device)
+            self._opp_noise = ar1_noise(prev, self._explore_rho, reset)
+            action = sample_with_noise(action_dist, self._opp_noise)
+        else:
+            action = action_dist.rsample()
         # Don't set _opp_prev_action here when opponent_separation is on;
         # step() will build the full 4D prev_action after both actions are known.
         if self._opponent_rssm._act_dim == action.shape[-1]:
@@ -370,10 +508,9 @@ class DreamerSelfPlayWrapper(Wrapper):
         # Build an obs dict compatible with the encoder.
         opp_obs_dict = {}
         opp_obs_dict["policy"] = obs["opponent"]
-        opp_obs_dict["image"] = obs["opponent_image"]
-
-        # Preprocess (image normalisation).
-        opp_obs_dict["image"] = opp_obs_dict["image"].float() / 255.0
+        if "opponent_image" in obs:  # absent in state-based runs
+            # Preprocess (image normalisation).
+            opp_obs_dict["image"] = obs["opponent_image"].float() / 255.0
 
         # Encode → RSSM obs step.
         embed = self._opponent_encoder(opp_obs_dict)

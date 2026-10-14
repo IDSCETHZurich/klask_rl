@@ -1,0 +1,268 @@
+# State-based DreamerV3 self-play (12-value state input in units of order 1 instead of pixels), from scratch: no
+# demonstrations, no prefilled buffer, no shaped rewards. The 1M-step recipe:
+#  - model.explore_noise.tau 0.4: collected actions (learner and self-play opponent) use unit-variance AR(1) noise with
+#    a 0.4 s correlation time instead of white noise (per-step distribution unchanged). White-noise commands cancel
+#    out under the acceleration cap and the actuator lag, so the world model rarely sees a held command.
+#  - buffer.prioritized.mode events: 25% of each batch's windows contain a stored goal (terminal step), 65% a
+#    ball-contact onset of either peg (centre distance < 17 mm), 10% uniform; buffer 1M (nothing evicted in 1M steps).
+#  - the initial push (as the pixel pilot) and efficient self-play (no evaluation games, PFSP on decisive games with
+#    new members first, no snapshot of the untrained weights, dense early snapshots, 2 s dead-ball truncation).
+# Arms (train ratio, shared-world imagination, dynamics backprop, ...): scripts/experiments/run_scripts/state_v3_run.sh.
+# Hardware v1. env.train_ratio 512 here; the launcher sets the ratio per arm.
+defaults:
+  - model: size50M
+  # Disable Hydra's Python logging-to-file (train.log)
+  - override hydra/job_logging: disabled
+  - _self_
+
+model:
+  rep_loss: "dreamer" # DreamerV3: reconstruction of the state vector
+  viz_decoder: false
+  viz_decoder_batch: 4 # rows per micro-batch for the visualisation decoder
+  imag_opponent_recompute: true # used by the exact arm only (needs opponent separation)
+  compile: True
+  compile_mode: "default"
+  inference_compile_mode: "default"
+  explore_noise:
+    tau: 0.4 # [s] AR(1) correlation time of the exploration noise in collected actions (0 = white noise)
+    dt: 0.02 # environment step (decimation 20 x 1 ms)
+  loss_scales:
+    smoothness: 0.002
+    barlow: 0.0125 # 0.05 x 2048/8192: the 128 px encoder embedding is 4x the paper's width
+
+# Logging
+wandb_project: KLASK_Dreamer
+wandb_entity: null
+wandb_name: v3_state_1m_eff
+
+# Initialization
+logdir: /workspace/klask_rl/logs/dreamer/training/v3_state/${wandb_name} # non-empty dir = resume from latest.pt
+seed: 0
+deterministic_run: False
+device: "cuda:0"
+sim_device: "cuda:0"
+train_devices:
+  - "cuda:1"
+init_checkpoint: null # from scratch
+load_world_model_only: false
+
+hydra:
+  run:
+    dir: ${logdir}
+  searchpath:
+    - file://${script_dir:}/r2dreamer/configs
+
+batch_size: 20 # + 20 mirrored rows
+batch_length: 64
+micro_batch_size: 40 # the whole batch (20 + 20 mirrored) in one micro-batch
+
+# ---- Environment (all klask-specific, inlined here) ----
+env:
+  task: "isaaclab_Klask-Rl-Dreamer-Sprite-v0"
+  steps: 1e+7
+  env_num: 16
+  eval_episode_num: 0 # no evaluation games (~20% extra env steps, cut the training games); PFSP rotates without them
+  action_repeat: 1
+  decimation: 20
+  train_ratio: 512 # 20 x 64 / 512 = one update per 2.5 environment steps
+  time_limit: 1000
+  sim_dt: 0.001
+  seed: ${seed}
+  device: ${device}
+  ball_reset_position_x: [ -0.15, 0.15 ]
+  ball_reset_position_y: [ -0.1, 0.1 ]
+  state_only: true # state observations (see header)
+  state_units: true # values divided by board half-size / command limit / 0.5 m/s ball (s80 in metres learned nothing)
+  ball_reset_min_abs_y: 0.03 # reachable starts only: |y| >= 3 cm from the midline (2026-10-07)
+  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
+  max_acceleration: 10.0 # [m/s^2] Max rate-of-change.
+  episode_length_s: 10.0 # [s] Episode length in seconds
+  ball_stall: # dead-ball truncation (2026-10-11: 23% of the pilot's training steps were a ball lying still to the timeout)
+    enable: true
+    min_speed: 0.01 # [m/s]
+    duration_s: 2.0 # still this long -> the game ends as a time-out (no reward, not terminal) and a new kick-off starts
+  actuator_model:
+    enable: true
+    checkpoint: /workspace/klask_rl/logs/actuator_model/data/new/checkpoints/model_data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states_train_seed0.pt
+  collision_avoidance:
+    enable: true
+  size: [ 128, 128 ]
+  encoder:
+    mlp_keys: "^policy$"
+    cnn_keys: "$^"
+  decoder:
+    mlp_keys: "^policy$"
+    cnn_keys: "$^"
+  rewards:
+    time_punishment:
+      type: static
+      weight: 0.0
+    time_out_punishment:
+      type: static
+      weight: 0.0
+    shot_over_middle_line:
+      type: static
+      weight: 0.0
+    player_in_goal:
+      type: static
+      weight: -1000
+    opponent_in_goal:
+      type: static
+      weight: 1000.0 # zero-sum: the opponent's own-goal is the learner's point
+    goal_scored:
+      type: static
+      weight: 1000.0
+    goal_conceded:
+      type: static
+      weight: -1000
+    distance_player_ball_own_half:
+      type: static
+      weight: 0.0
+    distance_ball_opponent_goal:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1e-7
+    distance_ball_own_goal:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1e-7
+    ball_speed:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1e-7
+    ball_stationary:
+      type: static
+      weight: 0.0
+    collision_player_ball:
+      type: static
+      weight: 0.0
+    ball_in_own_half:
+      type: static
+      weight: 0.0
+    close_to_boundaries:
+      type: static
+      weight: 0.0
+    player_strategically_positioned:
+      type: static
+      weight: 0.0
+    player_speed:
+      type: static
+      weight: 0.0
+    player_speed_exp:
+      type: static
+      weight: 0.0
+    action_rate_cap_saturation:
+      # P3: sparse, binary saturation indicator
+      type: static
+      weight: 0.0
+    action_smooth_hinge:
+      # PB: smooth hinge above the rate cap
+      type: static
+      weight: 0.0
+    action_delta_l2:
+      # PA: classic L2 action-delta smoothness
+      type: static
+      weight: 0.0
+  terminations:
+    time_out: true
+    goal_scored: true
+    goal_conceded: true
+    player_in_goal: true
+    opponent_in_goal: true
+
+  initialization: # as config-sprite-r2-pfsp.yaml (the pilot)
+    init_velocity:
+      type: schedule
+      phases:
+        - type: static
+          speed: 1.0
+          steps: [ 0, 1_000_000 ]
+        - type: sigmoid
+          speed: [ 1.0, 0.0 ]
+          steps: [ 1_000_000, 3_000_000 ]
+          steepness: 6.0
+        - type: static
+          speed: 0.0
+          steps: [ 3_000_000, -1 ]
+
+buffer:
+  batch_size: ${batch_size}
+  batch_length: ${batch_length}
+  max_size: 1e+6 # the whole 1M-step run: nothing is evicted
+  slice_sampling: crossing # DreamerV3-style windows (required by the event-anchored sampler)
+  device: ${device}
+  storage_device: "cpu"
+  checkpoint_every: 5_000_000 # replay buffer (~60 GB) saved only at 5M multiples (= the permanent snapshots) and at exit (no rolling 1M copies); restored on resume
+  keep_every: 5_000_000 # permanent buffer snapshots (rewind points) at 5M, 10M, ...
+  prioritized:
+    enable: true
+    mode: events # event-anchored windows (1M push only); the tags below are logging only
+    alpha: 1.0 # unused in mode "events"
+    beta: 0.0
+    baseline_priority: 1.0
+    debug_metrics: true
+    events:
+      terminal_frac: 0.25 # windows containing a stored goal (terminal step)
+      contact_frac: 0.65 # windows containing a ball-contact onset of either peg (obs key "event")
+      key: event
+      min_offset: 8 # the event sits at a uniform position in [8, 64] of the window (8+ steps of context)
+    tags: # logging only in modes "learned" and "events"
+      - name: "ball_contact"
+        priority: 1.0
+        reward_term: "collision_player_ball_simple"
+      - name: "goal_scored"
+        priority: 1.0
+        termination_term: "goal_scored"
+      - name: "goal_conceded"
+        priority: 1.0
+        termination_term: "goal_conceded"
+      - name: "player_in_goal"
+        priority: 1.0
+        termination_term: "player_in_goal"
+
+trainer:
+  steps: ${env.steps}
+  pretrain: 0
+  eval_every: 1e+4 # PFSP rotation period (about 20 games; 10k for the 1M runs): four times as many members scored as before
+  eval_episode_num: ${env.eval_episode_num}
+  batch_size: ${batch_size}
+  batch_length: ${batch_length}
+  train_ratio: ${env.train_ratio}
+  video_pred_log: False # no image decoder
+  buffer_exclude_keys: [image] # env 0 board, for the game video only
+  video_every: 100_000 # at most one video of each kind per 100k env steps (W&B storage)
+  params_hist_log: False
+  update_log_every: 5e+3
+  action_repeat: ${env.action_repeat}
+  save_checkpoint_every: 250_000 # ~1.3 GB each
+  profiling:
+    torch_profiler: false
+    torch_profiler_wait: 2000
+    torch_profiler_active: 5
+    cprofile: false
+    cprofile_every: 10000
+
+self_play:
+  enabled: true
+  mode: pfsp # prioritized fictitious self-play over own snapshots (scripts/dreamer/pfsp_pool.py)
+  emit_latents: false # opponent latents are recomputed (exact arm) or not needed
+  games_to_track: 4096
+  update_score: 0.3 # unused with PFSP
+  pfsp:
+    p_latest: 0.5 # probability of playing the current weights at a rotation
+    power: 2.0 # pool weight (1 - score)^power + floor
+    floor: 0.02 # (0.05 before) beaten members keep 2%
+    prior_games: 2.0 # Beta prior: unplayed members count as score 0.5
+    snapshot_every: 20_000 # a snapshot every 20k steps for the whole 1M run (~50 members), to maximise opponent variety
+    # Efficient self-play (branch selfplay-eff, 2026-10-11; off by default elsewhere):
+    score_mode: decisive # score members on decisive games only: with ~75% draws, (W + D/2)/N made sampling uniform
+    selection: thompson # draw each member's win rate from its Beta posterior: few-game members explored, beaten ones rare
+    include_initial: false # no opponent with the untrained weights (half of the early games were against it)
+
+opponent_separation:
+  enabled: true # exact arm; false for the latent and vanilla arms
+  imag_opponent: "selfplay"
+  action_timing: aligned # obs_t predicted from (a_{t-1}, o_{t-1}); also keeps mirrored own actions aligned
+  trajectory_mirroring:
+    enabled: true
+    warm_start: false

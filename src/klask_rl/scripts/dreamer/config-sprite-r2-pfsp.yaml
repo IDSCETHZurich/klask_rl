@@ -1,0 +1,253 @@
+# The pixel pilot (r2_pfsp/exact, 10M steps).
+# R2-Dreamer (decoder-free Barlow objective + a detached visualisation decoder for videos and probes), pure self-play
+# with PFSP over the learner's own snapshots, learned task-agnostic sequence priorities with crossing replay windows,
+# trajectory mirroring, aligned opponent-action timing, pixels, v1 hardware. The arms differ ONLY in the opponent input
+# of the world model (command-line overrides, see scripts/experiments/run_scripts/r2_pfsp_v2_run.sh):
+#   exact   - D-RSSM: the opponent's true command enters the transition; imagination plays the active PFSP opponent,
+#             whose latents are recomputed per update (opponent_separation.enabled=true model.imag_opponent_recompute=true)
+#   vanilla - no opponent input (opponent_separation.enabled=false)
+defaults:
+  - model: size50M
+  # Disable Hydra's Python logging-to-file (train.log)
+  - override hydra/job_logging: disabled
+  - _self_
+
+model:
+  rep_loss: "r2dreamer"
+  viz_decoder: true # detached image decoder: open-loop videos and pixel probes only
+  viz_decoder_batch: 4 # rows per micro-batch for the visualisation decoder
+  imag_opponent_recompute: true # used by the exact arm only (needs opponent separation)
+  compile: True
+  compile_mode: "default"
+  inference_compile_mode: "default"
+  loss_scales:
+    smoothness: 0.002
+    barlow: 0.0125 # 0.05 x 2048/8192: the 128 px encoder embedding is 4x the paper's width
+
+# Logging
+wandb_project: KLASK_Dreamer
+wandb_entity: null
+wandb_name: r2_pfsp
+
+# Initialization
+logdir: /workspace/klask_rl/logs/dreamer/training/r2_pfsp/${wandb_name} # non-empty dir = resume from latest.pt
+seed: 0
+deterministic_run: False
+device: "cuda:0"
+sim_device: "cuda:0"
+train_devices:
+  - "cuda:1"
+init_checkpoint: null # from scratch
+load_world_model_only: false
+
+hydra:
+  run:
+    dir: ${logdir}
+  searchpath:
+    - file://${script_dir:}/r2dreamer/configs
+
+batch_size: 20 # 40 with mirroring; one update per environment step of the 16 envs
+batch_length: 64
+micro_batch_size: 10 # crossed two-GPU layout: compiled learner peaks at 10.0 GiB (14.9 GiB at 20, too tight next to
+                     # the other arm's simulation, ~7.4 GiB); 640 samples per Barlow cross-correlation
+
+# ---- Environment (all klask-specific, inlined here) ----
+env:
+  task: "isaaclab_Klask-Rl-Dreamer-Sprite-v0"
+  steps: 1e+7
+  env_num: 16
+  eval_episode_num: 10
+  action_repeat: 1
+  decimation: 20
+  train_ratio: 80
+  time_limit: 1000
+  sim_dt: 0.001
+  seed: ${seed}
+  device: ${device}
+  ball_reset_position_x: [ -0.15, 0.15 ]
+  ball_reset_position_y: [ -0.1, 0.1 ]
+  max_velocity: 0.4 # [m/s] Maximum velocity for player movement
+  max_acceleration: 10.0 # [m/s^2] Max rate-of-change.
+  episode_length_s: 10.0 # [s] Episode length in seconds
+  actuator_model:
+    enable: true
+    checkpoint: /workspace/klask_rl/logs/actuator_model/data/new/checkpoints/model_data_odrive_new_estimator_history_10_interval_0.02_delay_0.0_horizon3_with_states_train_seed0.pt
+  collision_avoidance:
+    enable: true
+  size: [ 128, 128 ]
+  encoder:
+    mlp_keys: "$^"
+    cnn_keys: "image"
+  decoder:
+    mlp_keys: "$^"
+    cnn_keys: "image"
+  rewards:
+    time_punishment:
+      type: static
+      weight: 0.0
+    time_out_punishment:
+      type: static
+      weight: 0.0
+    shot_over_middle_line:
+      type: static
+      weight: 0.0
+    player_in_goal:
+      type: static
+      weight: -1000
+    opponent_in_goal:
+      type: static
+      weight: 0.0
+    goal_scored:
+      type: static
+      weight: 1000.0
+    goal_conceded:
+      type: static
+      weight: -1000
+    distance_player_ball_own_half:
+      type: static
+      weight: 0.0
+    distance_ball_opponent_goal:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1e-7
+    distance_ball_own_goal:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1e-7
+    ball_speed:
+      type: exponential
+      weight: 0.0
+      decay_rate: 1e-7
+    ball_stationary:
+      type: static
+      weight: 0.0
+    collision_player_ball:
+      type: static
+      weight: 0.0
+    ball_in_own_half:
+      type: static
+      weight: 0.0
+    close_to_boundaries:
+      type: static
+      weight: 0.0
+    player_strategically_positioned:
+      type: static
+      weight: 0.0
+    player_speed:
+      type: static
+      weight: 0.0
+    player_speed_exp:
+      type: static
+      weight: 0.0
+    action_rate_cap_saturation:
+      # P3: sparse, binary saturation indicator
+      type: static
+      weight: 0.0
+    action_smooth_hinge:
+      # PB: smooth hinge above the rate cap
+      type: static
+      weight: 0.0
+    action_delta_l2:
+      # PA: classic L2 action-delta smoothness
+      type: static
+      weight: 0.0
+  terminations:
+    time_out: true
+    goal_scored: true
+    goal_conceded: true
+    player_in_goal: true
+    opponent_in_goal: true
+
+  initialization:
+    init_velocity:
+      type: schedule
+      phases:
+        - type: static
+          speed: 1.0
+          steps: [ 0, 1_000_000 ]
+        - type: sigmoid
+          speed: [ 1.0, 0.0 ]
+          steps: [ 1_000_000, 3_000_000 ]
+          steepness: 6.0
+        - type: static
+          speed: 0.0
+          steps: [ 3_000_000, -1 ]
+
+buffer:
+  batch_size: ${batch_size}
+  batch_length: ${batch_length}
+  max_size: 5e+5
+  slice_sampling: crossing # DreamerV3-style windows (required by the learned priorities)
+  device: ${device}
+  storage_device: "cpu"
+  checkpoint_every: 5_000_000 # replay buffer (~60 GB) saved only at 5M multiples (= the permanent snapshots) and at exit (no rolling 1M copies); restored on resume
+  keep_every: 5_000_000 # permanent buffer snapshots (rewind points) at 5M, 10M, ...
+  prioritized:
+    enable: true
+    mode: learned # task-agnostic sequence priorities; the tags below are logging only
+    alpha: 0.7
+    uniform_frac: 0.5 # P = 0.5 / N + 0.5 * P_prio
+    bucket_stride: 16 # a sequence = 16 consecutive start rows of one env (~20 scorings per lifetime)
+    burn_in: 8 # steps after a window/episode start left out of the error statistics
+    eps: 1.0e-3
+    stats_decay: 0.99 # EMA of the error mean/std (uniformly drawn sequences only)
+    reward_agg: [0.5, 0.5] # e_R = 0.5 max + 0.5 mean of the per-step reward loss
+    value_agg: [0.25, 0.75] # e_V = 0.25 max + 0.75 mean of |G_t - V_t|
+    beta: 0.0 # importance weights are not applied
+    baseline_priority: 1.0
+    debug_metrics: true
+    tags: # logging only in mode "learned"
+      - name: "ball_contact"
+        priority: 1.0
+        reward_term: "collision_player_ball_simple"
+      - name: "goal_scored"
+        priority: 1.0
+        termination_term: "goal_scored"
+      - name: "goal_conceded"
+        priority: 1.0
+        termination_term: "goal_conceded"
+      - name: "player_in_goal"
+        priority: 1.0
+        termination_term: "player_in_goal"
+
+trainer:
+  steps: ${env.steps}
+  pretrain: 0
+  eval_every: 4e+4 # PFSP rotation period (about 80 games)
+  eval_episode_num: ${env.eval_episode_num}
+  batch_size: ${batch_size}
+  batch_length: ${batch_length}
+  train_ratio: ${env.train_ratio}
+  video_pred_log: True
+  video_every: 100_000 # at most one video of each kind per 100k env steps (W&B storage)
+  params_hist_log: False
+  update_log_every: 5e+3
+  action_repeat: ${env.action_repeat}
+  save_checkpoint_every: 250_000 # ~1.3 GB each
+  profiling:
+    torch_profiler: false
+    torch_profiler_wait: 2000
+    torch_profiler_active: 5
+    cprofile: false
+    cprofile_every: 10000
+
+self_play:
+  enabled: true
+  mode: pfsp # prioritized fictitious self-play over own snapshots (scripts/dreamer/pfsp_pool.py)
+  emit_latents: false # opponent latents are recomputed (exact arm) or not needed
+  games_to_track: 4096
+  update_score: 0.3 # unused with PFSP
+  pfsp:
+    p_latest: 0.5 # probability of playing the current weights at a rotation
+    power: 2.0 # pool weight (1 - score)^power + floor
+    floor: 0.05
+    prior_games: 2.0 # Beta prior: unplayed members count as score 0.5
+    snapshot_every: 250_000
+
+opponent_separation:
+  enabled: true # exact arm; false for the latent and vanilla arms
+  imag_opponent: "selfplay"
+  action_timing: aligned # obs_t predicted from (a_{t-1}, o_{t-1}); also keeps mirrored own actions aligned
+  trajectory_mirroring:
+    enabled: true
+    warm_start: false # PFSP opponents are other snapshots: their latents are not learner states

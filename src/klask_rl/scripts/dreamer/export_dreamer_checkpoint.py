@@ -41,6 +41,7 @@ INFERENCE_FIELDS = {
         "norm",
         "unimix_ratio",
         "initial",
+        "opponent_latent",  # OL-RSSM: latent opponent input (u heads are part of the rssm weights)
     }),
     "encoder": frozenset({"mlp_keys", "cnn_keys", "mlp", "cnn"}),
     "mlp": frozenset({

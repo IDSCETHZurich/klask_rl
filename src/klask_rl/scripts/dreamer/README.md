@@ -11,9 +11,13 @@ All commands below are meant to be run **inside the training container** (see th
 | `train_dreamer.py` | Training entry point (configured with [Hydra](https://hydra.cc/)). |
 | `evaluate_dreamer.py` | Head-to-head evaluation of one or more player checkpoints against an opponent. |
 | `dreamer_self_play.py` | Self-play utilities. |
+| `pfsp_pool.py` | Prioritized fictitious self-play (PFSP) pool over the learner's own snapshots: scores, decisive-game weighting, Thompson selection. |
+| `run_init.py` | Start plan of a run: resume from the run's own `latest.pt`, fine-tune start from a full trainer checkpoint (`finetune_from`), or weights-only init. |
+| `opponent_schedule.py` | Scheduled opponents (fixed opponent switches during training). |
+| `checkpoint_loaders.py`, `evaluation.py` | Shared builders for loading Dreamer / PPO / FastSAC checkpoints and their environments (used by the evaluator and the tournament). |
 | `export_dreamer_checkpoint.py` | Export a trained checkpoint for deployment in `klask_software`. |
 | `env_cfg_utils.py` | Helpers for building the environment configuration. |
-| `config-sprite-per-oppo-sep*.yaml` | Training configurations (see below). |
+| `config-sprite-*.yaml` | Training configurations (see below). |
 | `sprite_renderer/` | Renderer that composites pre-rendered sprites for the image observations (see [Sprite Renderer](#sprite-renderer)). |
 | `debug/` | Debugging utilities for the camera output and reward schedules (see [Debug Utilities](#debug-utilities)). |
 | `r2dreamer/` | The R2-Dreamer world-model implementation (Git submodule). |
@@ -37,6 +41,12 @@ Training is configured with [Hydra](https://hydra.cc/). The configs live next to
 | --- | --- |
 | `config-sprite-per-oppo-sep.yaml` | Default configuration: sprite-based observations, prioritized experience replay, and separated opponent handling. |
 | `config-sprite-per-oppo-sep_1gpu.yaml` | Single-GPU variant of the above. |
+| `config-sprite-r2-pfsp.yaml` | Pixel R2-Dreamer pure self-play with PFSP and learned sequence priorities (the "pilot", 10M steps). |
+| `config-sprite-r2-pfsp-eff.yaml` | The pilot plus efficient self-play (no evaluation games, PFSP on decisive games, 2 s dead-ball truncation); used for fine-tunes of the pilot. |
+| `config-sprite-r2-pfsp-eff-v2.yaml` | The same from scratch with reachable ball starts and a snapshot every 100k ("R2 pilot v2"). |
+| `config-sprite-r2-pfsp-eff-v2hw-ft.yaml` | Fine-tune of a v1 checkpoint onto the v2 hardware with a speed/acceleration curriculum (`env.hardware_schedule`). |
+| `config-sprite-v3-state-1m-eff.yaml` | State-based DreamerV3 self-play (12-value state input), 1M-step recipe, v1 hardware. |
+| `config-sprite-v3-state-1m-v2sim-eff.yaml` | The same on the v2 (deploy) hardware. |
 
 The individual parameters are documented in [Configuration Reference](#configuration-reference) below.
 
@@ -55,7 +65,48 @@ Before starting a run, adapt the config file to the experiment you want and comm
 
 Training logs and checkpoints are written to the `logdir` set in the config (by default under `logs/dreamer/training/<date>/<time>/`). Each run directory contains the periodic `checkpoint_<step>.pt` files and the fully resolved Hydra config under `.hydra/config.yaml` — both of which are needed again at evaluation time. If `logdir` points at a non-empty directory, training resumes from the latest checkpoint found there.
 
+## Self-Play Training Setups
+
+The self-play runs are started through launchers in [`../experiments/run_scripts/`](../experiments/run_scripts/README.md). They pass a few Hydra overrides per arm (device, logdir, steps, the arm's switches); the fully resolved config of every run is saved in its `.hydra/config.yaml`.
+
+| Launcher | What it trains |
+| --- | --- |
+| `r2_pfsp_v2_run.sh` | Pixel R2 pilot v2 from scratch, one GPU per arm: `exact` (D-RSSM opponent input), `vanilla` (none), `exact_dynbp` / `vanilla_dynbp` (dynamics backpropagation for the actor), `exact_events` (event-anchored replay). |
+| `state_v3_run.sh` | State-based runs (1M or 2M steps), several arms per GPU: train ratio, shared-world imagination, dynamics backpropagation, imagination horizon, buffer size, v1/v2 hardware. |
+| `r2_eff_ft_dynbp_run.sh` | A pilot fine-tune continued (copy of its checkpoint, PFSP pool and replay buffer) with dynamics backpropagation. |
+| `r2_eff_ft_v2hw_run.sh` (+ `_smoke.sh`) | A pilot fine-tune moved onto the v2 hardware with a speed curriculum (fresh buffer and pool). |
+
+Model options added in the `r2dreamer` submodule (all off by default, defaults reproduce the earlier code bit for bit):
+
+| Option | Effect |
+| --- | --- |
+| `model.actor_grad` | `reinforce` (DreamerV3 default) / `dynamics` (gradient of the imagined lambda return through the frozen world model into the reparameterised actions; activation checkpointing via `model.actor_grad_checkpoint`) / `mix`. One training GPU only. |
+| `model.imag_opponent_world` | `separate` (default) / `shared`: in imagination the self-play opponent observes our decoded state (state input only). |
+| `model.imag_opponent_recompute` | Option A: the active PFSP opponent's latents are recomputed per update from its own seat. |
+| `model.explore_noise.tau` | AR(1) exploration noise with this correlation time (s) in collected actions; 0 = white noise. |
+| `buffer.prioritized.mode` | `learned` sequence priorities or `events` (windows anchored at goals and ball-contact onsets). |
+| `model.amp_dtype` | `float16` (default, with GradScaler) or `bfloat16`. |
+
+## torch.compile and Speed
+
+- **What is compiled** (`r2dreamer/dreamer.py`, `model.compile: True`), at the first update: on one training GPU the whole gradient computation (`_cal_grad_with_modules`); with data parallelism the world-model part (`_forward_world_model`) and the actor-critic part (`_forward_actor_critic_and_backward`) separately, plus per-replica instances. Both with `model.compile_mode`. The inference copies of encoder, RSSM and actor are compiled separately with `model.inference_compile_mode`. The configs above use `"default"` for both; `"reduce-overhead"` uses CUDA graphs with a private memory pool (~3 GB).
+- **Cache:** `train_dreamer.py` sets `TORCHINDUCTOR_CACHE_DIR=src/klask_rl/.torch_cache` (`/workspace/klask_rl/.torch_cache` in the container) unless it is already set, so restarts reuse compiled kernels.
+- **Measured** (one 24 GB GPU, pixel R2 config: batch 20 + 20 mirrored, micro-batch 10, train ratio 80): ~794 ms per update, of which ~600 ms compiled forward/backward, ~65 ms optimizer, ~100 ms option-A opponent recompute, ~30 ms sampling. `torch._dynamo` reports 2 graph breaks (`GradScaler.scale`, `Tensor.backward`), 4 unique graphs and no recompilations. The update is GPU-bound (the CPU waits on a full command buffer; roughly 35% convolutions, 28% copy/clone, 13% elementwise kernels; ~41k kernel launches and ~1k `.item()` syncs per update), so removing graph breaks does not speed it up. That is different for small-batch configs such as `config-sprite-per-oppo-sep_1gpu.yaml` (batch 4, micro-batch 2), which are launch-overhead bound. Dynamics backpropagation adds ~9% per update (843 vs 776 ms); its float16 backward overflows more easily, which the GradScaler handles by skipping the update and lowering the scale.
+- **Flags** (environment variables):
+
+| Variable | Effect |
+| --- | --- |
+| `KLASK_CONV_FAST=1` | Symmetric built-in conv padding instead of `F.pad` for stride-1 odd kernels, channels-last conv weights and activations, `cudnn.benchmark`. Same maths (`r2dreamer/tests/test_conv_fast.py`), ~4% faster update; longer first compile. |
+| `KLASK_DYNAMO_REPORT=N` | Print `torch._dynamo` graph-break and graph counters at update N. |
+| `KLASK_PROFILE_UPDATE=N` | Torch-profiler capture of updates N..N+2. |
+| `KLASK_PROFILE_STACKS=1` | With the profiler: attribute copy/clone/`.item()` calls to Python stacks. |
+
 ## Evaluation
+
+For the reconstructed PPO-B / D-RSSM / FastSAC round robin and the exact-versus-zero
+opponent-action ablation, use the [tournament runner](../tournament/README.md).
+It saves individual games, balances board seats, and reports game-level bootstrap
+intervals with zeroed opponent input as the primary result.
 
 `evaluate_dreamer.py` plays a trained Dreamer policy head-to-head against an opponent and records the outcome over many games:
 
@@ -148,6 +199,7 @@ The following describes the parameters in `config-sprite-per-oppo-sep.yaml`. The
 | `train_devices` | List of GPUs used for the (data-parallel) training updates. |
 | `init_checkpoint` | Optional checkpoint to initialize weights from (pretrain → finetune). |
 | `load_world_model_only` | When initializing from `init_checkpoint`, load only the world-model weights. |
+| `finetune_from.checkpoint` / `.expect_step` / `.source` | Fine-tune start (`run_init.py`): while the logdir has no `latest.pt`, restore the FULL trainer state (weights, optimizer, LR scheduler, GradScaler, counters, step) of this checkpoint, which must be a copy inside the logdir (and at `expect_step` when set), with a fresh replay buffer, a fresh PFSP pool (member 0 = these weights) and an empty score window; `source` is provenance only. Once the run has saved, restarts resume from its own `latest.pt`. Alternative to `init_checkpoint`. |
 | `hydra.run.dir` / `hydra.searchpath` | Hydra output directory and the search path for the bundled R2-Dreamer configs. |
 
 ### Batching
@@ -175,6 +227,8 @@ The following describes the parameters in `config-sprite-per-oppo-sep.yaml`. The
 | `max_acceleration` | Maximum rate-of-change of player velocity in m/s². |
 | `episode_length_s` | Episode length in seconds. |
 | `actuator_model.enable` / `actuator_model.checkpoint` | Enable the learned actuator model and the checkpoint to load (matches the simulated motors to the real hardware). |
+| `actuator_lag.enable` / `.dead_time_s` / `.tau_s` | Parametric actuator surrogate (dead time + first-order lag) for the v2 table; alternative to `actuator_model`. |
+| `hardware_schedule.enable` / `.steps` / `.max_velocity` / `.max_acceleration` | Hardware-speed curriculum (`wrappers/hardware_schedule_wrapper.py`): the command scale (also the collision avoidance's speed) and the rate cap ramp linearly from `[start, end]` values over the absolute env steps `steps: [from, to]` (the trainer's step, so resumes continue it), constant outside; the end values must equal `max_velocity` / `max_acceleration`. Both seats share it. |
 | `collision_avoidance.enable` | Enable peg/wall collision avoidance. |
 | `size` | Rendered sprite image resolution `[H, W]`. |
 | `encoder` / `decoder` (`mlp_keys`, `cnn_keys`) | Which observation keys feed the MLP and CNN encoder/decoder branches (`image` for the rendered board). |
