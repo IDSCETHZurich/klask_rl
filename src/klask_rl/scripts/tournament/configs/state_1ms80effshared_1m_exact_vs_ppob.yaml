@@ -1,0 +1,25 @@
+# State study protocol point (docs/reports/klask/state_v3/README.md, "Comparisons and measures"): the state-based V3
+# 1m_s80_eff_shared (1m_s80_eff with shared-world imagination (branch shared-imag); efficient self-play: no eval games, PFSP decisive + Thompson, no untrained opponent, rotation 10k, snapshot 20k, 2 s dead-ball truncation) at 1M env steps, exact opponent
+# command, aligned timing, 30 s games, default starts, 200 games (two legs of 100, sides swapped). PPO-B: evaluation only.
+games: 200
+num_envs: 100
+episode_length_s: 30.0
+seed: 0
+bootstrap_samples: 10000
+bootstrap_seed: 2026
+agents:
+  # Environment-config provider required by run_tournament.py (same sprite env as the 1M evaluation).
+  D-RSSM:
+    kind: dreamer
+    checkpoint: logs/dreamer/training/opponent_switch_4m/drssm/checkpoint_4000000.pt
+    config: logs/dreamer/training/opponent_switch_4m/drssm/.hydra/config.yaml
+  State-V3-1m-s80-eff-shared-1M:
+    kind: dreamer
+    checkpoint: logs/experiments/r2_quick_eval/ckpt/1m_s80_eff_shared_1000000.pt
+    config: logs/dreamer/training/v3_state/1m_s80_eff_shared/.hydra/config.yaml
+  PPO-B:
+    kind: ppo
+    checkpoint: logs/rl_games/klask/new_agent_from_pretrained/new_AM/export/klask_ppo_nn_v1.1.pth
+    config: logs/rl_games/klask/new_agent_from_pretrained/new_AM/params/agent.yaml
+matches:
+  - {id: 1ms80effshared_1m_exact_vs_ppob, a: State-V3-1m-s80-eff-shared-1M, b: PPO-B, condition: exact, primary: false, action_timing: aligned}

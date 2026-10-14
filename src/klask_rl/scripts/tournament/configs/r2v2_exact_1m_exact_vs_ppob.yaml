@@ -1,0 +1,25 @@
+# New R2 pilot from scratch (r2_pfsp_v2/exact_s0, branch r2-pilot-v2 59d6f2a: the fine-tune formula = pilot + efficient self-play,
+# reachable starts, snapshot every 100k; 2026-10-13) at 1M env steps vs PPO-B, EXACT opponent command. Compare: the old pilot
+# r2_pfsp/exact at 1M scored 0.23 (2,000 games). Aligned timing, 30 s games, default ball starts, 200 games (two legs of 100).
+games: 200
+num_envs: 100
+episode_length_s: 30.0
+seed: 0
+bootstrap_samples: 10000
+bootstrap_seed: 2026
+agents:
+  # Environment-config provider required by run_tournament.py (same sprite env as the 1M evaluation).
+  D-RSSM:
+    kind: dreamer
+    checkpoint: logs/dreamer/training/opponent_switch_4m/drssm/checkpoint_4000000.pt
+    config: logs/dreamer/training/opponent_switch_4m/drssm/.hydra/config.yaml
+  R2v2-exact-1M:
+    kind: dreamer
+    checkpoint: logs/experiments/r2_quick_eval/ckpt/r2v2_exact_1000000.pt
+    config: logs/dreamer/training/r2_pfsp_v2/exact_s0/.hydra/config.yaml
+  PPO-B:
+    kind: ppo
+    checkpoint: logs/rl_games/klask/new_agent_from_pretrained/new_AM/export/klask_ppo_nn_v1.1.pth
+    config: logs/rl_games/klask/new_agent_from_pretrained/new_AM/params/agent.yaml
+matches:
+  - {id: r2v2exact_1m_exact_vs_ppob, a: R2v2-exact-1M, b: PPO-B, condition: exact, primary: false, action_timing: aligned}

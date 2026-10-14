@@ -1,0 +1,31 @@
+# Watching only: 10 games
+# v2_1m_s80_eff at 1M (v2 physics) vs PPO-B (v1 physics), each player on its own hardware, both board sides (5 + 5),
+# 30 s games, default starts, states recorded per game (record_states) for rendering with
+# scripts/experiments/render_recorded_games.py. Otherwise as state_v2_1ms80eff_1m_ownhw_vs_ppob.yaml.
+hardware:
+  per_agent:
+    State-V2-1m-s80-eff-1M: v2
+    PPO-B: v1
+games: 10
+num_envs: 5
+episode_length_s: 30.0
+seed: 7
+bootstrap_samples: 10000
+bootstrap_seed: 2026
+agents:
+  # Environment-config provider required by run_tournament.py (same sprite env as the 1M evaluation; its v1 hardware
+  # block is replaced per seat by `hardware` above, everything else - sim_dt 1 ms, decimation 20, observations - is kept).
+  D-RSSM:
+    kind: dreamer
+    checkpoint: logs/dreamer/training/opponent_switch_4m/drssm/checkpoint_4000000.pt
+    config: logs/dreamer/training/opponent_switch_4m/drssm/.hydra/config.yaml
+  State-V2-1m-s80-eff-1M:
+    kind: dreamer
+    checkpoint: logs/experiments/r2_quick_eval/ckpt/v2_1m_s80_eff_1000000.pt
+    config: logs/dreamer/training/v3_state/v2_1m_s80_eff/.hydra/config.yaml
+  PPO-B:
+    kind: ppo
+    checkpoint: logs/rl_games/klask/new_agent_from_pretrained/new_AM/export/klask_ppo_nn_v1.1.pth
+    config: logs/rl_games/klask/new_agent_from_pretrained/new_AM/params/agent.yaml
+matches:
+  - {id: watch_v2_1ms80eff_vs_ppob_ownhw, a: State-V2-1m-s80-eff-1M, b: PPO-B, condition: exact, primary: false, action_timing: aligned, record_states: true}

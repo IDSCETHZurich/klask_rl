@@ -1,0 +1,25 @@
+# Same-step head-to-head (2026-10-13): the new R2 pilot from scratch (r2_pfsp_v2/exact_s0, efficient self-play etc.) at 1M vs the
+# old pilot (r2_pfsp/exact) at its own 1M checkpoint. Exact opponent command for both, aligned timing, 30 s games, default starts,
+# 100 games (two legs of 50, sides swapped). Score from R2v2-exact-1M's side.
+games: 100
+num_envs: 50
+episode_length_s: 30.0
+seed: 0
+bootstrap_samples: 10000
+bootstrap_seed: 2026
+agents:
+  # Environment-config provider required by run_tournament.py (same sprite env as the 1M evaluation).
+  D-RSSM:
+    kind: dreamer
+    checkpoint: logs/dreamer/training/opponent_switch_4m/drssm/checkpoint_4000000.pt
+    config: logs/dreamer/training/opponent_switch_4m/drssm/.hydra/config.yaml
+  R2v2-exact-1M:
+    kind: dreamer
+    checkpoint: logs/experiments/r2_quick_eval/ckpt/r2v2_exact_1000000.pt
+    config: logs/dreamer/training/r2_pfsp_v2/exact_s0/.hydra/config.yaml
+  R2-pilot-exact-1M:
+    kind: dreamer
+    checkpoint: logs/experiments/r2_quick_eval/ckpt/exact_1000000.pt
+    config: logs/dreamer/training/r2_pfsp/exact/.hydra/config.yaml
+matches:
+  - {id: r2v2exact_1m_vs_pilot1m, a: R2v2-exact-1M, b: R2-pilot-exact-1M, condition: exact, primary: false, action_timing: aligned, agent_conditions: {R2v2-exact-1M: exact, R2-pilot-exact-1M: exact}}
