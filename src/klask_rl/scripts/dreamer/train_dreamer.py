@@ -87,7 +87,7 @@ torch.set_float32_matmul_precision("high")
 if os.environ.get("KLASK_CONV_FAST", "0") == "1":
     # Speed (2026-10-08, compile-speed): cuDNN picks its fastest algorithm per conv shape (fixed shapes here).
     torch.backends.cudnn.benchmark = True
-    print("[speed] KLASK_CONV_FAST=1: symmetric conv padding, channels-last convs, cudnn.benchmark", flush=True)
+    print("[speed] KLASK_CONV_FAST=1: channels-last convs, cudnn.benchmark", flush=True)
 
 # Register IsaacLab task environments (triggers gymnasium gym.register calls).
 import isaaclab_tasks  # noqa: F401

@@ -92,11 +92,12 @@ Model options added in the `r2dreamer` submodule (all off by default, defaults r
 - **What is compiled** (`r2dreamer/dreamer.py`, `model.compile: True`), at the first update: on one training GPU the whole gradient computation (`_cal_grad_with_modules`); with data parallelism the world-model part (`_forward_world_model`) and the actor-critic part (`_forward_actor_critic_and_backward`) separately, plus per-replica instances. Both with `model.compile_mode`. The inference copies of encoder, RSSM and actor are compiled separately with `model.inference_compile_mode`. The configs above use `"default"` for both; `"reduce-overhead"` uses CUDA graphs with a private memory pool (~3 GB).
 - **Cache:** `train_dreamer.py` sets `TORCHINDUCTOR_CACHE_DIR=src/klask_rl/.torch_cache` (`/workspace/klask_rl/.torch_cache` in the container) unless it is already set, so restarts reuse compiled kernels.
 - **Measured** (one 24 GB GPU, pixel R2 config: batch 20 + 20 mirrored, micro-batch 10, train ratio 80): ~794 ms per update, of which ~600 ms compiled forward/backward, ~65 ms optimizer, ~100 ms option-A opponent recompute, ~30 ms sampling. `torch._dynamo` reports 2 graph breaks (`GradScaler.scale`, `Tensor.backward`), 4 unique graphs and no recompilations. The update is GPU-bound (the CPU waits on a full command buffer; roughly 35% convolutions, 28% copy/clone, 13% elementwise kernels; ~41k kernel launches and ~1k `.item()` syncs per update), so removing graph breaks does not speed it up. That is different for small-batch configs such as `config-sprite-per-oppo-sep_1gpu.yaml` (batch 4, micro-batch 2), which are launch-overhead bound. Dynamics backpropagation adds ~9% per update (843 vs 776 ms); its float16 backward overflows more easily, which the GradScaler handles by skipping the update and lowering the scale.
+- **Fastest one-GPU setup:** `model.compile_mode: reduce-overhead`, which also turns `trainer.overlap_update` on (pixel R2 config on a GH200: 18 -> 45 env steps/s; the training process uses ~18 GiB of GPU memory).
 - **Flags** (environment variables):
 
 | Variable | Effect |
 | --- | --- |
-| `KLASK_CONV_FAST=1` | Symmetric built-in conv padding instead of `F.pad` for stride-1 odd kernels, channels-last conv weights and activations, `cudnn.benchmark`. Same maths (`r2dreamer/tests/test_conv_fast.py`), ~4% faster update; longer first compile. |
+| `KLASK_CONV_FAST=1` | Channels-last conv weights and activations, `cudnn.benchmark` (the symmetric built-in conv padding is always on). Same maths (`r2dreamer/tests/test_conv_fast.py`); longer first compile. |
 | `KLASK_DYNAMO_REPORT=N` | Print `torch._dynamo` graph-break and graph counters at update N. |
 | `KLASK_PROFILE_UPDATE=N` | Torch-profiler capture of updates N..N+2. |
 | `KLASK_PROFILE_STACKS=1` | With the profiler: attribute copy/clone/`.item()` calls to Python stacks. |
@@ -289,6 +290,7 @@ A `schedule` of `phases` that ramps the ball's initial velocity over training. E
 | `update_log_every` | Log training metrics every N updates. |
 | `action_repeat` | Action repeat (mirrors `env.action_repeat`). |
 | `save_checkpoint_every` | Save a checkpoint every N steps (`0` = only at the end). |
+| `overlap_update` | One GPU only: run each update on a worker thread while the next env step runs (same weights and replay samples as inline updates). Unset: on when the training step uses CUDA graphs (`model.compile_mode` `reduce-overhead` or `max-autotune`); always off without CUDA and with `deterministic_run`. |
 | `profiling.*` | Optional Torch/cProfile profiling controls (Perfetto traces and periodic cProfile dumps). |
 
 ### Self-Play (`self_play`)
