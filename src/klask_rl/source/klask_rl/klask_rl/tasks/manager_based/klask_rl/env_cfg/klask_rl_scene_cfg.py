@@ -1,12 +1,12 @@
 import os
 
 import isaaclab.sim as sim_utils
-from isaaclab.actuators import DelayedPDActuatorCfg
 from isaaclab.assets import AssetBaseCfg, RigidObjectCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors import TiledCameraCfg
 from isaaclab.utils import configclass
+from klask_rl.assets.robots.klask_actuators import ZeroDelayAwarePDActuatorCfg
 from klask_rl.assets.robots.klask_cfg import KLASK_CFG
 from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
@@ -85,7 +85,7 @@ class _KlaskRlDreamerBaseSceneCfg(InteractiveSceneCfg):
             }
         ),
         actuators={
-            "peg_1x_actuator": DelayedPDActuatorCfg(
+            "peg_1x_actuator": ZeroDelayAwarePDActuatorCfg(
                 joint_names_expr=["slider_to_peg_1"],
                 stiffness=0.0,
                 damping=10.0,
@@ -94,7 +94,7 @@ class _KlaskRlDreamerBaseSceneCfg(InteractiveSceneCfg):
                 min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
                 max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
             ),
-            "peg_1y_actuator": DelayedPDActuatorCfg(
+            "peg_1y_actuator": ZeroDelayAwarePDActuatorCfg(
                 joint_names_expr=["ground_to_slider_1"],
                 stiffness=0.0,
                 damping=100.0,
@@ -103,7 +103,7 @@ class _KlaskRlDreamerBaseSceneCfg(InteractiveSceneCfg):
                 min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
                 max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
             ),
-            "peg_2x_actuator": DelayedPDActuatorCfg(
+            "peg_2x_actuator": ZeroDelayAwarePDActuatorCfg(
                 joint_names_expr=["slider_to_peg_2"],
                 stiffness=0.0,
                 damping=10.0,
@@ -112,7 +112,7 @@ class _KlaskRlDreamerBaseSceneCfg(InteractiveSceneCfg):
                 min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
                 max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
             ),
-            "peg_2y_actuator": DelayedPDActuatorCfg(
+            "peg_2y_actuator": ZeroDelayAwarePDActuatorCfg(
                 joint_names_expr=["ground_to_slider_2"],
                 stiffness=0.0,
                 damping=100.0,

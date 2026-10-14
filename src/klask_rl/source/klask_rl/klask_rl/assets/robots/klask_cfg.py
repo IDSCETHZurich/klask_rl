@@ -1,8 +1,8 @@
 import os
 
 import isaaclab.sim as sim_utils
-from isaaclab.actuators import DelayedPDActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
+from klask_rl.assets.robots.klask_actuators import ZeroDelayAwarePDActuatorCfg
 from klask_rl.assets.robots.klask_params import KLASK_PARAMS
 
 KLASK_CFG = ArticulationCfg(
@@ -18,7 +18,7 @@ KLASK_CFG = ArticulationCfg(
         }
     ),
     actuators={
-        "peg_1x_actuator": DelayedPDActuatorCfg(
+        "peg_1x_actuator": ZeroDelayAwarePDActuatorCfg(
             joint_names_expr=["slider_to_peg_1"],
             stiffness=0.0,
             damping=KLASK_PARAMS["actuator_x_damping"],
@@ -27,7 +27,7 @@ KLASK_CFG = ArticulationCfg(
             min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
             max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
         ),
-        "peg_1y_actuator": DelayedPDActuatorCfg(
+        "peg_1y_actuator": ZeroDelayAwarePDActuatorCfg(
             joint_names_expr=["ground_to_slider_1"],
             stiffness=0.0,
             damping=KLASK_PARAMS["actuator_y_damping"],
@@ -36,7 +36,7 @@ KLASK_CFG = ArticulationCfg(
             min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
             max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
         ),
-        "peg_2x_actuator": DelayedPDActuatorCfg(
+        "peg_2x_actuator": ZeroDelayAwarePDActuatorCfg(
             joint_names_expr=["slider_to_peg_2"],
             stiffness=0.0,
             damping=KLASK_PARAMS["actuator_x_damping"],
@@ -45,7 +45,7 @@ KLASK_CFG = ArticulationCfg(
             min_delay=int(KLASK_PARAMS["actuator_delay"][0] / KLASK_PARAMS["physics_dt"]),
             max_delay=int(KLASK_PARAMS["actuator_delay"][1] / KLASK_PARAMS["physics_dt"]),
         ),
-        "peg_2y_actuator": DelayedPDActuatorCfg(
+        "peg_2y_actuator": ZeroDelayAwarePDActuatorCfg(
             joint_names_expr=["ground_to_slider_2"],
             stiffness=0.0,
             damping=KLASK_PARAMS["actuator_y_damping"],
