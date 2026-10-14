@@ -1,3 +1,4 @@
+import copy
 # from . import mdp
 import isaaclab.envs.mdp as mdp
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -267,6 +268,90 @@ _OpponentPolicyCfg = _fix_pickle(
     ),
     "_OpponentPolicyCfg",
 )
+
+# ---------------------------------------------------------------------------
+# Units of the 12 basic state values for state-based Dreamer runs (state-v3, 2026-10-09)
+# ---------------------------------------------------------------------------
+# In metres a 1 cm ball error costs ~1e-4 of reconstruction loss against 1 nat of KL free bits, so
+# the world model never learns positions precisely (state-v3 s80: ~3 cm RMS per value, no goals in 1M
+# steps). Dividing by these units makes every value of order 1 (same divisors as the sample-eff
+# study's model.obs_scale): board half-size for positions, the command limit for peg velocities,
+# 0.5 m/s for the ball velocity. The term order is the order of the values in the observation.
+STATE_TERMS = ("own_pos", "own_x_vel", "own_y_vel", "other_pos", "other_x_vel", "other_y_vel", "ball_pos_rel", "ball_vel_rel")
+BOARD_HALF_SIZE = (0.16, 0.21)  # [m] x, y
+BALL_VELOCITY_UNIT = 0.5  # [m/s]
+
+
+def state_unit_divisors(max_velocity: float) -> dict:
+    """Divisor of each basic state term: a tuple for 2-D terms, a float for 1-D terms."""
+    v = float(max_velocity)
+    return {
+        "own_pos": BOARD_HALF_SIZE,
+        "own_x_vel": v,
+        "own_y_vel": v,
+        "other_pos": BOARD_HALF_SIZE,
+        "other_x_vel": v,
+        "other_y_vel": v,
+        "ball_pos_rel": BOARD_HALF_SIZE,
+        "ball_vel_rel": (BALL_VELOCITY_UNIT, BALL_VELOCITY_UNIT),
+    }
+
+
+def state_unit_vector(max_velocity: float) -> list[float]:
+    """The 12 divisors in observation order (for consumers that read the raw values, e.g. the tournament)."""
+    out = []
+    for name in STATE_TERMS:
+        div = state_unit_divisors(max_velocity)[name]
+        out.extend(div if isinstance(div, tuple) else (div,))
+    return out
+
+
+def _seat_partner(name: str) -> str:
+    """The term holding the same quantity in the other seat's observation (own <-> other; the ball stays)."""
+    if name.startswith("own_"):
+        return "other_" + name[len("own_") :]
+    if name.startswith("other_"):
+        return "own_" + name[len("other_") :]
+    return name
+
+
+def opponent_seat_map(max_velocity: float = 1.0) -> tuple[list[int], list[float]]:
+    """(index, sign) with opponent_obs = player_obs[..., index] * sign for the 12 basic state values.
+
+    The convention of the two observation groups (_PlayerPolicyCfg / _OpponentPolicyCfg): the opponent's
+    "own" terms read the player's "other" bodies and joints and vice versa, the ball terms read the same
+    ball, and the opponent group is rotated by 180 degrees (scale -1 on every value). With env.state_units
+    both groups divide a term by the same unit and a term and its partner have the same unit (checked here),
+    so the map is the same in metres and in units. Used by shared-world imagination
+    (model.imag_opponent_world shared) to give the imagined opponent our decoded state from its seat.
+    """
+    divisors = state_unit_divisors(max_velocity)
+    sizes = {name: (len(d) if isinstance(d, tuple) else 1) for name, d in divisors.items()}
+    offsets, at = {}, 0
+    for name in STATE_TERMS:
+        offsets[name] = at
+        at += sizes[name]
+    index = []
+    for name in STATE_TERMS:
+        partner = _seat_partner(name)
+        if divisors[partner] != divisors[name]:
+            raise ValueError(f"{name} and {partner} have different units: the seat map would not hold in units")
+        index.extend(range(offsets[partner], offsets[partner] + sizes[partner]))
+    return index, [-1.0] * at
+
+
+def apply_state_units(group, max_velocity: float) -> None:
+    """Divide every basic state term of ``group`` by its unit, keeping the seat's rotation sign."""
+    for name, div in state_unit_divisors(max_velocity).items():
+        term = copy.deepcopy(getattr(group, name))
+        if isinstance(div, tuple):
+            base = term.scale if term.scale is not None else (1.0,) * len(div)
+            term.scale = tuple(float(b) / d for b, d in zip(base, div))
+        else:
+            base = term.scale if term.scale is not None else 1.0
+            term.scale = float(base) / div
+        setattr(group, name, term)
+
 
 _PlayerPolicyExtendedCfg = _fix_pickle(
     _peg_obs_group_extended(

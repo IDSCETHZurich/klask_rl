@@ -314,6 +314,32 @@ def sprite_rendered_image_parity_player(
     return _pad_image_to_target(result, target_h, target_w)
 
 
+def sprite_rendered_image_env0(
+    env: ManagerBasedRLEnv,
+    peg1_cfg: SceneEntityCfg,
+    peg2_cfg: SceneEntityCfg,
+    ball_cfg: SceneEntityCfg,
+    target_h: int = 128,
+    target_w: int = 128,
+) -> torch.Tensor:
+    """Board image of env 0 only (natural view, Peg_1 at the bottom); zeros for the other envs.
+
+    State-based runs (2026-10-09) keep ``image`` only for the occasional W&B game video of
+    env 0: the model reads the state, and the trainer leaves the image out of the replay
+    buffer (``trainer.buffer_exclude_keys``), so rendering every env would be wasted work.
+    """
+    cfg = env.cfg
+    cam_h, cam_w = _sprite_camera_params(min(target_h, target_w))
+    renderer = _get_renderer(cfg.sprite_dir, cfg.background_path, cam_w, cam_h, None)
+    out = torch.zeros((env.num_envs, cam_h, cam_w, 3), dtype=torch.uint8, device=env.device)
+    p1 = body_xy_pos_w(env, peg1_cfg)[0].cpu().numpy()
+    p2 = body_xy_pos_w(env, peg2_cfg)[0].cpu().numpy()
+    b = root_xy_pos_w(env, ball_cfg)[0].cpu().numpy()
+    rgb = cv2.cvtColor(renderer.render(p1, p2, b, aug_id=0), cv2.COLOR_BGR2RGB)
+    out[0] = torch.from_numpy(rgb).to(env.device)
+    return _pad_image_to_target(out, target_h, target_w)
+
+
 def sprite_rendered_image_parity_opponent(
     env: ManagerBasedRLEnv,
     peg1_cfg: SceneEntityCfg,
@@ -913,6 +939,25 @@ def ball_stationary(env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, eps=5e-3) 
     return ball_speed(env, ball_cfg) < eps
 
 
+def ball_stalled(
+    env: ManagerBasedRLEnv, ball_cfg: SceneEntityCfg, min_speed: float = 0.01, duration_s: float = 2.0
+) -> torch.Tensor:
+    """True once the ball has moved slower than ``min_speed`` [m/s] for ``duration_s`` without a break: a dead ball.
+
+    Used as a time-out-like termination (training efficiency, ``env.ball_stall``): the game restarts with a new
+    kick-off instead of running to the time limit. The per-env counter lives on the env and restarts with every
+    episode (``episode_length_buf <= 1``), so the resting ball at kick-off counts from the first step.
+    """
+    still = ball_speed(env, ball_cfg) < min_speed
+    count = getattr(env, "_ball_still_steps", None)
+    if count is None or count.shape[0] != env.num_envs:
+        count = torch.zeros(env.num_envs, dtype=torch.int32, device=env.device)
+    fresh = env.episode_length_buf <= 1
+    count = torch.where(still & ~fresh, count + 1, torch.zeros_like(count))
+    env._ball_still_steps = count
+    return count >= max(1, int(round(float(duration_s) / float(env.step_dt))))
+
+
 def collision_player_ball(
     env: ManagerBasedRLEnv,
     player_cfg: SceneEntityCfg,
@@ -1268,7 +1313,44 @@ def action_smooth_hinge(
     """
     da = getattr(env, "_action_delta", None)
     norm = getattr(env, "_action_max_dv_norm", None)
-    if da is None or norm is None or norm <= 0.0:
+    if isinstance(norm, torch.Tensor):  # per-column limits (VelocityScaleWrapper, seats on different hardware)
+        norm = norm[list(action_dims)]
+        if da is None or bool((norm <= 0.0).any()):
+            return torch.zeros(env.num_envs, device=env.device)
+    elif da is None or norm is None or norm <= 0.0:
         return torch.zeros(env.num_envs, device=env.device)
     excess = (da[:, list(action_dims)].abs() / norm - 1.0).clamp(min=0.0)
     return excess.pow(2).mean(dim=-1)
+
+
+def reset_ball_outside_midline_band(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,
+    pose_range: dict,
+    velocity_range: dict,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("ball"),
+    min_abs_y: float = 0.03,
+):
+    """Like ``reset_root_state_uniform`` for the ball, but its start y is drawn uniformly from
+    min_abs_y <= |y| <= max(|y range|) on a random side of the midline (2026-10-07). A ball within
+    ~1.3 cm of the midline cannot be reached by either peg (joint limits + collision-avoidance
+    clearance), and up to ~3 cm only at crawling speed: such starts made 9-15% of games dead."""
+    asset: RigidObject = env.scene[asset_cfg.name]
+    root_states = asset.data.default_root_state[env_ids].clone()
+    n = len(env_ids)
+    x_lo, x_hi = pose_range.get("x", (0.0, 0.0))
+    y_lo, y_hi = pose_range.get("y", (0.0, 0.0))
+    z_lo, z_hi = pose_range.get("z", (0.0, 0.0))
+    y_max = max(abs(y_lo), abs(y_hi))
+    if not 0.0 <= min_abs_y < y_max:
+        raise ValueError(f"min_abs_y={min_abs_y} must be in [0, {y_max})")
+    dev = asset.device
+    x = torch.empty(n, device=dev).uniform_(x_lo, x_hi)
+    y = torch.empty(n, device=dev).uniform_(min_abs_y, y_max) * (torch.randint(0, 2, (n,), device=dev) * 2 - 1)
+    z = torch.empty(n, device=dev).uniform_(z_lo, z_hi)
+    positions = root_states[:, 0:3] + env.scene.env_origins[env_ids] + torch.stack([x, y, z], dim=-1)
+    vel_list = [velocity_range.get(k, (0.0, 0.0)) for k in ["x", "y", "z", "roll", "pitch", "yaw"]]
+    ranges = torch.tensor(vel_list, device=dev)
+    velocities = root_states[:, 7:13] + math_utils.sample_uniform(ranges[:, 0], ranges[:, 1], (n, 6), device=dev)
+    asset.write_root_pose_to_sim(torch.cat([positions, root_states[:, 3:7]], dim=-1), env_ids=env_ids)
+    asset.write_root_velocity_to_sim(velocities, env_ids=env_ids)

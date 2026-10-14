@@ -259,7 +259,9 @@ class OpponentRewardWrapper(Wrapper):
     current player weights from the reward manager so the opponent reward
     automatically follows the same curriculum schedule.
 
-    Adds ``obs["opponent_reward"]`` (shape ``(B,)``) to the step output.
+    Adds ``obs["opponent_reward"]`` (shape ``(B,)``) to the step output. It is
+    computed together with the player's reward (before the auto-reset of
+    terminated envs), so goal steps carry the opponent's goal reward.
 
     Parameters
     ----------
@@ -287,11 +289,27 @@ class OpponentRewardWrapper(Wrapper):
                 if isinstance(v, SceneEntityCfg):
                     v.resolve(scene)
 
+        # Compute the opponent reward right after the player's, inside
+        # env.step(). Isaac Lab resets terminated envs before step() returns,
+        # so computing it afterwards saw the reset board (the goal terms read
+        # ball and peg positions) and gave 0 at every goal step.
+        self._opp_reward = torch.zeros(self.env.unwrapped.num_envs, device=self.env.unwrapped.device)
+        player_compute = rm.compute
+
+        def compute_with_opponent(dt):
+            reward = player_compute(dt)
+            self._opp_reward = self._opponent_reward(dt)
+            return reward
+
+        rm.compute = compute_with_opponent
+
     def step(self, actions):
         obs, rew, terminated, truncated, info = self.env.step(actions)
+        obs["opponent_reward"] = self._opp_reward
+        return obs, rew, terminated, truncated, info
 
+    def _opponent_reward(self, dt):
         rm = self.env.unwrapped.reward_manager
-        dt = self.env.unwrapped.step_dt
         opp_reward = torch.zeros(self.env.unwrapped.num_envs, device=self.env.unwrapped.device)
 
         for player_name, (opp_func, opp_params) in self._term_mapping.items():
@@ -306,9 +324,7 @@ class OpponentRewardWrapper(Wrapper):
                 continue
             raw = opp_func(rm._env, **opp_params)
             opp_reward += raw * weight * dt
-
-        obs["opponent_reward"] = opp_reward
-        return obs, rew, terminated, truncated, info
+        return opp_reward
 
 
 class KlaskRlCollisionAvoidanceWrapper(Wrapper):
@@ -320,19 +336,41 @@ class KlaskRlCollisionAvoidanceWrapper(Wrapper):
     Y_EDGE_1 = KLASK_PARAMS["joint_y1_pos_limit"]  # [0]=outer, [1]=inner
     Y_EDGE_2 = KLASK_PARAMS["joint_y2_pos_limit"]  # [0]=inner, [1]=outer
 
-    def __init__(self, env, max_vel=0.2, peg1_idx=slice(0, 2), peg2_idx=slice(4, 6)):
+    def __init__(
+        self, env, max_vel=0.2, peg1_idx=slice(0, 2), peg2_idx=slice(4, 6), obs_pos_unit=(1.0, 1.0), pegs=(0, 1)
+    ):
         super().__init__(env)
-        self.MAX_VEL = max_vel
+        # Tournament seats on different hardware (2026-10-14): ``max_vel`` may be a pair (Peg_1 / seat 0,
+        # Peg_2 / seat 1), each peg's ramp then uses its own speed limit; ``pegs`` names the pegs to clip.
+        self.MAX_VEL = tuple(max_vel) if isinstance(max_vel, (list, tuple)) else max_vel
+        self._peg_max_vel = self.MAX_VEL if isinstance(self.MAX_VEL, tuple) else (self.MAX_VEL, self.MAX_VEL)
+        if len(self._peg_max_vel) != 2 or not pegs or not set(pegs) <= {0, 1}:
+            raise ValueError(f"Collision avoidance: max_vel {max_vel} (one or a pair) and pegs {pegs} (subset of 0, 1)")
+        self._pegs = (0 in pegs, 1 in pegs)
         self._peg1_idx = peg1_idx
         self._peg2_idx = peg2_idx
+        # The edges are in metres. Observations scaled to units (env.state_units divides the positions by the
+        # board half-size) are converted back here: value x unit.
+        self._pos_unit = torch.tensor([float(u) for u in obs_pos_unit])
+
+    def set_max_vel(self, max_vel):
+        """Speed of the deceleration ramp, = env.max_velocity (changed in place by hardware_schedule_wrapper.py).
+        One speed for both pegs only (not with a per-peg pair)."""
+        if isinstance(self.MAX_VEL, tuple):
+            raise ValueError("Collision avoidance: set_max_vel is not supported with per-peg speeds")
+        self.MAX_VEL = float(max_vel)
+        self._peg_max_vel = (self.MAX_VEL, self.MAX_VEL)
+
+    def _peg_positions(self, obs):
+        unit = self._pos_unit.to(obs["policy"].device)
+        return obs["policy"].clone()[:, self._peg1_idx] * unit, obs["policy"].clone()[:, self._peg2_idx] * unit
 
     def reset(self, *args, **kwargs):
         obs, info = self.env.reset(*args, **kwargs)
-        self.state_1 = obs["policy"].clone()[:, self._peg1_idx]  # Peg_1 world xy
-        self.state_2 = obs["policy"].clone()[:, self._peg2_idx]  # Peg_2 world xy (unrotated)
+        self.state_1, self.state_2 = self._peg_positions(obs)  # Peg_1 world xy, Peg_2 world xy (unrotated)
         return obs, info
 
-    def _apply_decel_axis(self, vel, pos, edge_min, edge_max):
+    def _apply_decel_axis(self, vel, pos, edge_min, edge_max, max_vel=None):
         """Clamp vel in-place near boundaries using linear deceleration + hard stop."""
         safe_zone = self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
 
@@ -343,7 +381,7 @@ class KlaskRlCollisionAvoidanceWrapper(Wrapper):
             soft_mask = near_min & ~hard_mask
             vel[hard_mask] = torch.maximum(vel[hard_mask], torch.zeros_like(vel[hard_mask]))
             vel[soft_mask] = torch.maximum(
-                vel[soft_mask], -self.interpolate_vel(dist_min[soft_mask] - self.MIN_CLEARANCE)
+                vel[soft_mask], -self.interpolate_vel(dist_min[soft_mask] - self.MIN_CLEARANCE, max_vel)
             )
 
         dist_max = edge_max - pos
@@ -353,22 +391,24 @@ class KlaskRlCollisionAvoidanceWrapper(Wrapper):
             soft_mask = near_max & ~hard_mask
             vel[hard_mask] = torch.minimum(vel[hard_mask], torch.zeros_like(vel[hard_mask]))
             vel[soft_mask] = torch.minimum(
-                vel[soft_mask], self.interpolate_vel(dist_max[soft_mask] - self.MIN_CLEARANCE)
+                vel[soft_mask], self.interpolate_vel(dist_max[soft_mask] - self.MIN_CLEARANCE, max_vel)
             )
 
     def step(self, actions, *args, **kwargs):
-        self._apply_decel_axis(actions[:, 0], self.state_1[:, 0], self.X_EDGE[0], self.X_EDGE[1])
-        self._apply_decel_axis(actions[:, 1], self.state_1[:, 1], self.Y_EDGE_1[0], self.Y_EDGE_1[1])
-        self._apply_decel_axis(actions[:, 2], self.state_2[:, 0], self.X_EDGE[0], self.X_EDGE[1])
-        self._apply_decel_axis(actions[:, 3], self.state_2[:, 1], self.Y_EDGE_2[0], self.Y_EDGE_2[1])
+        v1, v2 = self._peg_max_vel
+        if self._pegs[0]:
+            self._apply_decel_axis(actions[:, 0], self.state_1[:, 0], self.X_EDGE[0], self.X_EDGE[1], v1)
+            self._apply_decel_axis(actions[:, 1], self.state_1[:, 1], self.Y_EDGE_1[0], self.Y_EDGE_1[1], v1)
+        if self._pegs[1]:
+            self._apply_decel_axis(actions[:, 2], self.state_2[:, 0], self.X_EDGE[0], self.X_EDGE[1], v2)
+            self._apply_decel_axis(actions[:, 3], self.state_2[:, 1], self.Y_EDGE_2[0], self.Y_EDGE_2[1], v2)
 
         obs, rew, terminated, truncated, info = self.env.step(actions, *args, **kwargs)
-        self.state_1 = obs["policy"].clone()[:, self._peg1_idx]
-        self.state_2 = obs["policy"].clone()[:, self._peg2_idx]
+        self.state_1, self.state_2 = self._peg_positions(obs)
         return obs, rew, terminated, truncated, info
 
-    def interpolate_vel(self, distance):
-        return (self.MAX_VEL / self.DEACCELERATION_DISTANCE) * distance
+    def interpolate_vel(self, distance, max_vel=None):
+        return ((self.MAX_VEL if max_vel is None else max_vel) / self.DEACCELERATION_DISTANCE) * distance
 
 
 class InitializationWrapper(Wrapper):

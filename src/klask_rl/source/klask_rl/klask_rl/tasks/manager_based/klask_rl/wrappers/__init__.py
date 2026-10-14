@@ -1,4 +1,5 @@
 from .fast_sac_env_wrapper import FastSACEnvWrapper
+from .hardware_schedule_wrapper import HardwareSchedule, HardwareScheduleWrapper
 from .klask_rl_opponet_wrappers import (
     KlaskRlAgentOpponentWrapper,
     KlaskRlFastSACOpponentWrapper,
@@ -43,4 +44,6 @@ __all__ = [
     "Sb3TwoStageHerWrapper",
     "FastSACEnvWrapper",
     "VelocityScaleWrapper",
+    "HardwareSchedule",
+    "HardwareScheduleWrapper",
 ]

@@ -128,6 +128,8 @@ class EvalMetricsTracker:
         self.frac_opponent_half: list[float] = []
         self.game_length_s: list[float] = []
         self.outcome: list[int] = []
+        self.termination_flags: list[list[bool]] = []
+        self._outcome_counts = [0] * len(OUTCOME_NAMES)
 
     def _zero_envs(self, mask: torch.Tensor) -> None:
         self._step_count[mask] = 0
@@ -167,18 +169,28 @@ class EvalMetricsTracker:
         num_done = int(done_mask_self.sum().item())
         if num_done == 0:
             return
-        self.total_games += num_done
-
         td = self._term_manager._term_dones
         done_mask_term = done_mask_self.to(td.device)
 
+        term_name_to_idx = {name: i for i, name in enumerate(self._term_manager._term_names)}
+        # Keep the canonical code even when an earlier termination is disabled.
+        priority_indices = [
+            (OUTCOME_NAMES.index(n), term_name_to_idx[n]) for n in OUTCOME_PRIORITY if n in term_name_to_idx
+        ]
+        td_done_cpu = td[done_mask_term].detach().cpu()
+        outcome_codes = []
+        for row in range(num_done):
+            code = next((code for code, idx in priority_indices if td_done_cpu[row, idx]), None)
+            if code is None:
+                raise RuntimeError("Finished game has no recognized termination; cannot assign W/L/D.")
+            outcome_codes.append(code)
+
+        # Validate the entire batch before mutating any game-level accounting.
+        self.total_games += num_done
         for i, term_name in enumerate(self._term_manager._term_names):
             if term_name in TERM_NAME_MAP:
                 count_key = TERM_NAME_MAP[term_name]
-                self.term_counts[count_key] += int(td[done_mask_term, i].sum().item())
-
-        term_name_to_idx = {name: i for i, name in enumerate(self._term_manager._term_names)}
-        priority_indices = [term_name_to_idx[n] for n in OUTCOME_PRIORITY if n in term_name_to_idx]
+                self.term_counts[count_key] += int(td_done_cpu[:, i].sum().item())
 
         done_envs = done_mask_self.nonzero(as_tuple=True)[0].tolist()
 
@@ -190,7 +202,6 @@ class EvalMetricsTracker:
         sph_cpu = self._steps_player_half.detach().cpu().tolist()
         soh_cpu = self._steps_opponent_half.detach().cpu().tolist()
 
-        td_done_cpu = td[done_mask_term].detach().cpu()
         for row, env_idx in enumerate(done_envs):
             steps = max(step_cpu[env_idx], 1)
             self.player_contacts.append(int(pc_cpu[env_idx]))
@@ -201,33 +212,31 @@ class EvalMetricsTracker:
             self.frac_opponent_half.append(float(soh_cpu[env_idx]) / steps)
             self.game_length_s.append(float(step_cpu[env_idx]) * self.dt)
 
-            outcome_code = len(OUTCOME_NAMES) - 1
-            for code, term_idx in enumerate(priority_indices):
-                if bool(td_done_cpu[row, term_idx].item()):
-                    outcome_code = code
-                    break
+            outcome_code = outcome_codes[row]
             self.outcome.append(int(outcome_code))
+            self._outcome_counts[outcome_code] += 1
+            self.termination_flags.append(td_done_cpu[row].bool().tolist())
 
         self._zero_envs(done_mask_self)
 
     def live_postfix(self) -> dict:
-        p_wins = self.term_counts["player_scored"] + self.term_counts["opponent_in_goal"]
-        o_wins = self.term_counts["opponent_scored"] + self.term_counts["player_in_goal"]
-        draws = self.term_counts["time_expired"]
+        p_wins = self.player_wins
+        o_wins = self.opponent_wins
+        draws = self.draws
         wr = f"{p_wins / self.total_games * 100:.1f}%" if self.total_games > 0 else "N/A"
         return {"P_wins": p_wins, "O_wins": o_wins, "Draws": draws, "P_wr": wr}
 
     @property
     def player_wins(self) -> int:
-        return self.term_counts["player_scored"] + self.term_counts["opponent_in_goal"]
+        return self._outcome_counts[0] + self._outcome_counts[3]
 
     @property
     def opponent_wins(self) -> int:
-        return self.term_counts["opponent_scored"] + self.term_counts["player_in_goal"]
+        return self._outcome_counts[1] + self._outcome_counts[2]
 
     @property
     def draws(self) -> int:
-        return self.term_counts["time_expired"]
+        return self._outcome_counts[4]
 
     def summary_body_lines(self) -> list[str]:
         tc = self.term_counts
@@ -276,15 +285,21 @@ class EvalMetricsTracker:
         ]
         return lines
 
-    def save_npz(self, path: str, metadata: dict | None = None) -> None:
+    def save_npz(self, path: str, metadata: dict | None = None, *, extra_arrays: dict | None = None) -> None:
         """Save per-game arrays + scalar metadata to a numpy ``.npz`` file.
 
         Args:
             path: Output file path.
             metadata: Optional free-form string metadata (e.g. checkpoint paths).
                 Each key is stored under ``meta_<key>`` in the npz.
+            extra_arrays: Additional aligned per-game arrays, e.g. environment IDs.
         """
         data = {
+            "outcome_schema_version": np.asarray(2, dtype=np.int64),
+            "termination_names": np.asarray(self._term_manager._term_names),
+            "termination_flags": np.asarray(self.termination_flags, dtype=bool).reshape(
+                -1, len(self._term_manager._term_names)
+            ),
             "player_contacts": np.asarray(self.player_contacts, dtype=np.int64),
             "opponent_contacts": np.asarray(self.opponent_contacts, dtype=np.int64),
             "max_ball_speed": np.asarray(self.max_ball_speed, dtype=np.float32),
@@ -303,4 +318,8 @@ class EvalMetricsTracker:
         if metadata:
             for k, v in metadata.items():
                 data[f"meta_{k}"] = np.asarray(str(v))
+        for key, values in (extra_arrays or {}).items():
+            if key in data or len(values) != self.total_games:
+                raise ValueError(f"Invalid per-game array: {key}")
+            data[key] = np.asarray(values)
         np.savez(path, **data)

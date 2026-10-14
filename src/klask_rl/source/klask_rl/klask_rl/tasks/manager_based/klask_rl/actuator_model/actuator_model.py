@@ -42,11 +42,24 @@ class ActuatorModelWrapper(Wrapper):
     DEACCELERATION_DISTANCE = 0.09
     PEG_RADIUS = 0.0075
 
-    def __init__(self, env, device="cuda", model_file=None, pos_idx=slice(0, 2), vel_idx=slice(2, 4)):
+    def __init__(
+        self, env, device="cuda", model_file=None, pos_idx=slice(0, 2), vel_idx=slice(2, 4), obs_vel_unit=1.0,
+        obs_pos_unit=(1.0, 1.0), pegs=(0, 1),
+    ):
         super().__init__(env)
 
+        # Pegs whose commands go through the model (0 = seat 0 / Peg_1, columns 0:2; 1 = seat 1 / Peg_2, columns
+        # 2:4); the other peg's commands pass unchanged (tournament seats on different hardware, 2026-10-14). The
+        # two pegs have separate buffers, so a modelled peg gets exactly what the two-peg wrapper gives it.
+        if not pegs or not set(pegs) <= {0, 1}:
+            raise ValueError(f"ActuatorModelWrapper: pegs must be a nonempty subset of (0, 1), got {pegs}")
+        self._peg1, self._peg2 = 0 in pegs, 1 in pegs
         self.pos_idx = pos_idx
         self.vel_idx = vel_idx
+        # The model was fitted on peg velocities in m/s. Observations scaled to units (env.state_units divides the
+        # velocities by max_velocity and the positions by the board half-size) are converted back here: value x unit.
+        self.obs_vel_unit = float(obs_vel_unit)
+        self.obs_pos_unit = torch.tensor([float(u) for u in obs_pos_unit])
 
         num_envs = env.unwrapped.num_envs
         self.dT = klask_params.KLASK_PARAMS["decimation"] * klask_params.KLASK_PARAMS["physics_dt"]
@@ -74,18 +87,20 @@ class ActuatorModelWrapper(Wrapper):
         obs, info = self.env.reset(*args, **kwargs)
 
         # Peg 1 history update:
-        state_1 = obs["policy"][:, self.vel_idx]
+        if self._peg1:
+            state_1 = obs["policy"][:, self.vel_idx] * self.obs_vel_unit
 
-        if self.include_states:
-            self.state_buffer_1[:, :] = state_1.repeat(1, self.num_history_steps - 1)
-        self.command_buffer_1[:, :] = 0.0
+            if self.include_states:
+                self.state_buffer_1[:, :] = state_1.repeat(1, self.num_history_steps - 1)
+            self.command_buffer_1[:, :] = 0.0
 
         # Peg 2 history update:
-        state_2 = obs["opponent"][:, self.vel_idx]
+        if self._peg2:
+            state_2 = obs["opponent"][:, self.vel_idx] * self.obs_vel_unit
 
-        if self.include_states:
-            self.state_buffer_2[:, :] = state_2.repeat(1, self.num_history_steps - 1)
-        self.command_buffer_2[:, :] = 0.0
+            if self.include_states:
+                self.state_buffer_2[:, :] = state_2.repeat(1, self.num_history_steps - 1)
+            self.command_buffer_2[:, :] = 0.0
 
         return obs, info
 
@@ -94,15 +109,17 @@ class ActuatorModelWrapper(Wrapper):
 
         # actions = self.apply_boundary_limits(actions)
 
-        command_1 = actions[:, :2]
-        prev_buffer = self.command_buffer_1.clone()
-        self.command_buffer_1[:, 2:] = prev_buffer[:, :-2]
-        self.command_buffer_1[:, :2] = command_1
+        if self._peg1:
+            command_1 = actions[:, :2]
+            prev_buffer = self.command_buffer_1.clone()
+            self.command_buffer_1[:, 2:] = prev_buffer[:, :-2]
+            self.command_buffer_1[:, :2] = command_1
 
         # Peg 2 command history update:
-        command_2 = actions[:, 2:]
-        self.command_buffer_2[:, 2:] = self.command_buffer_2.clone()[:, :-2]
-        self.command_buffer_2[:, :2] = command_2
+        if self._peg2:
+            command_2 = actions[:, 2:]
+            self.command_buffer_2[:, 2:] = self.command_buffer_2.clone()[:, :-2]
+            self.command_buffer_2[:, :2] = command_2
 
         # Map commands to velocities using the actuator model:
         if self.include_states:
@@ -110,12 +127,17 @@ class ActuatorModelWrapper(Wrapper):
         else:
             states_input_1, states_input_2 = None, None
 
+        # In place, as before: the caller's tensor (VelocityScaleWrapper's v_cmd) receives the model outputs.
         with torch.no_grad():
-            actions_1 = self.model(self.command_buffer_1, states_input_1)
-            actions_2 = self.model(self.command_buffer_2, states_input_2)
+            if self._peg1:
+                actions_1 = self.model(self.command_buffer_1, states_input_1)
+            if self._peg2:
+                actions_2 = self.model(self.command_buffer_2, states_input_2)
 
-        actions[:, :2] = actions_1
-        actions[:, 2:] = actions_2
+        if self._peg1:
+            actions[:, :2] = actions_1
+        if self._peg2:
+            actions[:, 2:] = actions_2
 
         # print()
         # print(self.state_buffer_1.min(), self.state_buffer_1.max())
@@ -124,26 +146,34 @@ class ActuatorModelWrapper(Wrapper):
 
         if self.include_states:
             # Peg 1 state history update:
-            self.position_player = obs["policy"][:, self.pos_idx]
-            state_1 = obs["policy"][:, self.vel_idx]
+            if self._peg1:
+                self.position_player = obs["policy"][:, self.pos_idx] * self.obs_pos_unit.to(obs["policy"].device)
+                state_1 = obs["policy"][:, self.vel_idx] * self.obs_vel_unit
 
-            self.state_buffer_1[:, 2:] = self.state_buffer_1.clone()[:, :-2]
-            self.state_buffer_1[:, :2] = state_1
+                self.state_buffer_1[:, 2:] = self.state_buffer_1.clone()[:, :-2]
+                self.state_buffer_1[:, :2] = state_1
 
             # Peg 2 state history update:
-            self.position_opponent = obs["opponent"][:, self.pos_idx]
-            state_2 = obs["opponent"][:, self.vel_idx]
+            if self._peg2:
+                self.position_opponent = obs["opponent"][:, self.pos_idx] * self.obs_pos_unit.to(
+                    obs["opponent"].device
+                )
+                state_2 = obs["opponent"][:, self.vel_idx] * self.obs_vel_unit
 
-            self.state_buffer_2[:, 2:] = self.state_buffer_2.clone()[:, :-2]
-            self.state_buffer_2[:, :2] = state_2
+                self.state_buffer_2[:, 2:] = self.state_buffer_2.clone()[:, :-2]
+                self.state_buffer_2[:, :2] = state_2
 
         # Reset buffers for terminated envs:
         done = terminated | truncated
-        self.command_buffer_1[done, :] = 0.0
-        self.command_buffer_2[done, :] = 0.0
+        if self._peg1:
+            self.command_buffer_1[done, :] = 0.0
+        if self._peg2:
+            self.command_buffer_2[done, :] = 0.0
         if self.include_states:
-            self.state_buffer_1[done, :] = state_1[done].repeat(1, self.num_history_steps - 1)
-            self.state_buffer_2[done, :] = state_2[done].repeat(1, self.num_history_steps - 1)
+            if self._peg1:
+                self.state_buffer_1[done, :] = state_1[done].repeat(1, self.num_history_steps - 1)
+            if self._peg2:
+                self.state_buffer_2[done, :] = state_2[done].repeat(1, self.num_history_steps - 1)
 
         return obs, rew, terminated, truncated, info
 
