@@ -278,10 +278,9 @@ def sprite_rendered_image_parity_player(
     peg2_pos = body_xy_pos_w(env, peg2_cfg)  # Peg_2 — opponent half, y > 0
     ball_pos = root_xy_pos_w(env, ball_cfg)
 
-    # CPU transfer — one trip for both render passes.
-    p1_np = peg1_pos.cpu().numpy()
-    p2_np = peg2_pos.cpu().numpy()
-    b_np = ball_pos.cpu().numpy()
+    # CPU transfer — one trip for all three positions and both render passes.
+    pos_np = torch.cat([peg1_pos, peg2_pos, ball_pos], dim=-1).cpu().numpy()
+    p1_np, p2_np, b_np = pos_np[:, 0:2], pos_np[:, 2:4], pos_np[:, 4:6]
     # Negated/swapped positions for the opponent-ego render.
     p1r_np = -p2_np  # Peg_2 negated → appears at bottom in opp-ego frame
     p2r_np = -p1_np  # Peg_1 negated → appears at top
@@ -306,10 +305,10 @@ def sprite_rendered_image_parity_player(
     _sprite_image_cache["natural"] = natural
     _sprite_image_cache["opp_ego"] = opp_ego
 
-    # Even envs → natural; odd envs → rot90(opp_ego).
-    even_mask = torch.arange(N, device=env.device) % 2 == 0
+    # Even envs → natural; odd envs → rot90(opp_ego).  (Strided slices instead of a
+    # boolean mask so the assignment does not synchronize with the GPU.)
     result = natural.clone()
-    result[~even_mask] = torch.rot90(opp_ego[~even_mask], k=2, dims=[1, 2])
+    result[1::2] = torch.rot90(opp_ego[1::2], k=2, dims=[1, 2])
 
     return _pad_image_to_target(result, target_h, target_w)
 
@@ -367,12 +366,9 @@ def sprite_rendered_image_parity_opponent(
     natural = _sprite_image_cache.pop("natural")
     opp_ego = _sprite_image_cache.pop("opp_ego")
 
-    N = env.num_envs
-    even_mask = torch.arange(N, device=env.device) % 2 == 0
-
     # Even envs → rot90(natural); odd envs → opp_ego.
     result = opp_ego.clone()
-    result[even_mask] = torch.rot90(natural[even_mask], k=2, dims=[1, 2])
+    result[0::2] = torch.rot90(natural[0::2], k=2, dims=[1, 2])
 
     return _pad_image_to_target(result, target_h, target_w)
 

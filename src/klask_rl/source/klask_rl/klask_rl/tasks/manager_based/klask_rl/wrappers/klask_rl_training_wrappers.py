@@ -371,28 +371,31 @@ class KlaskRlCollisionAvoidanceWrapper(Wrapper):
         return obs, info
 
     def _apply_decel_axis(self, vel, pos, edge_min, edge_max, max_vel=None):
-        """Clamp vel in-place near boundaries using linear deceleration + hard stop."""
+        """Clamp vel in-place near boundaries using linear deceleration + hard stop.
+
+        Branch-free (``torch.where``) so stepping does not synchronize with the GPU;
+        element-wise identical to applying the masks with boolean indexing.
+        """
         safe_zone = self.DEACCELERATION_DISTANCE + self.PEG_RADIUS
 
         dist_min = pos - edge_min
         near_min = dist_min <= safe_zone
-        if near_min.any():
-            hard_mask = near_min & (dist_min <= self.MIN_CLEARANCE)
-            soft_mask = near_min & ~hard_mask
-            vel[hard_mask] = torch.maximum(vel[hard_mask], torch.zeros_like(vel[hard_mask]))
-            vel[soft_mask] = torch.maximum(
-                vel[soft_mask], -self.interpolate_vel(dist_min[soft_mask] - self.MIN_CLEARANCE, max_vel)
-            )
+        hard_mask = near_min & (dist_min <= self.MIN_CLEARANCE)
+        soft_mask = near_min & ~hard_mask
+        new_vel = torch.where(hard_mask, torch.maximum(vel, torch.zeros_like(vel)), vel)
+        new_vel = torch.where(
+            soft_mask, torch.maximum(new_vel, -self.interpolate_vel(dist_min - self.MIN_CLEARANCE, max_vel)), new_vel
+        )
 
         dist_max = edge_max - pos
         near_max = dist_max <= safe_zone
-        if near_max.any():
-            hard_mask = near_max & (dist_max <= self.MIN_CLEARANCE)
-            soft_mask = near_max & ~hard_mask
-            vel[hard_mask] = torch.minimum(vel[hard_mask], torch.zeros_like(vel[hard_mask]))
-            vel[soft_mask] = torch.minimum(
-                vel[soft_mask], self.interpolate_vel(dist_max[soft_mask] - self.MIN_CLEARANCE, max_vel)
-            )
+        hard_mask = near_max & (dist_max <= self.MIN_CLEARANCE)
+        soft_mask = near_max & ~hard_mask
+        new_vel = torch.where(hard_mask, torch.minimum(new_vel, torch.zeros_like(new_vel)), new_vel)
+        new_vel = torch.where(
+            soft_mask, torch.minimum(new_vel, self.interpolate_vel(dist_max - self.MIN_CLEARANCE, max_vel)), new_vel
+        )
+        vel.copy_(new_vel)
 
     def step(self, actions, *args, **kwargs):
         v1, v2 = self._peg_max_vel
