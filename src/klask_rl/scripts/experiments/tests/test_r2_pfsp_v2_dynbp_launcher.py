@@ -98,7 +98,7 @@ def test_hydra_compose_differs_only_in_actor_grad(base, dynbp):
     assert {k for k in ma if ma[k] != mb[k]} == {"actor_grad"}
     assert mb["actor_grad_checkpoint"] is True and mb["micro_batch_size"] == 10
     assert ma["opponent_separation"] is (base == "exact") and ma["trajectory_mirroring"] is True
-    assert ma["rep_loss"] == "r2dreamer" and ma["compile"] is True and ma["compile_mode"] == "default"
+    assert ma["rep_loss"] == "r2dreamer" and ma["compile"] is True and ma["compile_mode"] == "reduce-overhead"
 
 
 def test_probe_builds_the_eff_v2_dynbp_config():

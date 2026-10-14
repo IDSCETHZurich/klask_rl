@@ -13,7 +13,7 @@ random pixel data, and runs updates. Allocator setting as the launcher (PYTORCH_
     ... --arm exact --actor_grad dynamics            # same as exact_dynbp
     ... --config config-sprite-r2-pfsp.yaml --arm exact --no-compile   # the older pilot config
 
-Compilation follows the config (model.compile: true, compile_mode default in eff-v2) unless --compile/--no-compile.
+Compilation follows the config (model.compile: true, reduce-overhead in eff-v2) unless --compile/--no-compile.
 Warm-up: updates run until the optimizer has stepped once (LaProp allocates its state, two float32 copies of the
 weights, at its first step; with float16 loss scaling the first updates can overflow and be skipped - with
 model.actor_grad=dynamics about ten of them, the scaler halving 65536 -> ~64), at least --warmup updates; then

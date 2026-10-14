@@ -32,7 +32,7 @@ model:
   viz_decoder_batch: 4 # rows per micro-batch for the visualisation decoder
   imag_opponent_recompute: true # used by the exact arm only (needs opponent separation)
   compile: True
-  compile_mode: "default"
+  compile_mode: "reduce-overhead" # CUDA graphs for the training step
   inference_compile_mode: "default"
   loss_scales:
     smoothness: 0.002
